@@ -1,0 +1,2 @@
+name,kind,fund_set,construction,trades,gross_bp,cost_bp,net_bp,breakeven_cost_mult,sr_realized,perm_mean,perm_std,p_value,sr_star,dsr,n_trials_counted
+agg_act__daily_only__w1__equal|s-1|h42|t0.0|l1,aggregate,daily_only,act,302,0.023879337304952588,0.7699927887723538,-0.7461134514674012,0.031012416808506565,0.057985923708675835,0.00038001203258668584,0.05761301892257146,0.3076,0.5981494378969217,1.4883421524428196e-134,6576

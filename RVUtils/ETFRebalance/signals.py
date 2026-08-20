@@ -254,6 +254,59 @@ def sig_month_end(df: pd.DataFrame, *, window: int = 3, **kw) -> pd.Series:
 # --- control, not a thesis ---
 
 
+def sig_crossing(df: pd.DataFrame, *, boundary: float, horizon_m: int = 3, **kw) -> pd.Series:
+    """MATCHED-RARITY PLACEBO. The deletion SHAPE at a maturity where no index does anything.
+
+    ``sig_deletion`` flags everything *below* the boundary, so at 24y inside a 20-31y
+    universe it would fire on most of the board and be a maturity tilt rather than an
+    event -- which is not a matched placebo, it is a different object. This flags only the
+    narrow band a bond passes THROUGH inside the horizon, so a placebo at 24y fires on
+    about the same small share of bond-days as the real boundary does at 20y and the
+    comparison is between two events.
+
+    Lifted verbatim in construction from ``_run_deletion_control.py``, which is where the
+    parent study established that the real 20-year boundary's largest |t| (2.40) is beaten
+    by a placebo boundary's (2.74 at 28y). Reused rather than reinvented so the two
+    studies' placebos are the same placebo.
+    """
+    me = _month_end(df["date"])
+    hit = pd.Series(np.nan, index=df.index)
+    for m in range(int(horizon_m), -1, -1):
+        rebal = me + pd.offsets.MonthEnd(int(m))
+        ttm_at = df["ttm"] - (rebal - df["date"]).dt.days / 365.25
+        crosses = (ttm_at < boundary) & (df["ttm"] >= boundary)
+        hit = hit.mask(crosses, float(m))
+    return -((horizon_m + 1 - hit) / (horizon_m + 1)).fillna(0.0)
+
+
+def sig_precomputed(df: pd.DataFrame, *, column: str, sign: float = 1.0, **kw) -> pd.Series:
+    """Read a score that was computed UPSTREAM and attached to the frame.
+
+    The hook the aggregate ladder uses. ``RVUtils/ETFRebalance/aggregate.py`` builds a
+    bucket-level measure across several funds, z-scores it against that bucket's own
+    trailing history, and broadcasts it back onto every bond in the bucket; this reads
+    that column. It is a separate entry point rather than a thirteenth bespoke signal
+    because the aggregate ladder needs the multi-fund as-of join and the publication-lag
+    gate, neither of which belongs in a per-row function.
+
+    ``sign`` is a required decision, not a convenience. The two economic stories about an
+    unusually heavy bucket point opposite ways -- scarcity says the bonds are rich,
+    "the manager has already bought" says the flow is spent -- so the direction is swept
+    and both directions are counted in the trial total rather than one being assumed.
+
+    Raises rather than returning NaN when the column is absent: an all-NaN score reads as
+    "no signal here" when what happened is "no data here", and this repo has paid for that
+    confusion before.
+    """
+    if column not in df.columns:
+        raise KeyError(
+            f"signal 'precomputed' wants column {column!r}, which is not on the frame. "
+            f"Attach it with aggregate.attach()/attach_many() before scoring. "
+            f"Present: {sorted(c for c in df.columns if c.startswith('agg'))}"
+        )
+    return float(sign) * pd.to_numeric(df[column], errors="coerce")
+
+
 def sig_resid(df: pd.DataFrame, **kw) -> pd.Series:
     """The bond's own richness against the local curve. Cheap (positive residual) = buy.
 
@@ -277,12 +330,14 @@ REGISTRY: Dict[str, Callable[..., pd.Series]] = {
     "deletion": sig_deletion,
     "addition": sig_addition,
     "month_end": sig_month_end,
+    "crossing": sig_crossing,
+    "precomputed": sig_precomputed,
     "resid": sig_resid,
 }
 
 #: Signals computable without a single holdings document. The calendar null: if these
 #: earn what the holdings signals earn, the scrape bought nothing.
-CALENDAR_ONLY = frozenset({"deletion", "addition", "month_end"})
+CALENDAR_ONLY = frozenset({"deletion", "addition", "month_end", "crossing"})
 
 #: Signals that read the fund's book.
 HOLDINGS_BASED = frozenset({"active_w", "active_rel", "active_chg", "bucket_active",
@@ -311,7 +366,26 @@ def combine(
     Without that, ``active_w`` (order 1e-3) and ``ownership`` (order 1e-1) enter a
     weighted sum in a ratio set by their units rather than by the intent of the weights,
     and a 50/50 blend is really 99/1.
+
+    ``z_mode``:
+      ``cross_section``  z within each date, across bonds (the default)
+      ``time_series``    z of each CUSIP against its own trailing history
+      ``both``           cross-sectional first, then time-series
+      ``raw``            **no standardisation at all** -- the component is already a
+                         z-score and re-standardising it would change what a threshold
+                         means. This is the mode the aggregate ladder runs in: its score
+                         is a bucket's measure against that bucket's OWN trailing history,
+                         so ``structure.min_abs_score`` is then an entry threshold in
+                         historical-z units, which is what it is supposed to be. A
+                         cross-sectional z on top would preserve the within-date RANKING
+                         (it is affine per date) and therefore the bond selection, while
+                         silently re-scaling every threshold -- the kind of no-op that
+                         looks like it works. The mode is named and validated rather than
+                         reached by an unrecognised string falling through both branches.
     """
+    valid_modes = ("cross_section", "time_series", "both", "raw")
+    if z_mode not in valid_modes:
+        raise ValueError(f"z_mode must be one of {valid_modes}, got {z_mode!r}")
     sk = dict(signal_kwargs or {})
     out = df.copy()
     parts, names = [], []
