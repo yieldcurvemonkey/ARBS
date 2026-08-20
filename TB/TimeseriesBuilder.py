@@ -28,6 +28,7 @@ from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.Unified.UnifiedQuery import UnifiedQuery
 from TB.BaseTimeseriesTB import BaseTimeseriesTB
+from TB.direct_mode import DirectMode, parse_direct_mode, resolve_direct_mode
 from TB.barchart_irs_bulk import (
     bucket_timestamps_by_trading_date,
     safe_warm_raw_curves,
@@ -641,8 +642,13 @@ class TimeseriesBuilder:
         ustfutureoptions_tb: Optional["USTFutureOptionsTB"] = None,
         fxforwards_tb: Optional[object] = None,
         date_col: str = "Date",
+        direct: Union[None, bool, str, DirectMode] = None,
     ):
         self._date_col = date_col
+        #: Default for :meth:`get_timeseries`'s ``direct=`` argument. See that
+        #: method's docstring; ``None``/``False`` keep every existing caller on
+        #: the cached path with no change whatsoever.
+        self._direct_default: DirectMode = parse_direct_mode(direct)
         self._routers: Dict[str, object] = {
             "IRS": irswaps_tb,
             "FRB": fixedratebonds_tb,
@@ -802,6 +808,126 @@ class TimeseriesBuilder:
             f"No timeseries router or MDP registered for product '{product}'. "
             f"Available: {available}"
         )
+
+    #: The only product with a direct (cache-bypassing) read path today.
+    _DIRECT_SUPPORTED_PRODUCTS = frozenset({"CITIVELO"})
+
+    def _get_direct_timeseries(
+        self,
+        *,
+        start: DateLike,
+        end: DateLike,
+        flat_queries: List[BaseQuery],
+        mode: DirectMode,
+        n_jobs: Optional[int],
+        ignore_cache: Optional[bool],
+        ignore_cache_miss: Optional[bool],
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+        drop_multilevel_cols: Optional[bool],
+        merged_routers: Mapping[str, Any],
+        merged_mdps: Mapping[str, MarketDataProvider],
+    ) -> pd.DataFrame:
+        """Route a direct request, refusing anything this mode cannot honour.
+
+        Every refusal below fires BEFORE any transport or cache is touched. That
+        ordering is the point: a direct request that cannot be honoured must fail
+        loudly and early, not part-way through with some columns live and some
+        not.
+
+        Nothing here is memoised into ``_specialized_router_cache`` or
+        ``_generic_router_cache``. Those caches pin one MDP - and therefore one
+        quotes reader and one tag cache - for the life of the builder, and a
+        direct router leaking into them would hand the next CACHED request a
+        cache-less provider (or the reverse). Direct routers are built per call
+        and thrown away.
+        """
+        if not flat_queries:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        if ignore_cache or ignore_cache_miss:
+            raise ValueError(
+                "direct= cannot be combined with ignore_cache/ignore_cache_miss. On this "
+                "path ignore_cache means REFETCH-AND-PERSIST - it re-reads the tag cache, "
+                "merges the fetch into it and serves the merged result, so any timestep "
+                "the vendor does not serve keeps its stale cached value; and "
+                "ignore_cache_miss means the opposite of live (serve from cache only, do "
+                "not build the misses) and is IRS-only besides. Direct mode reads and "
+                "writes nothing. Pass direct= alone."
+            )
+        if end == "live":
+            raise NotImplementedError(
+                "direct= does not support end='live'. end='live' is an IRS-only "
+                "end-of-day splice that stitches a live tail onto a cached history - "
+                "exactly the mixture direct mode exists to rule out. Use direct= with an "
+                "explicit end, or end='live' without direct=."
+            )
+
+        products = sorted({str(getattr(q, "product", "") or "?") for q in flat_queries})
+        unsupported = [p for p in products if p not in self._DIRECT_SUPPORTED_PRODUCTS]
+        if unsupported:
+            raise NotImplementedError(
+                f"direct= is implemented for {sorted(self._DIRECT_SUPPORTED_PRODUCTS)} only; "
+                f"this request also contains {unsupported}. Those products read through "
+                "their own multi-tier caches (computed-TS store, its DuckDB mirror, "
+                "CurveStore, Supabase L2) and have no bypass, so serving them here would "
+                "let you believe a cached series came live. Split the request: run the "
+                "CITIVELO legs with direct= and the rest without."
+            )
+
+        canonical_product, router, source_mdp = self._resolve_product_handles(
+            product="CITIVELO",
+            merged_routers=merged_routers,
+            merged_mdps=merged_mdps,
+        )
+        if source_mdp is None:
+            available = sorted(set(merged_routers.keys()) | set(merged_mdps.keys()))
+            raise KeyError(
+                "direct= needs a CITIVELO MarketDataProvider to derive a direct reader "
+                f"from. Pass mdps={{'CITIVELO': CitiVelocityMDP()}}. Available: {available}"
+            )
+
+        from MDP.CitiVelocityExcel.mdp import CitiVelocityMDP
+
+        if not isinstance(source_mdp, CitiVelocityMDP):
+            raise TypeError(
+                "direct= needs a CitiVelocityMDP for CITIVELO, got "
+                f"{type(source_mdp).__name__}. Only that provider exposes a reader that "
+                "can bypass the tag cache."
+            )
+
+        from TB.CitiVelocityTB import CitiVelocityTB
+
+        direct_mdp = source_mdp if source_mdp.direct else source_mdp.direct_mdp()
+        direct_router = CitiVelocityTB(
+            direct_mdp,
+            date_col=self._date_col,
+            show_tqdm=True,
+            direct=mode,
+        )
+        df = direct_router.get_timeseries(
+            start,
+            end,
+            list(flat_queries),
+            n_jobs=n_jobs,
+            freq=freq,
+            timestamps=timestamps,
+            direct=mode,
+        )
+
+        # Same frame assembly as the cached path, so a caller can swap direct=
+        # in and out without the shape of the result moving underneath them.
+        per_product_frames: List[Tuple[str, pd.DataFrame]] = []
+        self._append_product_frame(per_product_frames, product=canonical_product, df=df)
+        if not per_product_frames:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        out = per_product_frames[0][1]
+        out = out.sort_index()
+        out.index.name = self._date_col
+        if drop_multilevel_cols:
+            out.columns = out.columns.droplevel()
+        return out
 
     def _get_live_eod_irs_timeseries(
         self,
@@ -2855,9 +2981,75 @@ class TimeseriesBuilder:
         use_irs_vectorized_pricing: bool = False,
         use_duckdb: Optional[bool] = None,
         duckdb_path: Optional[str] = None,
+        direct: Union[None, bool, str, DirectMode] = None,
         _disable_barchart_irs_bulk_planner: bool = False,
     ) -> pd.DataFrame:
+        r"""One frame for a mixed basket of queries, routed per product.
+
+        Parameters
+        ----------
+        direct
+            Read straight from the vendor, bypassing every cache tier.
+            ``None``/``False`` (the default) is the normal cached path and is
+            **unchanged in every respect** - same probes, same routing, same
+            frame. ``True`` or ``"live"`` turns direct mode on; anything outside
+            the vocabulary in :mod:`TB.direct_mode` RAISES rather than quietly
+            meaning "cached".
+
+            Implemented for ``CITIVELO`` queries only. A request mixing in any
+            other product is REFUSED, before any transport or cache is touched -
+            see "Other products" below.
+
+            >>> tb = TimeseriesBuilder()                                # doctest: +SKIP
+            >>> df = tb.get_timeseries(                                 # doctest: +SKIP
+            ...     date(2026, 8, 1), date(2026, 8, 19),
+            ...     [CitiVeloQuery(citi_index="USD_SOFR", tenor="10Y")],
+            ...     mdps={"CITIVELO": CitiVelocityMDP()},
+            ...     direct="live",
+            ... )
+
+            What direct mode guarantees, and what it costs:
+
+            *Nothing is read from a cache.* The computed-timeseries (L1) probe is
+            skipped, its DuckDB mirror is never opened, Supabase L2 is never
+            consulted (there is none on this path), and the reader underneath is
+            a :meth:`~MDP.CitiVelocityExcel.quotes.CitiVeloQuotes.direct_reader`
+            with ``cache=False`` - so no parquet is opened and the tag cache's
+            parse memo does not exist to serve a value with zero file access. The
+            pricer's memo of ABSENCE is switched off too, so a transient add-in
+            failure is retried rather than remembered as "no such tag".
+
+            *Nothing is written, anywhere.* No tag parquet, no sidecar, not even
+            a directory. Banking what a direct read fetched was considered and
+            deliberately left out: the tag cache merges "incoming wins", so a
+            live or partial intraday print would overwrite a settled end-of-day
+            value for every other consumer. If you want to warm the cache, run a
+            normal cached request.
+
+            *It raises rather than degrading.* If the add-in cannot serve, you get
+            a :class:`~MDP.CitiVelocityExcel.errors.CitiVelocityError` naming the
+            tags and the reason - never an old cached number wearing a live face.
+            Requested tags that return no rows raise; individual reference points
+            the add-in had nothing for become an explicit ``NaN`` in a FULL GRID
+            (one row per reference point, one column per query) rather than a
+            silently shorter frame. A column that is NaN everywhere raises.
+
+            *It is not free.* Every call goes to Excel over COM. ``ignore_cache``
+            and ``ignore_cache_miss`` are rejected alongside it, because
+            ``ignore_cache`` means refetch-AND-PERSIST on this path, which is the
+            opposite of what direct mode is for.
+
+        Other products
+        --------------
+        ``direct=`` refuses any non-``CITIVELO`` query rather than silently
+        serving it from cache. FRB and IRS have their own multi-tier read paths
+        (computed-TS store, DuckDB mirror, CurveStore, Supabase L2) with no
+        equivalent bypass, and a partial guarantee here would be worse than
+        none: a user must never be able to believe an FRB or IRS series came
+        live when it came from cache.
+        """
         flat = _flatten_base_queries(queries)
+        direct_mode = resolve_direct_mode(direct, self._direct_default)
 
         # Persist DuckDB config so _get_specialized_router can use it
         if use_duckdb is not None:
@@ -2884,6 +3076,22 @@ class TimeseriesBuilder:
                 show_tqdm=True,
                 use_duckdb=True if use_duckdb is None else bool(use_duckdb),
                 duckdb_path=duckdb_path,
+            )
+
+        if direct_mode.enabled:
+            return self._get_direct_timeseries(
+                start=start,
+                end=end,
+                flat_queries=flat,
+                mode=direct_mode,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                ignore_cache_miss=ignore_cache_miss,
+                freq=freq,
+                timestamps=timestamps,
+                drop_multilevel_cols=drop_multilevel_cols,
+                merged_routers=merged_routers,
+                merged_mdps=merged_mdps,
             )
 
         if end == "live":

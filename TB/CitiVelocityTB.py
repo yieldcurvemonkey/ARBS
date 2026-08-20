@@ -33,6 +33,18 @@ a 10y par rate repriced off a curve stripped from a grid containing that 10y quo
 must reproduce it to solver tolerance (~2e-3 bp at rateslib's default
 ``func_tol=1e-9``; ~6e-6 bp when it is tightened).
 
+Direct mode
+-----------
+``direct="live"`` (or ``TimeseriesBuilder(..., direct=...)``) reads straight from
+the add-in: no tag cache is read or written, and the request raises rather than
+degrading to a cached value. It changes the SHAPE of the result on purpose - a
+direct frame is a full grid with explicit ``NaN`` where nothing could be served,
+because the alternative is a shorter frame that looks complete. It requires an
+MDP built by :meth:`~MDP.CitiVelocityExcel.mdp.CitiVelocityMDP.direct_mdp`, and
+that is checked rather than assumed: a "direct" read over a cache-backed reader
+would present cached numbers as live, which is the failure the whole mode exists
+to prevent. See :mod:`TB.direct_mode`.
+
 Failures are counted and reported, not swallowed
 ------------------------------------------------
 The base class wraps each ``_price_one`` in ``except Exception: continue``, so a
@@ -58,6 +70,7 @@ from Query.CitiVelocity._CitiVeloLeg import CitiVeloLeg
 from Query.CitiVelocity.CitiVeloQuery import CitiVeloQuery, CitiVeloQueryWrapper
 from Query.CitiVelocity.CitiVeloValue import CitiVeloValue, structure_scale
 from TB.BaseTimeseriesTB import BaseTimeseriesTB
+from TB.direct_mode import DirectMode, parse_direct_mode, resolve_direct_mode
 from TB.utils import DateLike
 
 __all__ = ["CitiVelocityTB", "FastPathPlan"]
@@ -116,10 +129,12 @@ class CitiVelocityTB(BaseTimeseriesTB):
         date_col: str = "Date",
         show_tqdm: bool = True,
         fast_path: bool = True,
+        direct: Union[None, bool, str, DirectMode] = None,
     ):
         super().__init__(mdp, date_col=date_col, show_tqdm=show_tqdm)
         self.mdp: CitiVelocityMDP = mdp
         self.fast_path = bool(fast_path)
+        self.direct = parse_direct_mode(direct)
 
     # -- query handling -------------------------------------------------
 
@@ -206,6 +221,7 @@ class CitiVelocityTB(BaseTimeseriesTB):
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
         fast_path: Optional[bool] = None,
+        direct: Union[None, bool, str, DirectMode] = None,
     ) -> pd.DataFrame:
         """One column per query, indexed by reference point.
 
@@ -218,8 +234,21 @@ class CitiVelocityTB(BaseTimeseriesTB):
             Overrides the instance default for this call. ``False`` forces every
             query through the repricing path, which is what the equivalence test
             uses to compare the two routes.
+        direct
+            ``"live"`` / ``True`` reads straight from the add-in: no tag cache is
+            read or written, and the request RAISES rather than degrading to a
+            cached value if the add-in cannot serve. Requires an MDP built by
+            :meth:`~MDP.CitiVelocityExcel.mdp.CitiVelocityMDP.direct_mdp`; it is
+            checked, not assumed. Under direct the result is a FULL GRID - one
+            row per reference point, one column per query - with an explicit NaN
+            wherever no value could be produced, instead of the shorter frame the
+            cached path returns.
         """
         assert start <= end, "must have end >= start"
+        mode = resolve_direct_mode(direct, self.direct)
+        if mode.enabled:
+            self._assert_direct_ready(ignore_cache=ignore_cache)
+
         flat = self._flatten_queries(queries)
         if not flat:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
@@ -247,6 +276,7 @@ class CitiVelocityTB(BaseTimeseriesTB):
                     plan=plan,
                     citi_freq=citi_freq,
                     ignore_cache=bool(ignore_cache),
+                    direct=mode.enabled,
                 )
             )
         if plan.slow:
@@ -255,9 +285,58 @@ class CitiVelocityTB(BaseTimeseriesTB):
                     reference_points=reference_points,
                     queries=plan.slow,
                     citi_freq=citi_freq,
+                    direct=mode.enabled,
                 )
             )
-        return self._rows_to_frame(rows)
+        frame = self._rows_to_frame(rows)
+        if mode.enabled:
+            self._assert_direct_frame_usable(frame, queries=flat)
+        return frame
+
+    # -- direct-mode guards ----------------------------------------------
+
+    def _assert_direct_ready(self, *, ignore_cache: Optional[bool]) -> None:
+        """Refuse to CLAIM a direct read this builder cannot actually perform."""
+        if not getattr(self.mdp, "direct", False):
+            raise CitiVelocityError(
+                "CitiVelocityTB was asked for a direct read but its CitiVelocityMDP is "
+                "cache-backed, so the values would come from the tag cache while "
+                "presenting as live. Build the router over "
+                "CitiVelocityMDP(...).direct_mdp(), or drop direct=."
+            )
+        if ignore_cache:
+            raise ValueError(
+                "ignore_cache=True is meaningless under direct=. On this path ignore_cache "
+                "means REFETCH-AND-PERSIST: it re-reads the tag cache, merges the fetch into "
+                "it and serves the merged result, so any timestep the add-in does not serve "
+                "keeps its stale cached value. Direct mode reads and writes nothing. Pass "
+                "one or the other, not both."
+            )
+
+    def _assert_direct_frame_usable(
+        self, frame: pd.DataFrame, *, queries: Sequence[CitiVeloQuery]
+    ) -> None:
+        """An empty or all-NaN direct result must never read as a pass.
+
+        Checked per COLUMN, not per frame: a request for three structures where
+        one of them served nothing is the case a frame-level "is it empty?" test
+        misses, and it is the one that quietly loses a leg.
+        """
+        if frame.empty or not len(frame.columns):
+            raise CitiVelocityError(
+                f"Direct read produced no values at all for {len(queries)} quer(y/ies). "
+                "The add-in returned nothing usable over this window. An empty direct "
+                "result is not a pass - check the add-in is signed in and the tags and "
+                "window are valid."
+            )
+        dead = [str(c) for c in frame.columns if frame[c].isna().all()]
+        if dead:
+            raise CitiVelocityError(
+                f"Direct read produced no usable value at ANY reference point for "
+                f"{len(dead)} column(s): {', '.join(sorted(dead))}. Nothing was served "
+                "from cache to paper over it. Check those tags resolve and that the "
+                "window is inside their history."
+            )
 
     # -- the fast path --------------------------------------------------
 
@@ -268,6 +347,7 @@ class CitiVelocityTB(BaseTimeseriesTB):
         plan: FastPathPlan,
         citi_freq: str,
         ignore_cache: bool = False,
+        direct: bool = False,
     ) -> List[Tuple[DateLike, str, float]]:
         """One bulk fetch, then a weighted sum per timestep. No model, no COM loop."""
         if not plan.tags:
@@ -284,9 +364,16 @@ class CitiVelocityTB(BaseTimeseriesTB):
             citi_freq,
             start=first - lookback,
             end=last,
-            force_refresh=ignore_cache,
+            # Under direct there is no cache to force past, and passing this
+            # would be a lie about what the read does. `strict` instead: a tag
+            # the add-in refused must raise naming itself, not vanish into a
+            # missing column that looks like "no data here".
+            force_refresh=False if direct else ignore_cache,
+            strict=direct,
         )
         if frame.empty:
+            # Unreachable under direct: `strict=True` above raises first. Kept as
+            # the cached path's existing behaviour.
             _logger.warning(
                 "CitiVelocityTB fast path: no rows served for %d tag(s) over %s..%s; "
                 "those columns are ABSENT from the result, not NaN.",
@@ -303,10 +390,19 @@ class CitiVelocityTB(BaseTimeseriesTB):
         for ref_point in self._iter_reference_points(list(reference_points), plan.fast):
             target = pd.Timestamp(self._to_now(ref_point))
             prior = index[index <= target]
+            idx = self._index_value(ref_point)
             if len(prior) == 0:
+                if direct:
+                    # An explicit NaN, not an absent row: under direct the caller
+                    # is told which timesteps the add-in had nothing for, rather
+                    # than handed a shorter frame that looks complete.
+                    for q in plan.fast:
+                        missing[q.col_name()] = missing.get(q.col_name(), 0) + 1
+                        rows.append(
+                            (idx, self._column_name(q, effective_query=q), float("nan"))
+                        )
                 continue
             row = frame.loc[prior.max()]
-            idx = self._index_value(ref_point)
             for q in plan.fast:
                 package, weights = plan.packages[id(q)]
                 total = 0.0
@@ -319,6 +415,10 @@ class CitiVelocityTB(BaseTimeseriesTB):
                     total += float(weight) * float(value)
                 if not complete:
                     missing[q.col_name()] = missing.get(q.col_name(), 0) + 1
+                    if direct:
+                        rows.append(
+                            (idx, self._column_name(q, effective_query=q), float("nan"))
+                        )
                     continue
                 total *= structure_scale(package)
                 if q.risk_weight is not None:
@@ -328,8 +428,9 @@ class CitiVelocityTB(BaseTimeseriesTB):
         if missing:
             _logger.warning(
                 "CitiVelocityTB fast path: %d column(s) had timesteps with an incomplete "
-                "package; those rows are ABSENT, not NaN: %s",
+                "package; those rows are %s: %s",
                 len(missing),
+                "explicit NaN (direct read)" if direct else "ABSENT, not NaN",
                 ", ".join(f"{k} ({v} points)" for k, v in sorted(missing.items())),
             )
         return rows
@@ -342,8 +443,16 @@ class CitiVelocityTB(BaseTimeseriesTB):
         reference_points: Sequence[DateLike],
         queries: Sequence[CitiVeloQuery],
         citi_freq: str,
+        direct: bool = False,
     ) -> List[Tuple[DateLike, str, float]]:
-        """Build a pricer per timestep and value each query through it."""
+        """Build a pricer per timestep and value each query through it.
+
+        Under ``direct`` the quotes reader underneath has no cache, so
+        ``bulk_get_data`` DELIVERS the window rather than warming one (see
+        :meth:`MDP.CitiVelocityExcel.mdp.CitiVelocityMDP.bulk_get_data`), and
+        every (timestep, query) that cannot be produced becomes an explicit NaN
+        instead of a silently absent row.
+        """
         hint_tags: List[str] = []
         resolver = self.mdp.get_pricer({"timestamp": "live"})
         for q in queries:
@@ -366,6 +475,13 @@ class CitiVelocityTB(BaseTimeseriesTB):
         failures = 0
         first_error: Optional[str] = None
         failed_columns: Set[str] = set()
+        # Under direct, every (timestep, query) must end up in the frame. The
+        # column a query is filed under can differ between its raw and its
+        # resolved form, so the name from its first SUCCESS is remembered and
+        # reused for its failures - otherwise one query could produce two
+        # columns, a real one and an all-NaN twin.
+        success_names: Dict[int, str] = {}
+        produced: Set[Tuple[Any, int]] = set()
 
         for ref_point in self._iter_reference_points(list(reference_points), list(queries)):
             now = self._to_now(ref_point)
@@ -387,20 +503,36 @@ class CitiVelocityTB(BaseTimeseriesTB):
                     value = vmap.apply(value=value_key, **(getattr(q_eff, "value_kwargs", {}) or {}))
                     if q_eff.risk_weight is not None:
                         value = float(value) * float(q_eff.risk_weight)
-                    rows.append((idx, self._column_name(q, effective_query=q_eff), float(value)))
+                    col = self._column_name(q, effective_query=q_eff)
+                    success_names.setdefault(id(q), col)
+                    produced.add((idx, id(q)))
+                    rows.append((idx, col, float(value)))
                 except Exception as exc:  # noqa: BLE001 - counted and reported below
                     failures += 1
                     failed_columns.add(q.col_name())
                     if first_error is None:
                         first_error = f"{type(exc).__name__}: {exc}"
 
+        if direct and failures:
+            # Fill the holes with explicit NaN so the grid is complete. Done
+            # after the loop because a query's column name is only known once
+            # it has succeeded somewhere.
+            for ref_point in reference_points:
+                idx = self._index_value(ref_point)
+                for q in queries:
+                    if (idx, id(q)) in produced:
+                        continue
+                    col = success_names.get(id(q)) or self._column_name(q, effective_query=q)
+                    rows.append((idx, col, float("nan")))
+
         if failures:
             _logger.warning(
                 "CitiVelocityTB repricing path: %d (timestep, query) pair(s) failed across %d "
-                "column(s) [%s]; those rows are ABSENT from the result, not NaN. First error: %s",
+                "column(s) [%s]; those rows are %s. First error: %s",
                 failures,
                 len(failed_columns),
                 ", ".join(sorted(failed_columns)),
+                "explicit NaN (direct read)" if direct else "ABSENT from the result, not NaN",
                 first_error,
             )
         return rows

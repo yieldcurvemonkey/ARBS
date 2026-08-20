@@ -200,6 +200,8 @@ class CitiVeloPricer:
         catalog: Optional[CitiVeloCatalog] = None,
         prefetch: Sequence[str] = (),
         lookback: Optional[datetime.timedelta] = None,
+        direct: bool = False,
+        preloaded: Optional[Mapping[str, float]] = None,
     ):
         self._quotes = quotes
         self.as_of = None if as_of is None else pd.Timestamp(as_of)
@@ -210,10 +212,32 @@ class CitiVeloPricer:
         self.default_currency = currency
         self.catalog = catalog or CitiVeloCatalog.default()
         self._lookback = lookback
+        self.direct = bool(direct)
+        # ------------------------------------------------------------------
+        # The three process-local memos on this object, and why only one of
+        # them is switchable.
+        #
+        # `_quote_cache` and `_models` are REQUEST-SCOPED: a pricer is one
+        # instant, built fresh per timestep, and both are populated only from
+        # THIS pricer's own fetch. Neither can serve a value from a prior
+        # request or a prior day, so neither is a staleness tier and disabling
+        # them under `direct` would only re-strip the same curve per leg.
+        #
+        # `_missing` is different in kind: it is a memo of ABSENCE, and a tag
+        # that fails once is never re-asked for this pricer's lifetime. Under a
+        # direct read that turns a transient add-in hiccup into "this tag does
+        # not exist" for the rest of the timestep's work - a silent fallback in
+        # the shape of a missing number. So `direct=True` switches it off and
+        # every ask goes back to the wire.
+        # ------------------------------------------------------------------
         self._quote_cache: Dict[str, float] = {}
         self._missing: set[str] = set()
         self._models: Dict[Tuple[str, ...], Any] = {}
         self._lock = threading.RLock()
+        if preloaded:
+            # Values already served for THIS instant by a bulk window read, so
+            # the per-timestep loop does not go back to the wire for each one.
+            self._quote_cache.update({str(k): float(v) for k, v in preloaded.items()})
         if prefetch:
             self.prefetch(prefetch)
 
@@ -241,7 +265,10 @@ class CitiVeloPricer:
         forty-six.
         """
         wanted = [t for t in dict.fromkeys(str(t) for t in tags) if t not in self._quote_cache]
-        wanted = [t for t in wanted if t not in self._missing]
+        if not self.direct:
+            # See __init__: the absence memo is a silent fallback under a direct
+            # read, so a direct pricer re-asks the wire every time.
+            wanted = [t for t in wanted if t not in self._missing]
         if not wanted:
             return {}
         with self._lock:
