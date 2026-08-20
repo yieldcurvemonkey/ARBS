@@ -154,8 +154,17 @@ def run_grid(
     floats: Optional[pd.DataFrame] = None,
     progress: bool = True,
     keep_results: bool = False,
+    keep_pnl: bool = False,
 ) -> Tuple[pd.DataFrame, Dict[str, EN.Result]]:
-    """Run every overlay, reusing the prepared universe wherever it is unchanged."""
+    """Run every overlay, reusing the prepared universe wherever it is unchanged.
+
+    ``keep_results`` retains the whole :class:`~RVUtils.ETFRebalance.engine.Result` per
+    configuration -- trade log, daily curve and leg frame, roughly 1MB each. On a
+    1,680-cell grid that is ~1.7GB per worker on top of the panel, and it is what made
+    the three largest funds thrash while the two smallest finished in half an hour.
+    ``keep_pnl`` stores only the per-trade P&L array, which is all the deflated Sharpe
+    needs and is a few kilobytes.
+    """
     import tqdm
 
     base = dict(base or {})
@@ -177,8 +186,11 @@ def run_grid(
                          "error": f"{type(exc).__name__}: {exc}"})
             continue
         s = EN.summarize(res)
-        rows.append({"name": cfg.get("name", "?"), **s,
-                     "config": json.dumps(dict(ov), default=str)})
+        row = {"name": cfg.get("name", "?"), **s,
+               "config": json.dumps(dict(ov), default=str)}
+        if keep_pnl and res.closed is not None and not res.closed.empty:
+            row["_pnl"] = res.closed["pnl_bp"].to_numpy(float)
+        rows.append(row)
         if keep_results:
             kept[cfg.get("name", "?")] = res
 
@@ -229,6 +241,23 @@ def attach_dsr(table: pd.DataFrame, results: Mapping[str, EN.Result],
             continue
         dsr.append(deflated_sharpe(r.closed["pnl_bp"].to_numpy(float), sr_star))
     out["dsr"] = dsr
+    return out
+
+
+def attach_dsr_from_pnl(table: pd.DataFrame, *, sr_star: float) -> pd.DataFrame:
+    """DSR per row from the ``_pnl`` arrays kept by ``run_grid(keep_pnl=True)``.
+
+    Same answer as :func:`attach_dsr` without holding a whole Result per configuration.
+    """
+    out = table.copy()
+    if "_pnl" not in out.columns:
+        out["dsr"] = np.nan
+        return out
+    out["dsr"] = [
+        deflated_sharpe(np.asarray(v, dtype=float), sr_star)
+        if v is not None and np.ndim(v) == 1 and len(v) >= 10 else np.nan
+        for v in out["_pnl"]
+    ]
     return out
 
 

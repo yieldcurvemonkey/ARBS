@@ -22,9 +22,9 @@ Four things exist that did not before.
 | `BT/signals/etf_rebalance.py` | The same book on `QueryDrivenBacktest`, marked at dirty NPV with coupon cash. |
 | `etf_rebalance_configurable_backtest.ipynb` | One `CONFIG` dict = one backtest. Knob sweeps, grid search, DSR, robustness, trade log. |
 
-Plus `tests/test_etf_rebalance.py` — 32 tests, every one of them **mutation-verified**: the code
+Plus `tests/test_etf_rebalance.py` — 33 tests, every one of them **mutation-verified**: the code
 each test covers was deliberately broken and the test was required to fail (see
-`tests/_mutate_etf_rebalance.py`). Three of the first five mutations were *not* caught, and fixing
+`tests/_mutate_etf_rebalance.py`). Three of the first five mutations were **not** caught, and fixing
 that found a genuinely weak test — a butterfly fixture with symmetric wings, where hard-coding the
 slope weight to 0.5 is a no-op.
 
@@ -41,8 +41,9 @@ offer**, per completed round trip:
 
 The median **cross-sectional** standard deviation of a bond's richness against its local fitted
 curve is **0.434bp** (mean 0.53, p90 1.05; per-CUSIP time-series sd 0.384bp, lag-1
-autocorrelation 0.958). So the entire dispersion this trade can capture is **smaller than a
-single round trip**.
+autocorrelation 0.958), against a median butterfly round trip of **0.535bp**. So the entire
+dispersion this trade can capture is **0.81x of one round trip** -- a signal would have to
+explain more than all of it.
 
 ### Why not the two cost tables already in the repo
 
@@ -152,11 +153,12 @@ of the fit, where a cubic is least constrained. So two matched controls:
 | PLACEBO 26y | 2.08% | +0.016 | +1.23 |
 | PLACEBO 28y | 2.09% | −0.050 | **−2.41** |
 
-**The real boundary's t of 2.40 is exactly the largest |t| among four placebos.** A
-maturity-shaped dummy at a boundary where nothing happens produces |t| up to 2.41 in this
-design, so the real one sits inside its own null distribution rather than outside it. Half
-its apparent strength (t 3.26 → 2.40) was the fit edge; the rest is what searching five
-boundaries buys.
+**The real boundary is beaten by a placebo.** Across all horizons the real 20-year
+boundary's largest |t| is **2.40**; the placebos' largest is **2.74** (28y at 21 days).
+A maturity-shaped dummy at a boundary where no index does anything produces a *stronger*
+statistic than the real one, so the real one sits inside its own null distribution rather
+than outside it. Half its apparent strength (t 3.26 → 2.40) was the fit edge; the rest is
+what searching five boundaries buys.
 
 The point estimate is worth stating anyway, because it is the ceiling: a flagged bond
 carries z ≈ −5 (clipped), so ~**0.29bp of cheapening over 63 days** — still below the
@@ -173,11 +175,28 @@ Sorting on richness first and on `active_w` inside each richness quintile, 63-da
 Not monotone, sign-flipping, and of the same size as its own noise. **A naive t of 4 that survives neither a
 HAC correction nor a double sort is a linear artefact.**
 
-### 3.7 The backtest agrees
+### 3.7 The backtest agrees, and so does the grid
 
 Baseline config (per-CUSIP `active_w`, 10-day hold, `exec_lag=1`, 3 bellies each side): **1,407
 butterflies, gross +0.0045bp per trade, cost 0.502bp, net −0.498bp.** The book loses almost exactly
 its own execution cost, because there is no gross edge to pay it with.
+
+Three more numbers from the executed notebook:
+
+* **The grid: 0 ALIVE of 152 scored configurations** (DSR > 0.95, ≥ 50 trades, positive net),
+  against a selection hurdle of `sr* = 0.5067` per trade with **321 trials counted** — the grid's
+  160 plus the 169 searched in the IC, partial-IC, timing, structure and fund sweeps.
+* **The lookahead is worth 0.0011bp.** Mean gross bp is +0.0096 at `exec_lag = 0` and +0.0084 at
+  `exec_lag = 1`. Even reading tomorrow's file buys essentially nothing, which is its own kind of
+  evidence: there is no edge to lose to causality.
+* **The sign-flip permutation on GROSS P&L gives p = 0.413** (realised Sharpe/trade +0.0221 against
+  a null of −0.0002 ± 0.0268). The direction the signal chose is indistinguishable from a coin.
+
+A wide grid over 5 funds × 1,680 configurations was also run; the two funds that completed
+(IEF, TLH — 3,360 configurations) had **0 with gross above cost**, best gross 0.207bp against a
+0.53–0.66bp cost. The remaining three were stopped: `keep_results=True` holds ~1MB per
+configuration and the large-universe workers were thrashing, which is now fixed
+(`keep_pnl=True` keeps only what the DSR needs).
 
 ---
 

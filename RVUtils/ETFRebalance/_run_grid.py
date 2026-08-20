@@ -103,13 +103,19 @@ def run_fund(fund: str, start: str, out_dir: str, lags: tuple) -> str:
     base = {"fund": fund, "universe": {"start": start}}
 
     overlays = build_overlays(list(lags))
-    tbl, results = GR.run_grid(overlays, base=base, joined=joined, panel=panel,
-                               progress=False, keep_results=True)
+    # keep_results=False. Holding every Result -- each carrying its trade log, daily curve
+    # and leg frame -- costs roughly 1MB per configuration, so 1,680 of them is ~1.7GB per
+    # worker on top of the panel. Measured: the two smallest funds finished in 34 and 38
+    # minutes while the three largest were still running three hours later, thrashing.
+    # The DSR needs only each configuration's per-trade P&L series, which is a few
+    # kilobytes, so that is all that is kept.
+    tbl, _ = GR.run_grid(overlays, base=base, joined=joined, panel=panel,
+                         progress=False, keep_results=False, keep_pnl=True)
     tbl.insert(0, "fund", fund)
 
     lg = GR.league(tbl, extra_trials=0, min_trades=30)
     if not lg.empty:
-        lg = GR.attach_dsr(lg, results, sr_star=float(lg["sr_star"].iloc[0]))
+        lg = GR.attach_dsr_from_pnl(lg, sr_star=float(lg["sr_star"].iloc[0]))
         tbl = tbl.merge(lg[["name", "sr_star", "clears_hurdle", "dsr"]], on="name", how="left")
 
     p = os.path.join(out_dir, f"grid_{fund}.parquet")
