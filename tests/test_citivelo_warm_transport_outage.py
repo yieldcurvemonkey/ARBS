@@ -343,13 +343,27 @@ def test_a_per_column_answer_is_recorded_and_the_warm_continues(env, monkeypatch
         )
 
 
-def test_nothing_reported_at_all_is_still_treated_as_no_rows(env, monkeypatch):
-    """A read served entirely from cache reports no reasons, and that is fine.
+def test_a_transport_that_answers_nothing_and_reports_nothing_is_the_fault(
+    env, monkeypatch
+):
+    """Case (a), which the reason-only guard could not see at all.
 
-    ``series`` writes nothing into ``failures`` when no fetch happened, because
-    the client's record would belong to some earlier request. An empty mapping
-    must therefore keep meaning "no rows", or a fully-cached batch would stop the
-    run.
+    This is the shape that started the whole exercise: a reader that returns
+    cleanly, writes nothing to the cache, and populates no ``failures``. Against
+    it, the branch's guard stamped the bonds done and returned ``stopped=False``
+    - the same stale green the docstring claimed to have fixed - because the
+    only discrimination left was the transport's own self-report, and a silent
+    transport self-reports nothing.
+
+    Velocity saying "there is nothing here" is a DIFFERENT observation and is
+    pinned by the sibling test below: it comes with a per-tag reason. Silence
+    does not. The evidence that separates them is on the disk, in the sidecars,
+    and it is sampled either side of the fetch.
+
+    This test replaces one that asserted the opposite. That one described a
+    fully cached batch, but its stimulus was a cold cache and a mute wire, which
+    is not the same thing at all - the fully cached case is now pinned properly,
+    against a transport that RAISES if anything touches it.
     """
     wire = _Wire(reason=None)
     monkeypatch.setattr(
@@ -363,8 +377,78 @@ def test_nothing_reported_at_all_is_still_treated_as_no_rows(env, monkeypatch):
 
     out = WARM.warm("eod", start=_START, end=_END, limit=8, do_refresh=False)
 
+    assert wire.tags_seen, "nothing was fetched; this is not exercising the guard"
+    assert out["stopped"] is True, (
+        "a transport that fetched and persisted nothing reported success — this "
+        "is the 349/349-over-zero-parquets defect, and a row count read back out "
+        "of the cache cannot see it"
+    )
+    assert "sidecar" in out["reason"], out["reason"]
+    assert _stamped(env.manifest, "eod") == {}, (
+        "bonds were stamped done by a run that landed nothing, which blocks the "
+        "same-day re-run that would have recovered the day"
+    )
+
+
+def test_a_fully_cached_batch_never_reaches_the_wire_and_is_not_a_fault(
+    env, monkeypatch
+):
+    """Case (c), and the reason the fault check is gated on what was NEEDED.
+
+    ``CitiVeloTagCache.get`` calls no fetcher when ``missing_spans`` is empty, so
+    a batch whose window is already banked issues no ``CVTSHIST``: no reason can
+    be reported and no sidecar can move. That is byte-identical to the silent
+    transport above on every signal except one - whether anything was missing in
+    the first place - which is why the guard asks that first.
+
+    The reader is a REAL :class:`CitiVeloQuotes` over a client that raises on
+    contact, because the "no fetch happened" property lives inside
+    ``CitiVeloTagCache.get``, not at the ``frame`` boundary. A fake standing in
+    for ``frame`` itself is called unconditionally and would prove nothing.
+    """
+    from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
+
+    class _BoomClient:
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_timeseries(self, *args, **kwargs):
+            self.calls += 1
+            raise AssertionError(
+                "a fully cached window must not reach the wire at all"
+            )
+
+        def last_failures(self):
+            return {}
+
+        def close(self):
+            pass
+
+    boom = _BoomClient()
+    quotes = CitiVeloQuotes(
+        client=boom, cache=CitiVeloTagCache(base_dir=default_cache_dir())
+    )
+    resolutions = WARM.universe()[:2]
+    monkeypatch.setattr(WARM, "universe", lambda: resolutions)
+    _install_fetcher(monkeypatch, quotes)
+
+    # Bank the whole window for every tag those two bonds plan, through the real
+    # writer, so the cache genuinely answers the request.
+    plan = _REAL_FETCHER(quotes=quotes).plan(resolutions)
+    tags = [t for e in plan.values() for t in e["tags"].values()]
+    assert tags, "the planner produced no tags; this test would prove nothing"
+    index = pd.date_range(_START - datetime.timedelta(days=1),
+                          _END + datetime.timedelta(days=1), freq="D")
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    for tag in tags:
+        cache.write(tag, "DAILY", pd.Series([1.0] * len(index), index=index))
+
+    out = WARM.warm("eod", start=_START, end=_END, do_refresh=False)
+
+    assert boom.calls == 0, "the wire was touched for a window already on disk"
     assert out["stopped"] is False, out.get("reason")
-    assert len(json.loads(env.manifest.read_text(encoding="utf-8"))["eod"]) == 8
+    assert out["done"] == len(resolutions)
+    assert len(_stamped(env.manifest, "eod")) == len(resolutions)
 
 
 def test_the_intraday_path_asks_for_the_reasons_too(env, monkeypatch):

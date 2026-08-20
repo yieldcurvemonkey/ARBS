@@ -10,6 +10,8 @@ Provides:
 
 import datetime
 import os
+import pathlib
+import tempfile
 import pandas as pd
 import pytest
 from typing import Any, Dict, List, Tuple
@@ -70,6 +72,37 @@ def _isolate_stirfo_raw_eod_cache(tmp_path_factory):
         yield
     finally:
         STIRFutureOptionMDP._RAW_EOD_CACHE_STEM = original_stem
+
+
+# ── no test may write the LIVE resume state of the UST universe warm ──────
+#
+# ``scripts/citivelo_ust_universe_warm.MANIFEST`` is bound at IMPORT, beside the
+# real tag cache, and tonight's cron reads it. A wrong "done" entry there is a
+# PERMANENT hole: a resumable warm never revisits what the manifest calls done.
+# The warm's own suites monkeypatch the module attribute, and that worked for as
+# long as the warm had exactly one entry point.
+#
+# It stopped working the day it got a second. On 2026-08-20
+# ``tests/test_ust_coverage_regression_escalates.py`` - which stubs ``warm`` and
+# calls the nightly job - reached the newly added backwards depth pass, which was
+# not stubbed, and wrote a 397-bond ``depth`` book into the production manifest
+# (fetching 794 tags from the live add-in on the way). Nothing was falsified and
+# the file was restored byte-for-byte, but the class of accident must not depend
+# on every future test author remembering a monkeypatch.
+#
+# SET AT CONFTEST IMPORT, not in a fixture, and that is the whole point. conftest
+# is imported before test modules are collected, while a session fixture does not
+# run until the first test body - by which time a module that imported the warm
+# script at collection has already bound MANIFEST to the production path. The
+# override is read inside ``_manifest_path`` on every import, so this covers the
+# eager and the lazy case alike.
+#
+# ``setdefault``: an operator who exports the variable deliberately keeps it.
+_UST_WARM_MANIFEST_DIR = tempfile.mkdtemp(prefix="pytest-ust-warm-manifest-")
+os.environ.setdefault(
+    "ARBS_UST_WARM_MANIFEST",
+    str(pathlib.Path(_UST_WARM_MANIFEST_DIR) / "manifest.json"),
+)
 
 
 @pytest.fixture(autouse=True)

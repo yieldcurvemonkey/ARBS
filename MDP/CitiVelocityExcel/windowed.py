@@ -239,6 +239,7 @@ def warm_windows(
     force_refresh: bool = False,
     newest_first: bool = True,
     failures: Optional[Dict[str, str]] = None,
+    cap_fetch_span: bool = True,
 ) -> List[WarmWindow]:
     r"""Warm the TAG CACHE over ``[start, end]``, in requests held under the cliff.
 
@@ -278,6 +279,37 @@ def warm_windows(
         every window. This is how a caller tells "the fetch did not happen" from
         "the market held nothing", which is the difference between retrying and
         widening.
+    cap_fetch_span
+        Make the span that reaches the WIRE equal the span computed here.
+        Default True, and it is a defect fix rather than an option — see
+        "Chunking the request does not chunk the fetch" below. Pass False only
+        to reproduce the old behaviour in a test.
+
+    Chunking the request does not chunk the fetch
+    ---------------------------------------------
+    Everything above bounds the span this function ASKS for. Until 2026-08-20 it
+    did not bound the span that went out on the wire, because one layer down
+    ``CitiVeloTagCache.get`` re-derives its own: ``missing_spans`` answers a
+    partially cached request with ``(cov.last, want_end)``, which is a function
+    of the CACHE, not of the window. Measured on the real MI01 bond cache, whose
+    698 tags all end 2026-08-07: a 2-day request produced a **13 days 04:01**
+    wire span for 400 of 400 sampled tags, against the 6-day cliff measured
+    above. Every row that came back would have been 10-minute data written into
+    a store whose whole contract is that it is 1-minute, and ``missing_spans``
+    never re-asks a span it already covers, so nothing short of deleting the
+    parquets would have recovered the resolution.
+
+    The fix is to make the two spans the same span. For each window this asks
+    the cache which tags still need anything inside it; the ones that do are
+    fetched with ``force_refresh=True``, which is what makes
+    ``CitiVeloTagCache.get`` use the bounds it was handed instead of computing
+    its own. The ones that do not are skipped entirely, so the pass stays
+    idempotent: re-running warms nothing twice, and a window already banked
+    costs one sidecar read rather than one ``CVTSHIST``.
+
+    A reader without a ``cache`` attribute (an injected fake, an uncached
+    ``CitiVeloQuotes``) falls back to the old single call. There is no cache to
+    ask, so there is no span to re-derive, and nothing to cap.
 
     Returns
     -------
@@ -320,16 +352,42 @@ def warm_windows(
         if not newest_first:
             spans.reverse()
 
+    # Only worth capping where a cliff exists: a frequency with no measured
+    # threshold is fetched in one request anyway, and there is no resolution to
+    # lose. ``force_refresh`` already means "ignore the cache", which makes the
+    # bounds the caller passed the bounds that go out.
+    cache = getattr(quotes, "cache", None) if (cap_fetch_span and cap is not None
+                                               and not force_refresh) else None
+    if cache is not None and not hasattr(cache, "missing_spans"):
+        cache = None
+
     out: List[WarmWindow] = []
     for w_start, w_end in spans:
+        ask = list(wanted)
+        bounded = force_refresh
+        if cache is not None:
+            ask = [
+                t for t in wanted
+                if cache.missing_spans(t, token, start=w_start, end=w_end,
+                                       price_point=price_point)
+            ]
+            # Everything this window needs is already banked. Skipping is what
+            # keeps a nightly warm idempotent AND what keeps a resumable
+            # backwards backfill from re-paying for every week it has already
+            # walked past. The window is still reported, with no tags, so a
+            # caller counting windows sees that it was considered.
+            if not ask:
+                out.append(WarmWindow(start=w_start, end=w_end, tags=(), n_rows=0))
+                continue
+            bounded = True
         reported: Dict[str, str] = {}
         frame = quotes.frame(
-            list(wanted),
+            ask,
             token,
             start=w_start,
             end=w_end,
             price_point=price_point,
-            force_refresh=force_refresh,
+            force_refresh=bounded,
             failures=reported,
         )
         if failures is not None:

@@ -321,7 +321,37 @@ class CitiVeloTagCache:
             meta_tmp = self.meta_path(tag, freq_token, point_token).with_suffix(".json.tmp")
             meta_tmp.write_text(json.dumps(meta, indent=1), encoding="utf-8")
             _replace_with_retry(meta_tmp, self.meta_path(tag, freq_token, point_token))
+
+            # DROP THIS PATH FROM THE PARSE MEMO. The memo key is
+            # ``(path, st_mtime_ns, st_size)``, and neither of the two varying
+            # parts survives a rewrite of the same series shape:
+            #
+            #   * ``st_size`` is IDENTICAL — measured over 400 write/rewrite
+            #     pairs of the same-length float64 series, 400 of 400 compressed
+            #     to the same number of bytes, because zstd on a constant-stride
+            #     column does not care what the constant is;
+            #   * ``st_mtime_ns`` moves, but its granularity on this filesystem
+            #     is 3.7 ms (measured as the smallest non-zero delta over the
+            #     same 400 pairs), and ``get()`` writes then re-reads inside that
+            #     window as a matter of course.
+            #
+            # When both repeat, ``read`` serves the PRE-WRITE parse and the
+            # caller is handed the data it just replaced. Observed once as
+            # ``test_force_refresh_refetches_a_warm_key_and_the_revision_wins``
+            # returning 4.20 where the fetcher had just served 9.99 — a
+            # force_refresh that silently did not refresh. Invalidating here
+            # costs a dict pop and removes the timing dependence entirely.
+            self._forget_parse(self.path(tag, freq_token, point_token))
         return merged
+
+    def _forget_parse(self, path: pathlib.Path) -> None:
+        """Drop every memo entry for one file, whatever stat it was keyed on."""
+        memo = getattr(self, "_parse_memo", None)
+        if not memo:
+            return
+        stem = str(path)
+        for key in [k for k in memo if k[0] == stem]:
+            memo.pop(key, None)
 
     def set_history_start(
         self, tag: str, freq: str, history_start: DateLike, *, price_point: str = "CLOSE"

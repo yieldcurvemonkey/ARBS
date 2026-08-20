@@ -77,8 +77,56 @@ dead transport, the warm stamped 877 bonds done, warmed 0, returned
 ``stopped=False`` - so the job wrapper did not raise, the warmer exited 0, and the
 stamped manifest blocked the same-day re-run that would have recovered the day.
 
-So the reasons ARE asked for, through ``failures=``, and
-:data:`BENIGN_FAILURE_REASONS` is the line between them.
+So the reasons ARE asked for, through ``failures=``. But the reasons alone
+cannot carry the decision, and betting the nightly on them was the second
+mistake. ``parse_tshist_block`` maps a spill under two rows to ``"no block"``
+for EVERY requested tag - the same string a dead wire produces - and the benign
+``"empty"`` is only reachable once some OTHER tag in the same chunk has returned
+rows, which an all-matured chunk cannot supply. Batch 0 IS an all-matured chunk
+(the 22 lowest ISINs redeemed between 2016 and 2025), so a guard keyed on the
+reason string alone re-creates the 0/877 abort under one plausible answer and
+fails open under the other. Widening :data:`BENIGN_FAILURE_REASONS` until batch 0
+survives is failing open with extra steps.
+
+**Maturity is the discriminator, because it is catalog data and needs no wire.**
+A bond that had already redeemed cannot serve the window whatever the add-in
+says about it, so its failure is not evidence of anything. Only a chunk in which
+every ALIVE tag failed, over at least :data:`MIN_ALIVE_BONDS_FOR_OUTAGE` alive
+bonds, stops the run. The reasons still do real work below that bar - they say
+whether Velocity ANSWERED - and a per-tag failure now costs that bond a retry
+rather than costing the run 877 bonds.
+
+Three cases, three signals, and only one of them is on the wire
+--------------------------------------------------------------
+``(a)`` the transport fetched and persisted nothing, ``(b)`` Velocity served
+nothing for this window, ``(c)`` the window was already cached. They are
+separated by three questions asked in order, and the middle one is the only one
+the transport gets a vote in:
+
+* **did the batch NEED anything?** ``missing_spans``, before the fetch. No means
+  ``(c)``: no ``CVTSHIST`` is issued at all, so no reason can be reported and no
+  sidecar can move, and reading that as a fault would stop the run on the
+  healthiest thing it can meet.
+* **did the transport say anything?** the reasons. ``(b)`` comes with one.
+* **did anything reach the DISK?** :func:`_sidecar_state`, sampled either side of
+  the fetch. This is what makes ``(a)`` visible, and it has to be a real disk
+  read: the guard it replaces compared a row count that came from
+  ``CitiVeloTagCache.get``'s own re-read of the parquets, so on a transport that
+  wrote nothing the count was zero and the predicate could never fire. Measured:
+  a client serving 30 rows with ``cache.write`` neutered produced ``len(frame)
+  == 0``. Two signals derived from the same disk read are one signal.
+
+Depth is a separate job from freshness
+--------------------------------------
+Everything above keeps the cache CURRENT. Nothing above can make it DEEP, and
+the difference is structural rather than a bug: ``missing_spans``' backwards
+branch is ``want_start < cov.first``, and a nightly ``want_start`` of ``end - 2
+days`` only ever advances, so after the first successful run it can never fire.
+The real cache is the proof - all 698 MI01 bond tags share ``first =
+2026-08-04`` and ``last = 2026-08-07``, one window, banked once by hand and never
+extended. :func:`backfill_depth` is the other half: a budgeted, resumable
+backwards walk over a stable Monday-to-Friday grid. See its section below for
+the grid, the cursor, and how many nights the defaults need.
 
 A file that exists is not a window that is covered
 --------------------------------------------------
@@ -126,6 +174,7 @@ Usage
 
     python scripts/citivelo_ust_universe_warm.py eod
     python scripts/citivelo_ust_universe_warm.py intraday --days 2
+    python scripts/citivelo_ust_universe_warm.py depth --depth-days 365
     python scripts/citivelo_ust_universe_warm.py eod --years 10 --force
     python scripts/citivelo_ust_universe_warm.py status
 """
@@ -149,6 +198,25 @@ os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
 
 log = logging.getLogger("citivelo-ust-warm")
 
+#: Environment override for the manifest path, and it exists because of a
+#: measured accident rather than a hypothetical one.
+#:
+#: :data:`MANIFEST` is bound at IMPORT, so the only way to redirect it is to
+#: monkeypatch the module attribute — which every test in this repo's own warm
+#: suites does, and which one test outside them did not. On 2026-08-20
+#: ``tests/test_ust_coverage_regression_escalates.py`` stubbed ``warm`` and
+#: called the nightly job; the depth pass added to that job is a SECOND entry
+#: point, it was not stubbed, and it wrote a 397-bond ``depth`` book straight
+#: into the production manifest (and fetched 794 tags from the live add-in on
+#: the way). The manifest was restored byte-for-byte, but "remember to patch the
+#: global" is not a safety property.
+#:
+#: An env var is read at import, before any test body runs, so a session fixture
+#: can redirect the manifest no matter when — or how lazily — this module is
+#: first imported. ``tests/conftest.py`` sets it for the whole session.
+MANIFEST_ENV = "ARBS_UST_WARM_MANIFEST"
+
+
 def _manifest_path() -> pathlib.Path:
     """Where progress lives: beside the TAG CACHE, not in the repo.
 
@@ -161,6 +229,9 @@ def _manifest_path() -> pathlib.Path:
     """
     from MDP.CitiVelocityExcel.cache import default_cache_dir
 
+    override = os.environ.get(MANIFEST_ENV)
+    if override:
+        return pathlib.Path(override)
     return default_cache_dir() / "ust_universe_warm_manifest.json"
 
 
@@ -220,6 +291,107 @@ def _transport_faults(reported) -> Dict[str, str]:
     }
 
 
+#: A chunk-wide failure needs at least this many ALIVE bonds behind it before it
+#: is allowed to stop the run.
+#:
+#: One alive bond's two tags hitting a per-COLUMN Excel error satisfies "every
+#: alive tag in this chunk failed" without being an outage at all -
+#: ``block_parser``'s own module docstring says a failure is per tag and must not
+#: discard the batch, and it writes an error NAME per column while every other
+#: tag in the same call returns normally. Two independent bonds failing together
+#: is the cheapest thing that cannot be one bad column. The cost of the rule is
+#: that a chunk holding exactly one alive bond can never stop the run on its own
+#: - deliberate: it records the failure, leaves the bond unstamped so a re-run
+#: retries it, and the next chunk carrying two alive bonds stops the run.
+MIN_ALIVE_BONDS_FOR_OUTAGE = 2
+
+
+def _retired_before(maturity: Optional[datetime.date], start: datetime.date) -> bool:
+    """Had this bond already redeemed by the time ``start`` came around?
+
+    The same predicate :func:`tag_states` uses, named once so the coverage record
+    and the outage guard cannot drift apart. ``None`` is ALIVE on purpose: an
+    unknown maturity must fail towards visibility.
+    """
+    return maturity is not None and maturity < start + MATURITY_GRACE
+
+
+def _sidecar_state(cache, tags: Sequence[str], freq: str,
+                   price_point: str = "CLOSE") -> Dict[str, Optional[tuple]]:
+    """``{tag: fingerprint}`` off the tag cache's sidecars, read fresh from disk.
+
+    THE ONLY DISK-SIDE EVIDENCE THAT CAN STILL FIRE
+    -----------------------------------------------
+    The guard this replaces asked ``landed == 0 and rows_served > 0``, and
+    ``rows_served`` cannot carry what that predicate needed. It is
+    ``len(frame)`` where ``frame`` came back from ``CitiVeloQuotes.frame`` ->
+    ``CitiVeloTagCache.get``, and ``get`` builds its return value by RE-READING
+    THE PARQUETS. Measured: a client that served 30 real rows with
+    ``cache.write`` neutered produced ``len(frame) == 0``, so ``landed == 0 and
+    rows_served > 0`` was unreachable on the real transport. Both halves of a
+    two-signal guard were the same disk read, and the fault it existed for -
+    a transport that fetches and persists nothing - went back to being invisible.
+
+    A fingerprint of the sidecar, sampled either side of the fetch, is evidence
+    the wire cannot fabricate and the cache cannot launder. ``write`` stamps
+    ``fetched_at`` on EVERY persist (``cache.py:313``), so a call that merged
+    rows identical to the ones already held still moves the fingerprint - which
+    matters, because the steady-state nightly span ``(cov.last, want_end)`` can
+    legitimately re-serve exactly the row already on disk over a holiday, and a
+    fingerprint of ``n_rows`` alone would have read that as "nothing persisted"
+    and stopped a healthy run.
+
+    ``mtime_ns`` is carried too, because ``fetched_at`` has second resolution and
+    two writes inside one second are a real thing in a test.
+
+    ``None`` for a tag means there is no sidecar at all, which is distinct from
+    one that exists and did not move.
+    """
+    out: Dict[str, Optional[tuple]] = {}
+    for tag in tags:
+        path = cache.meta_path(str(tag), freq, price_point)
+        try:
+            st = path.stat()
+        except OSError:
+            out[str(tag)] = None
+            continue
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - an unreadable sidecar is "no evidence"
+            meta = {}
+        out[str(tag)] = (
+            int(st.st_mtime_ns),
+            int(meta.get("n_rows") or 0),
+            str(meta.get("first") or ""),
+            str(meta.get("last") or ""),
+            str(meta.get("fetched_at") or ""),
+        )
+    return out
+
+
+def _tags_needing_data(cache, tags: Sequence[str], freq: str, *,
+                       start, end, price_point: str = "CLOSE") -> List[str]:
+    """Which of ``tags`` the cache cannot already answer over ``[start, end]``.
+
+    Asked BEFORE the fetch, and it is what separates the third case from the
+    other two. A batch that needs nothing issues no ``CVTSHIST`` at all -
+    measured: a fully cached window drove a client that raises on contact ZERO
+    times - so there are no transport reasons to read and no sidecars to move,
+    and a fault check that did not know this would call a perfectly warm batch
+    a silent transport.
+    """
+    need: List[str] = []
+    for tag in tags:
+        try:
+            spans = cache.missing_spans(str(tag), freq, start=start, end=end,
+                                        price_point=price_point)
+        except Exception:  # noqa: BLE001 - an unreadable sidecar means "ask for it"
+            spans = [(start, end)]
+        if spans:
+            need.append(str(tag))
+    return need
+
+
 def _warm_intraday(
     quotes,
     tags: Sequence[str],
@@ -227,7 +399,8 @@ def _warm_intraday(
     start: datetime.date,
     end: datetime.date,
     failures: Optional[Dict[str, str]] = None,
-) -> None:
+    force: bool = False,
+) -> int:
     r"""Fetch ``MI01`` through the CACHE, in windows held under the cliff.
 
     This is deliberately NOT ``CitiVeloBondFetcher.fetch``. That is the right call
@@ -251,11 +424,27 @@ def _warm_intraday(
     FRB read path needs exactly the same warm and a second copy of a bound whose
     whole value is that it is measured once is how the two drift apart.
 
-    Returns the number of ROWS Velocity served across every window. The caller
-    needs that number to tell the two things apart that the cache check alone
-    cannot: a transport that fetched rows and persisted none (the real fault) and
-    a window that legitimately held no rows at all (a matured bond). See the
-    guard in :func:`warm`.
+    Returns the number of rows THE CACHE HOLDS across every window after the
+    fetch, which is NOT the number of rows Velocity served, and the sentence
+    that used to claim it was is the reason the guard built on it never fired.
+    ``warm_windows`` reports ``len(frame)``, and ``frame`` is
+    ``CitiVeloQuotes.frame`` -> ``CitiVeloTagCache.get``, whose return value is
+    a re-read of the parquets. On a transport that fetched 30 rows and persisted
+    none it is 0. It is kept, and logged, because it is a fair answer to "how
+    much does this window hold" - it is simply not evidence about the wire. The
+    evidence about the wire is :func:`_sidecar_state` and the reasons in
+    ``failures``.
+
+    ``force`` bypasses ``warm_windows``' own cache consultation, and the
+    backwards pass needs it for a reason that is easy to get wrong.
+    ``warm_windows`` skips a window whose tags ``missing_spans`` calls covered -
+    which is right for a forward warm and WRONG here, because ``missing_spans``
+    only ever inspects the head and the tail of the cached range. A week sitting
+    in a HOLE inside that range reads as covered to it, and the hole is exactly
+    what the backwards pass is for. The caller has already established the week
+    is missing, against the parquet's own day set, which is strictly better
+    evidence; the window is a Monday-to-Friday five days, so forcing it cannot
+    take the wire span over the cliff.
 
     ``failures`` is threaded through to :func:`warm_windows`, which merges the
     per-tag reasons across every window it issues. This used to be passed as
@@ -274,6 +463,7 @@ def _warm_intraday(
         datetime.datetime.combine(start, datetime.time(0, 0)),
         datetime.datetime.combine(end, datetime.time(23, 59)),
         failures=failures,
+        force_refresh=force,
     )
     return sum(int(w.n_rows) for w in windows)
 
@@ -713,45 +903,125 @@ def warm(
             # neither, which made a total Velocity outage indistinguishable from
             # a batch of matured bonds. It is only indistinguishable if you do
             # not ask.
+            # WHO OWNS WHICH TAG, and which of those bonds was ALIVE in this
+            # window. Both are known offline, from the catalog, and that is the
+            # whole reason the outage guard below can be trusted: it never has
+            # to guess what reason string a dead MI01 chunk produces on the wire.
+            tag_owner = {str(t): isin for isin, e in plan.items()
+                         for t in e["tags"].values()}
+            alive_bonds = {isin for isin in plan
+                           if not _retired_before(_maturity_of(plan[isin]), start)}
+            alive_tags = [t for t in tags if tag_owner.get(str(t)) in alive_bonds]
+
+            # WHAT DID THIS BATCH ACTUALLY NEED, and what did the sidecars look
+            # like before anything was asked for? Both are sampled BEFORE the
+            # fetch, because both are the "before" half of a comparison the wire
+            # cannot fake. See :func:`_sidecar_state`.
+            need = _tags_needing_data(cover_cache, tags, freq_token, start=start, end=end)
+            before = _sidecar_state(cover_cache, tags, freq_token)
+
             reported: Dict[str, str] = {}
             try:
                 if mode == "eod":
                     frame = quotes.frame(tags, "DAILY", start=start, end=end,
                                          failures=reported)
-                    rows_served = int(len(frame)) if frame is not None else 0
+                    rows_held = int(len(frame)) if frame is not None else 0
                 else:
-                    rows_served = _warm_intraday(quotes, tags, start=start, end=end,
-                                                 failures=reported)
+                    rows_held = _warm_intraday(quotes, tags, start=start, end=end,
+                                               failures=reported)
             except Exception as exc:  # noqa: BLE001 - one bad batch must not lose the rest
                 stopped_reason = f"{type(exc).__name__}: {exc}"
                 log.warning("STOPPING at batch %d: %s", i // batch, stopped_reason[:200])
                 break
 
-            # DID THE TRANSPORT ANSWER? That question comes first, deliberately
-            # before anything looks at the cache, and it is the one the guards
-            # below cannot ask.
+            after = _sidecar_state(cover_cache, tags, freq_token)
+            persisted = sorted(str(t) for t in tags if after.get(str(t)) != before.get(str(t)))
+            log.debug(
+                "  batch %d: %d/%d tag(s) needed data, %d sidecar(s) moved, "
+                "the cache holds %d row(s) in the window",
+                i // batch, len(need), len(tags), len(persisted), rows_held,
+            )
+
+            # DID THE TRANSPORT ANSWER? Asked first, and asked per tag rather
+            # than per batch.
             #
-            # ``landed`` cannot carry it, because the tag cache is CUMULATIVE: on
-            # any night after the first, last night's parquets are still on disk,
-            # so ``landed`` is the full tag count even while tonight's wire is
-            # serving nothing at all. A fault check gated on ``landed == 0``
-            # would pass on precisely the nights it exists for.
+            # The version this replaces did ``if faults: break`` - ANY single
+            # non-benign reason stopped all 877 bonds. ``block_parser`` writes a
+            # per-COLUMN Excel error name for one tag while every other tag in
+            # the same call returns normally, and its own module docstring says
+            # "a failure is per-tag and must not discard the batch". With 110
+            # batches a night, one bad column ended the run.
             #
-            # ``rows_served`` cannot carry it either - zero rows is what a total
-            # outage and a matured bond both look like. The REASONS separate
-            # them, they are scoped to the call that just happened, and
-            # ``failures=`` is how they are asked for. See
-            # :data:`BENIGN_FAILURE_REASONS` for which reason means which.
+            # And the reason vocabulary alone cannot settle it. An all-matured
+            # MI01 chunk plausibly spills under two rows, which
+            # ``parse_tshist_block`` maps to ``"no block"`` for EVERY requested
+            # tag - the same string a real outage produces - and the benign
+            # ``"empty"`` is only reachable when some OTHER tag in the chunk
+            # returned rows, which an all-dead chunk cannot supply. Widening
+            # :data:`BENIGN_FAILURE_REASONS` to cover that is failing open again.
+            #
+            # So the discriminator is MATURITY, which is catalog data and needs
+            # no wire at all. A bond that had already redeemed cannot serve this
+            # window whatever the add-in says about it, so its failure is not
+            # evidence of anything. Only a chunk in which every ALIVE tag failed,
+            # over at least :data:`MIN_ALIVE_BONDS_FOR_OUTAGE` alive bonds, is
+            # the outage signature. Batch 0 - the 22 lowest ISINs, all matured -
+            # therefore cannot stop the run under any reason string, which is the
+            # 0/877 abort that cost five of ten retained nightly runs.
             faults = _transport_faults(reported)
-            if faults:
+            alive_faults = [t for t in alive_tags if str(t) in faults]
+            failed_bonds = {tag_owner[str(t)] for t in faults if str(t) in tag_owner}
+            alive_failed_bonds = failed_bonds & alive_bonds
+            if (alive_tags and len(alive_faults) == len(alive_tags)
+                    and len(alive_failed_bonds) >= MIN_ALIVE_BONDS_FOR_OUTAGE):
                 shown = ", ".join(f"{t} ({why})" for t, why in sorted(faults.items())[:5])
                 stopped_reason = (
-                    f"batch {i // batch}: Velocity FAILED {len(faults)} of {len(tags)} "
-                    f"tag(s) - {shown}"
+                    f"batch {i // batch}: Velocity FAILED every tag of all "
+                    f"{len(alive_failed_bonds)} bond(s) in it that were alive on "
+                    f"{start} - {shown}"
                     f"{f' and {len(faults) - 5} more' if len(faults) > 5 else ''}. "
-                    f"That is the transport, not a matured bond: a bond with nothing "
-                    f"in this window comes back as {sorted(BENIGN_FAILURE_REASONS)}. "
-                    f"Nothing in this batch is recorded, so a re-run retries it."
+                    f"A matured bond cannot explain that: these bonds had not "
+                    f"redeemed, so the window is one Velocity should be able to "
+                    f"answer. Nothing in this batch is recorded, so a re-run "
+                    f"retries it."
+                )
+                log.error("STOPPING: %s", stopped_reason)
+                break
+            if faults:
+                # Per-tag, not chunk-wide. Recorded and stepped over; the bonds
+                # behind the failed tags are deliberately NOT stamped below, so a
+                # re-run the same night retries exactly them and nothing else.
+                log.warning(
+                    "  batch %d: %d of %d tag(s) failed on %d bond(s) - recorded, "
+                    "not fatal (%s)",
+                    i // batch, len(faults), len(tags), len(failed_bonds),
+                    ", ".join(f"{t} ({why})" for t, why in sorted(faults.items())[:3]),
+                )
+
+            # DID ANYTHING REACH THE DISK? The one question neither the reasons
+            # nor the returned frame can answer, and the one the fault this whole
+            # file exists for turns on.
+            #
+            # It only means something when the batch NEEDED something. A fully
+            # cached window issues no CVTSHIST at all - measured, a client that
+            # raises on contact was never touched - so no sidecar can move and no
+            # reason can be reported, and reading that as a silent transport
+            # would stop the run on the healthiest thing it can encounter.
+            #
+            # Given the batch did need data: no sidecar moved AND the transport
+            # said nothing at all is the signature of a reader that returns
+            # cleanly and persists nothing. Velocity answering "there is nothing
+            # here" is a different observation - it comes with a reason - and is
+            # handled below as coverage, not as a fault.
+            if need and not persisted and not reported:
+                stopped_reason = (
+                    f"batch {i // batch} asked Velocity for {len(need)} of "
+                    f"{len(tags)} tag(s), was told nothing at all, and moved no "
+                    f"sidecar in the {freq_token} cache — the transport is not "
+                    f"writing to the tag cache. This is the fault that let an "
+                    f"earlier version report 349/349 done over zero parquets; it "
+                    f"is checked on the DISK because a row count taken from the "
+                    f"cache's own re-read cannot see it."
                 )
                 log.error("STOPPING: %s", stopped_reason)
                 break
@@ -788,35 +1058,28 @@ def warm(
                 if fresh_stalls:
                     regressed[isin] = fresh_stalls
 
+            # Bonds one of whose tags the wire refused. Left OUT of the manifest
+            # on purpose: stamping them would make a same-night re-run skip the
+            # exact bonds that did not warm, which is the resume bug in miniature.
+            unstamped = {isin for isin in failed_bonds if isin in plan}
+
             # A warm is the file on disk, not the call returning. The first
             # version of this script "warmed" 349 bonds intraday in 134 s and
             # left zero MI01 parquets, because the transport it used bypassed the
             # cache — and recorded 349/349 done. Nothing is marked done now until
             # the cache is asked whether it actually holds the tags.
             #
-            # But "nothing landed" has TWO causes and they need opposite actions,
-            # and conflating them cost this warm more than the bug it was written
-            # to catch. ``rows_served`` is what separates them.
-            #
-            # Rows came back and none of them landed: that IS the transport, stop.
-            # NO rows came back: Velocity was asked for a window it has nothing
-            # in, which for an MI01 request against a matured bond is the correct
-            # and expected answer. 528 of the 877 bonds in the catalog have
-            # matured, ``universe()`` sorts by ISIN, and the 22 lowest ISINs all
-            # matured between 2016 and 2025 — so with ``DEFAULT_BATCH = 8``,
-            # batch 0 is all-dead BY CONSTRUCTION. Treating that as a broken
-            # transport aborted the whole 877-bond intraday warm at 0/877 on five
-            # of ten retained nightly runs, in 2.9-4.4 s each, and it had never
-            # once warmed a bond since the universe grew past the live 349.
+            # The transport-lost-the-cache half of that question is answered
+            # above, on the sidecars. What is left here is the DATA question: the
+            # cache holds no file at all for these tags. NO rows came back and
+            # Velocity said why - which for an MI01 request against a bond that
+            # matured in 2016 is the correct and expected answer. 528 of the 877
+            # catalogued bonds have matured, ``universe()`` sorts by ISIN, and
+            # the 22 lowest ISINs all matured between 2016 and 2025, so with
+            # ``DEFAULT_BATCH = 8`` batch 0 is all-dead BY CONSTRUCTION. Treating
+            # that as a broken transport aborted the whole 877-bond intraday warm
+            # at 0/877 on five of ten retained nightly runs, in 2.9-4.4 s each.
             landed = cached_tags(freq_token, tags)
-            if landed == 0 and rows_served > 0:
-                stopped_reason = (
-                    f"batch {i // batch} fetched {len(tags)} tags and {rows_served} rows "
-                    f"without error and cached NONE of them — the transport is not "
-                    f"writing to the tag cache"
-                )
-                log.error("STOPPING: %s", stopped_reason)
-                break
             if landed == 0:
                 # Recorded, not skipped. A bond left out of the manifest is a
                 # bond re-requested from Velocity on every run for ever — and
@@ -839,6 +1102,8 @@ def warm(
                     i // batch, len(tags), ", ".join(why),
                 )
                 for r in chunk:
+                    if r.isin in unstamped:
+                        continue
                     book[r.isin] = {
                         "key": stamp,
                         "tags": 0,
@@ -851,6 +1116,8 @@ def warm(
                 continue
 
             for r in chunk:
+                if r.isin in unstamped:
+                    continue
                 book[r.isin] = {
                     "key": stamp,
                     "tags": len(plan[r.isin]["tags"]),
@@ -860,7 +1127,7 @@ def warm(
                     # nothing new for a third of the universe.
                     **records[r.isin],
                 }
-            done += len(chunk)
+            done += len(chunk) - len(unstamped & {r.isin for r in chunk})
             tags_done += len(tags)
             _save_manifest(man)          # after EVERY batch: a stop costs one batch
             if (i // batch) % 5 == 0 or done >= total:
@@ -912,6 +1179,496 @@ def warm(
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# DEPTH: the half a rolling window structurally cannot do
+# ──────────────────────────────────────────────────────────────────────────
+#
+# The nightly window walks FORWARD and only forward. Measured on the real cache
+# on 2026-08-20: all 698 MI01 bond tags share ``first = 2026-08-04`` and ``last =
+# 2026-08-07`` — one window, banked once by hand on 2026-08-08, never extended by
+# anything since. The mechanism is in ``CitiVeloTagCache.missing_spans``: the
+# backwards branch is ``want_start < cov.first``, and a nightly ``want_start`` of
+# ``end - 2 days`` only ever advances, so after the first successful run it can
+# never fire again. Nothing about that is a bug in the nightly. It is a
+# capability the shape does not have, and "MI01 for the entire UST universe"
+# means history, not a two-day sliding pane.
+#
+# Why weeks, and why Monday to Friday
+# -----------------------------------
+# The unit has to be under the measured 6-day MI01 cliff (``windowed.MAX_SPAN``),
+# and it has to be STABLE — a grid anchored on "today" moves every night, so a
+# window banked on Tuesday is not the window Wednesday asks about, and neither
+# the coverage test nor the resume cursor would mean anything twice. A Monday
+# 00:00 → Friday 23:59 week is 4 days 23:59 on the wire, sits under the cliff,
+# is the same grid every night for ever, and puts the seam in the weekend gap
+# rather than mid-session — which is what ``windowed.DEFAULT_WINDOW`` already
+# chose for the same reason.
+#
+# Why a cursor and not the cache frontier
+# ---------------------------------------
+# Walking ``cov.first`` backwards would extend the head of the cached range and
+# never look inside it, and there IS something inside it: the nightly's own
+# failures leave interior holes (2026-08-08..2026-08-17 as this ships), and
+# ``missing_spans`` inspects only the head and the tail, so an interior gap is
+# invisible to the fetch path for ever. The cursor walks the GRID instead and
+# tests each week against what the parquet actually holds, so a hole the nightly
+# left is filled the first time the cursor passes over it. The cursor is
+# monotone, so no week is ever considered twice, which is what lets the coverage
+# test be strict (every weekday present) without any risk of a re-fetch loop:
+# a week with a market holiday is asked for exactly once, ever.
+#
+# How many nights the defaults need — the arithmetic, not a feeling
+# -----------------------------------------------------------------
+# PROJECTED from two measurements, not measured end to end. Both anchors are
+# from 2026-08-08 on the cached transport: **349 bonds / 698 tags over a 2-day
+# MI01 window cost 48 s and +170 MB**, i.e. 0.24 MB per tag and, at
+# ``DEFAULT_BATCH = 8``, 1.09 s per batch of eight bonds.
+#
+# A Monday-to-Friday week is 5 days against that 2-day anchor, so ~2.5x the rows.
+# Round trips dominate the time, so call it 2 s per batch rather than 2.7; the
+# memory scales with the rows, so 0.6 MB per tag.
+#
+# The working set at a 365-day target is NOT all 877 bonds, and that part IS
+# measured, offline against the real catalog and cache on 2026-08-20: a bond
+# whose anchor (``min(end, maturity)``) already sits below the target has no
+# history inside the window and is skipped without a single request. **403 bonds
+# qualify at 365 days and 474 are skipped**; at a ten-year target 875 qualify.
+# The planning itself is free — ``universe()`` 0.05 s and ``plan`` 0.04 s over
+# all 877 — and the per-pass week scan costs 8-20 s while parsing ZERO parquets,
+# because the sidecar bounds answer every candidate week before the parquet is
+# needed.
+#
+# So 403 bonds, 806 tags, 51 batches per pass:
+#
+#   time    51 x 2 s + ~10 s scan = ~112 s per pass -> 600 s / 112 = 5.4 passes
+#   memory  806 x 0.6 = 484 MB per pass           -> 2,700 MB / 484 = 5.6 passes
+#           (2,700 MB is the 3,500 MB working ceiling over a healthy start;
+#            the retained logs put that at 696-2,129 MB on the good nights)
+#
+# The two bind at the same place, ~5.4 passes a night. One pass is one week per
+# bond, so that is ~38 calendar days of depth per bond per night, and the
+# 365-day default is reached in
+#
+#                           ~10 NIGHTS
+#
+# Widen the target and the working set grows as bonds that redeemed earlier come
+# back into scope: at a ten-year target 875 bonds qualify, a pass costs 110
+# batches and ~1,050 MB, ~2.6 passes fit in a night, depth accrues at ~18
+# calendar days a night, and ten years takes roughly 200 nights. That is the
+# honest price of a decade of minutes through one add-in.
+#
+# The projection is deliberately falsifiable: :func:`backfill_depth` logs the
+# bond-weeks it actually banked and the passes it completed on every run, so
+# after a week of nightlies this paragraph should be replaced with a measurement.
+
+
+#: How deep the backwards backfill aims to get, in days before the run date.
+#: Overridden by ``CITIVELO_UST_DEPTH_DAYS`` and ``--depth-days``; 0 disables.
+#:
+#: One year, because that is what the downstream intraday research asks for and
+#: because the disk cost is known: 11.21 bytes/row and 886 rows per tag per full
+#: weekday were measured over 34,712 tag-days on 2026-08-20, so a year of the
+#: 349 alive bonds at PRICE+YIELD is ~1.95 GB and the full 877 is ~4.89 GB. Disk
+#: is not the constraint; Excel's memory is.
+DEPTH_TARGET_DAYS = 365
+
+#: Wall clock the backwards pass may spend per invocation, in seconds.
+#:
+#: 600 s against a nightly run that takes 2 h 45 m. It is a budget rather than a
+#: bond count because the thing being protected is the SCHEDULE — the other
+#: sixteen jobs still have to run — and because the per-window cost is a wire
+#: cost nobody controls.
+DEPTH_BUDGET_S = 600.0
+
+#: Consecutive empty weeks before a bond is called floored and stops being asked.
+#:
+#: TWO, not one. Citi's data legitimately stops 1-5 days before a bond redeems
+#: (measured over 522 matured USTs: 1 day for 127 of them, 5 for 18, never more),
+#: so a matured bond's FIRST backwards week is often the grace tail and holds
+#: nothing while every week before it holds a full history. Flooring on one empty
+#: week would strand exactly the bonds this pass exists to recover. A week that
+#: overlaps that measured tail does not count as a strike at all.
+DEPTH_EMPTY_STRIKES = 2
+
+#: Consecutive batches in which every alive tag failed before the pass gives up
+#: for the night. Distinct from the floor rule above: this is the wire being
+#: down, and a bond must never be recorded floored because of it.
+DEPTH_OUTAGE_STRIKES = 2
+
+
+def _monday_of(day: datetime.date) -> datetime.date:
+    """The Monday of ``day``'s week. The grid is anchored on nothing else."""
+    return day - datetime.timedelta(days=day.weekday())
+
+
+def _cached_days(cache, tag: str, freq: str, memo: Dict[str, set]) -> set:
+    """The set of calendar dates this tag holds, parsed at most once per pass.
+
+    A parquet parse, so it is asked only after the sidecar bounds say the week
+    could be inside the cached range — which for a backwards walk is false for
+    almost every week, and true for the handful that matter.
+    """
+    if tag in memo:
+        return memo[tag]
+    series = cache.read(tag, freq)
+    days = set() if series is None or len(series) == 0 else set(series.index.date)
+    memo[tag] = days
+    return days
+
+
+def _cached_bounds(cache, tag: str, freq: str, memo: Dict[str, Optional[tuple]]):
+    """``(first, last)`` as dates from the sidecar, or ``None`` when empty."""
+    if tag in memo:
+        return memo[tag]
+    try:
+        cov = cache.coverage(str(tag), freq)
+    except Exception:  # noqa: BLE001 - an unreadable sidecar means "nothing held"
+        cov = None
+    if cov is None or cov.first is None or cov.last is None or not cov.n_rows:
+        memo[tag] = None
+    else:
+        memo[tag] = (cov.first.date(), cov.last.date())
+    return memo[tag]
+
+
+def _week_days(monday: datetime.date, maturity: Optional[datetime.date]) -> List[datetime.date]:
+    """The weekdays of ``monday``'s week that this bond could have traded on."""
+    days = [monday + datetime.timedelta(days=i) for i in range(5)]
+    if maturity is not None:
+        days = [d for d in days if d <= maturity]
+    return days
+
+
+def next_missing_week(
+    cache,
+    tags: Sequence[str],
+    freq: str,
+    *,
+    cursor: datetime.date,
+    target: datetime.date,
+    maturity: Optional[datetime.date],
+    day_memo: Dict[str, set],
+    bounds_memo: Dict[str, Optional[tuple]],
+) -> Optional[Tuple[datetime.date, datetime.date]]:
+    """The newest week at or below ``cursor`` the cache does not fully hold.
+
+    "Fully" is every weekday of the week on which the bond could have traded,
+    for every tag. Strict on purpose, and safe because the cursor is monotone:
+    a week is examined once in the life of the cache, so a holiday week costs
+    one extra request forever rather than one per night.
+
+    ``None`` means this bond has nothing left to ask for above ``target``.
+    """
+    monday = cursor
+    while monday >= target:
+        if maturity is not None and monday > maturity:
+            monday -= datetime.timedelta(days=7)
+            continue
+        wanted = _week_days(monday, maturity)
+        if not wanted:
+            monday -= datetime.timedelta(days=7)
+            continue
+        friday = monday + datetime.timedelta(days=4)
+        for tag in tags:
+            bounds = _cached_bounds(cache, str(tag), freq, bounds_memo)
+            if bounds is None or friday < bounds[0] or monday > bounds[1]:
+                return monday, friday          # nothing held anywhere near it
+            if not set(wanted) <= _cached_days(cache, str(tag), freq, day_memo):
+                return monday, friday          # an interior hole, which is the point
+        monday -= datetime.timedelta(days=7)
+    return None
+
+
+def _depth_plan(fetcher, resolutions, values: Sequence[str], chunk: int = 64) -> Dict[str, dict]:
+    """``fetcher.plan`` over the whole universe, in pieces. Pure, no wire."""
+    out: Dict[str, dict] = {}
+    for i in range(0, len(resolutions), chunk):
+        out.update(fetcher.plan(resolutions[i:i + chunk], values=list(values)))
+    return out
+
+
+def backfill_depth(
+    *,
+    end: datetime.date,
+    depth_days: int = DEPTH_TARGET_DAYS,
+    budget_s: float = DEPTH_BUDGET_S,
+    values: Optional[Sequence[str]] = None,
+    batch: int = DEFAULT_BATCH,
+    ceiling_mb: float = WORKING_CEILING_MB,
+    limit: Optional[int] = None,
+    force: bool = False,
+) -> dict:
+    """Walk the universe's MI01 history BACKWARDS, one week per bond per pass.
+
+    Bounded by three separate things, any of which ends the pass cleanly with
+    everything banked so far kept and a cursor recording exactly where it got to:
+
+    * ``budget_s`` of wall clock, checked between batches;
+    * ``ceiling_mb`` of Excel, checked between batches with the same fail-closed
+      probe the forward warm uses — an unreadable reading STOPS, because "could
+      not tell" and "nothing running" are different facts;
+    * running out of weeks: every bond either reached ``depth_days`` or floored.
+
+    Resumable and idempotent. The cursor is in the manifest, per bond, and the
+    coverage test is against the parquets, so re-running the same night finds the
+    weeks it already banked and asks the wire for none of them.
+
+    Matured bonds are first-class here, and this is the ONLY path that can ever
+    warm them: they can hold no row after they redeemed, so the forward window
+    finds nothing for 528 of the 877 for ever, while their history before
+    maturity is exactly as real as anyone else's. Their anchor is their maturity
+    rather than today, and a week entirely after it is never requested.
+    """
+    from MDP.CitiVelocityExcel.bonds.fetcher import CitiVeloBondFetcher
+    from MDP.CitiVelocityExcel.cache import CitiVeloTagCache, default_cache_dir
+    from MDP.CitiVelocityExcel.memory_guard import assert_safe_to_connect, excel_memory_mb
+
+    wanted = tuple(values) if values else INTRADAY_VALUES
+    # A ``datetime`` here would compare against ``descriptor.maturity`` (a
+    # ``date``) and raise at 18:15 on a scheduled task. The warmer passes a date
+    # today; normalising costs nothing and removes the dependency on that.
+    end = end.date() if isinstance(end, datetime.datetime) else end
+    target = _monday_of(end - datetime.timedelta(days=int(depth_days)))
+    mem0 = assert_safe_to_connect(ceiling_mb, what="the UST universe depth backfill")
+
+    man = _load_manifest()
+    book = man.setdefault("depth", {})
+    everything = universe()
+    if limit:
+        everything = everything[:limit]
+
+    fetcher = CitiVeloBondFetcher()
+    quotes = fetcher.quotes()
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+
+    by_isin = {r.isin: r for r in everything}
+    plan = _depth_plan(fetcher, everything, wanted)
+
+    t_start = time.perf_counter()
+    weeks = passes = rows = outage_strikes = 0
+    floored_now: List[str] = []
+    stopped_reason = ""
+    deepest: Optional[datetime.date] = None
+    log.info(
+        "depth backfill: %d bond(s), target %s (%d days), budget %.0fs, "
+        "Excel %.0f MB, ceiling %.0f",
+        len(everything), target, depth_days, budget_s, mem0, ceiling_mb,
+    )
+
+    try:
+        while not stopped_reason:
+            # A PASS is "one missing week for every bond that still has one".
+            # Memos are per pass, never across: the pass it belongs to is the one
+            # that just rewrote the parquets it summarises.
+            day_memo: Dict[str, set] = {}
+            bounds_memo: Dict[str, Optional[tuple]] = {}
+            work: Dict[Tuple[datetime.date, datetime.date], List[str]] = {}
+            for isin, entry in plan.items():
+                record = book.get(isin, {}) if not force else {}
+                if record.get("floor"):
+                    continue
+                tags = list(entry["tags"].values())
+                if not tags:
+                    continue
+                maturity = _maturity_of(entry)
+                anchor = end if maturity is None else min(end, maturity)
+                if anchor < target:
+                    continue
+                raw = record.get("cursor")
+                cursor = _monday_of(anchor)
+                if raw:
+                    try:
+                        cursor = min(cursor, datetime.date.fromisoformat(str(raw)))
+                    except ValueError:  # a hand-edited cursor restarts the walk
+                        pass
+                window = next_missing_week(
+                    cache, tags, "MI01", cursor=cursor, target=target,
+                    maturity=maturity, day_memo=day_memo, bounds_memo=bounds_memo,
+                )
+                if window is None:
+                    # Nothing left above the target. Recorded so ``status`` can
+                    # tell "finished" from "never started", and so the 528
+                    # matured bonds stop looking permanently un-warm.
+                    book[isin] = {**record, "cursor": target.isoformat(),
+                                  "complete": True,
+                                  "at": datetime.datetime.now().isoformat(timespec="seconds")}
+                    continue
+                work.setdefault(window, []).append(isin)
+
+            if not work:
+                log.info("  depth backfill: nothing left to ask for above %s", target)
+                break
+
+            passes += 1
+            pass_weeks = 0
+            # Batched BY WINDOW. Bonds whose cursors have converged - which after
+            # the first pass is most of the alive universe - share one CVTSHIST.
+            for window in sorted(work, reverse=True):
+                monday, friday = window
+                isins = work[window]
+                for i in range(0, len(isins), batch):
+                    if stopped_reason:
+                        break
+                    chunk = isins[i:i + batch]
+                    spent = time.perf_counter() - t_start
+                    if spent >= budget_s:
+                        stopped_reason = (
+                            f"the {budget_s:.0f}s depth budget is spent "
+                            f"({weeks} week(s) banked over {passes} pass(es))"
+                        )
+                        log.info("  depth backfill stopping cleanly: %s", stopped_reason)
+                        break
+                    try:
+                        mem = excel_memory_mb()
+                    except Exception:  # noqa: BLE001
+                        mem = None
+                    if mem is None:
+                        stopped_reason = "could not read Excel's memory (fails closed)"
+                        log.warning("  depth backfill stopping: %s", stopped_reason)
+                        break
+                    if mem >= ceiling_mb:
+                        stopped_reason = (
+                            f"Excel reached {mem:.0f} MB (ceiling {ceiling_mb:.0f})"
+                        )
+                        log.warning("  depth backfill stopping: %s", stopped_reason)
+                        break
+
+                    tags = [t for isin in chunk for t in plan[isin]["tags"].values()]
+                    tag_owner = {str(t): isin for isin in chunk
+                                 for t in plan[isin]["tags"].values()}
+                    alive_bonds = {isin for isin in chunk
+                                   if not _retired_before(_maturity_of(plan[isin]), monday)}
+                    alive_tags = [t for t in tags if tag_owner[str(t)] in alive_bonds]
+                    before = _sidecar_state(cache, tags, "MI01")
+                    reported: Dict[str, str] = {}
+                    try:
+                        rows += _warm_intraday(quotes, tags, start=monday, end=friday,
+                                               failures=reported, force=True)
+                    except Exception as exc:  # noqa: BLE001
+                        stopped_reason = f"{type(exc).__name__}: {exc}"
+                        log.warning("  depth backfill stopping: %s", stopped_reason[:200])
+                        break
+                    after = _sidecar_state(cache, tags, "MI01")
+
+                    # The same discrimination the forward warm makes, for the
+                    # same reason: a chunk-wide failure over ALIVE bonds is the
+                    # wire, and anything narrower is not. A bond must never be
+                    # recorded floored on a night the wire was down, so an
+                    # outage batch records NOTHING - not a cursor, not a strike.
+                    faults = _transport_faults(reported)
+                    alive_failed = {tag_owner[str(t)] for t in alive_tags if str(t) in faults}
+                    if (alive_tags
+                            and len([t for t in alive_tags if str(t) in faults]) == len(alive_tags)
+                            and len(alive_failed) >= MIN_ALIVE_BONDS_FOR_OUTAGE):
+                        outage_strikes += 1
+                        log.warning(
+                            "  depth backfill: every alive tag failed for %s..%s "
+                            "(strike %d of %d)",
+                            monday, friday, outage_strikes, DEPTH_OUTAGE_STRIKES,
+                        )
+                        if outage_strikes >= DEPTH_OUTAGE_STRIKES:
+                            stopped_reason = (
+                                f"{outage_strikes} consecutive batches in which every "
+                                f"alive tag failed - the wire, not the data. No bond "
+                                f"is recorded floored on such a night."
+                            )
+                            log.warning("  depth backfill stopping: %s", stopped_reason)
+                            break
+                        continue
+                    outage_strikes = 0
+
+                    now = datetime.datetime.now().isoformat(timespec="seconds")
+                    for isin in chunk:
+                        record = dict(book.get(isin, {}))
+                        own = [str(t) for t in plan[isin]["tags"].values()]
+                        landed = any(after.get(t) != before.get(t) for t in own)
+                        failed = any(t in faults for t in own)
+                        if failed and not landed:
+                            # Not stamped: the cursor does not move, so the next
+                            # run asks for this same week again. A per-tag wire
+                            # failure must cost a retry, not a hole.
+                            continue
+                        record["cursor"] = (monday - datetime.timedelta(days=7)).isoformat()
+                        record["at"] = now
+                        record["weeks"] = int(record.get("weeks", 0)) + 1
+                        record.pop("complete", None)
+                        maturity = _maturity_of(plan[isin])
+                        in_grace = (
+                            maturity is not None
+                            and friday >= maturity - MATURITY_GRACE
+                        )
+                        if landed:
+                            record["empty"] = 0
+                            record["deepest"] = monday.isoformat()
+                        elif in_grace:
+                            # The measured 1-5 day tail before a redemption. Not
+                            # evidence about anything below it.
+                            record["empty"] = int(record.get("empty", 0))
+                        else:
+                            record["empty"] = int(record.get("empty", 0)) + 1
+                            if record["empty"] >= DEPTH_EMPTY_STRIKES:
+                                record["floor"] = monday.isoformat()
+                                record["why"] = ", ".join(
+                                    sorted({str(w) for w in reported.values()})
+                                ) or "nothing served"
+                                floored_now.append(isin)
+                        book[isin] = record
+                        if landed and (deepest is None or monday < deepest):
+                            deepest = monday
+                    weeks += len(chunk)
+                    pass_weeks += len(chunk)
+                    _save_manifest(man)
+                if stopped_reason:
+                    break
+            log.info(
+                "  depth pass %d: %d bond-week(s), %d floored so far, %.0fs of %.0fs",
+                passes, pass_weeks, len(floored_now),
+                time.perf_counter() - t_start, budget_s,
+            )
+            if not pass_weeks:
+                if outage_strikes and not stopped_reason:
+                    # Everything this pass tried, failed, over alive bonds. On a
+                    # big universe the strike counter reaches its limit inside
+                    # the pass; on a small one - or on the last few bonds still
+                    # walking - the pass simply runs out of work first, and a
+                    # pass that banked nothing because every request failed is
+                    # the same observation. It must be said out loud, because the
+                    # alternative is a green run over a wire that answered
+                    # nothing.
+                    stopped_reason = (
+                        f"every alive tag failed on every batch this pass "
+                        f"({outage_strikes} batch(es)) - the wire, not the data. "
+                        f"No bond is recorded floored on such a night."
+                    )
+                    log.warning("  depth backfill stopping: %s", stopped_reason)
+                break
+    finally:
+        _save_manifest(man)
+        fetcher.close()
+
+    elapsed = time.perf_counter() - t_start
+    try:
+        mem_end = excel_memory_mb()
+    except Exception:  # noqa: BLE001
+        mem_end = None
+    # The number that turns the projection in the commit message into a
+    # measurement. Logged every night, so after a week nobody has to estimate.
+    log.info(
+        "depth backfill finished: %d bond-week(s) over %d pass(es), %d row(s), "
+        "%d newly floored, %.0fs, Excel %.0f -> %s MB%s",
+        weeks, passes, rows, len(floored_now), elapsed, mem0,
+        f"{mem_end:.0f}" if mem_end is not None else "?",
+        f" (STOPPED: {stopped_reason})" if stopped_reason else "",
+    )
+    return {
+        "weeks": weeks, "passes": passes, "rows": rows, "bonds": len(by_isin),
+        "floored": sorted(floored_now), "deepest": deepest,
+        "target": target, "seconds": elapsed,
+        "stopped": bool(stopped_reason), "reason": stopped_reason,
+        "mem_before": mem0, "mem_after": mem_end,
+    }
+
+
 def status() -> None:
     """What the manifest says is warm, without touching Excel.
 
@@ -947,12 +1704,33 @@ def status() -> None:
             for value, n in sorted(stalled.items(), key=lambda kv: (-kv[1], kv[0])):
                 print(f"              {value:<18} {n:>4} bond(s)")
 
+    depth = man.get("depth", {})
+    if depth:
+        floored = sum(1 for e in depth.values() if e.get("floor"))
+        complete = sum(1 for e in depth.values() if e.get("complete"))
+        weeks = sum(int(e.get("weeks", 0)) for e in depth.values())
+        deepest = sorted(str(e["deepest"]) for e in depth.values() if e.get("deepest"))
+        print(f"     depth: {len(depth)}/{n_uni} bonds walked, {weeks} bond-week(s), "
+              f"{complete} at target, {floored} floored")
+        if deepest:
+            print(f"            deepest week reached: {deepest[0]}; "
+                  f"shallowest bond still walking: {deepest[-1]}")
+        cursors = sorted(str(e["cursor"]) for e in depth.values() if e.get("cursor"))
+        if cursors:
+            print(f"            cursors span {cursors[0]} .. {cursors[-1]}")
+
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
                         datefmt="%H:%M:%S")
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("mode", choices=["eod", "intraday", "status", "refresh"])
+    p.add_argument("mode", choices=["eod", "intraday", "depth", "status", "refresh"])
+    p.add_argument("--depth-days", type=int,
+                   default=int(os.environ.get("CITIVELO_UST_DEPTH_DAYS", DEPTH_TARGET_DAYS)),
+                   help=f"how far back the backwards backfill aims (default {DEPTH_TARGET_DAYS})")
+    p.add_argument("--depth-budget-s", type=float,
+                   default=float(os.environ.get("CITIVELO_UST_DEPTH_BUDGET_S", DEPTH_BUDGET_S)),
+                   help=f"wall clock the backwards backfill may spend (default {DEPTH_BUDGET_S:.0f})")
     p.add_argument("--years", type=float, default=5.0, help="EOD history depth (default 5)")
     p.add_argument("--days", type=int, default=2, help="intraday window in days (default 2)")
     p.add_argument("--end", type=datetime.date.fromisoformat, default=None)
@@ -970,6 +1748,21 @@ def main() -> None:
         return
     if args.mode == "refresh":
         refresh(as_of=args.end, ceiling_mb=args.ceiling_mb)
+        return
+    if args.mode == "depth":
+        out = backfill_depth(
+            end=args.end or datetime.date.today(),
+            depth_days=args.depth_days, budget_s=args.depth_budget_s,
+            values=args.values, batch=args.batch, ceiling_mb=args.ceiling_mb,
+            limit=args.limit, force=args.force,
+        )
+        # A spent budget is the DESIGNED outcome, not a partial failure: the pass
+        # is meant to run out of time every night until the target is reached, so
+        # exiting 2 for it would make the nightly permanently amber. Only a stop
+        # that needs a human - the ceiling, an unreadable probe, a dead wire -
+        # earns a code.
+        if out.get("stopped") and "budget" not in out.get("reason", ""):
+            sys.exit(2)
         return
 
     end = args.end or datetime.date.today()
