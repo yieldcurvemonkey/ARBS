@@ -186,7 +186,7 @@ Three more numbers from the executed notebook:
 * **The grid: 0 ALIVE of 152 scored configurations** (DSR > 0.95, ≥ 50 trades, positive net),
   against a selection hurdle of `sr* = 0.5067` per trade with **321 trials counted** — the grid's
   160 plus the 169 searched in the IC, partial-IC, timing, structure and fund sweeps.
-* **The lookahead is worth 0.0011bp.** Mean gross bp is +0.0096 at `exec_lag = 0` and +0.0084 at
+* **The lookahead is worth 0.0011bp.** Mean gross bp is +0.0103 at `exec_lag = 0` and +0.0092 at
   `exec_lag = 1`. Even reading tomorrow's file buys essentially nothing, which is its own kind of
   evidence: there is no edge to lose to causality.
 * **The sign-flip permutation on GROSS P&L gives p = 0.413** (realised Sharpe/trade +0.0221 against
