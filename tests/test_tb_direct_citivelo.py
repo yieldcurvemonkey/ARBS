@@ -680,3 +680,46 @@ def test_direct_reader_borrows_the_parent_client(tmp_path: pathlib.Path):
     direct.close()
     # Closing the sibling must not have taken the parent's client away.
     assert mdp.quotes.client() is client
+
+
+def test_direct_raises_when_the_addin_fails_mid_reprice(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A transport refusal PART WAY through a reprice must raise, not become a NaN.
+
+    This is the case a whole-frame check cannot see. The repricing loop used to catch
+    every exception per (timestep, query) pair and fill the hole with NaN, and the only
+    gate downstream -- ``_assert_direct_frame_usable`` -- rejects a column only when it
+    is NaN at EVERY reference point. So an add-in that died on some timesteps and
+    recovered produced a healthy-looking column with holes in it, indistinguishable from
+    the genuine no-data NaNs that ``test_direct_frame_is_a_full_grid_with_explicit_nans``
+    deliberately preserves.
+
+    The distinction being asserted is transport-vs-pricing, not all-vs-nothing: a curve
+    that will not solve because the structure did not exist yet is still a NaN.
+    """
+    import TB.CitiVelocityTB as _tb
+
+    _client, _cache, mdp = _reprice_stack(tmp_path)
+
+    real_resolve = _tb.resolve_query
+    state = {"n": 0}
+
+    def _flaky_resolve(*a: Any, **k: Any):
+        state["n"] += 1
+        # Succeed first, so at least one (timestep, query) pair lands -- that is the
+        # precondition under which the old code filled NaN instead of raising.
+        if state["n"] == 2:
+            raise CitiVelocityError("Excel add-in stopped responding (simulated mid-run)")
+        return real_resolve(*a, **k)
+
+    monkeypatch.setattr(_tb, "resolve_query", _flaky_resolve)
+
+    with pytest.raises(CitiVelocityError) as excinfo:
+        TimeseriesBuilder().get_timeseries(
+            START, END, [_q(CitiVeloValue.RL_RATE)], mdps={"CITIVELO": mdp}, direct="live"
+        )
+
+    msg = str(excinfo.value)
+    assert "stopped responding" in msg, msg
+    assert "NaN" in msg or "hole" in msg, f"the refusal must say why it refused:\n{msg}"

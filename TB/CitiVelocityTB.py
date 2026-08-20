@@ -507,6 +507,31 @@ class CitiVelocityTB(BaseTimeseriesTB):
                     success_names.setdefault(id(q), col)
                     produced.add((idx, id(q)))
                     rows.append((idx, col, float(value)))
+                except CitiVelocityError as exc:
+                    # A TRANSPORT refusal, and under direct it must not become a NaN.
+                    #
+                    # The two failures this except-block used to merge are not the same
+                    # thing. "The curve would not solve at this timestep because the
+                    # structure did not exist yet" is a genuine absence, and direct mode
+                    # deliberately renders it as a NaN row so the caller still gets one
+                    # row per reference point. "The add-in refused this tag" is the
+                    # add-in failing to serve, and the whole point of direct mode is that
+                    # it surfaces rather than degrades. Merged, the second was
+                    # indistinguishable from the first in the returned frame, and
+                    # _assert_direct_frame_usable only rejects a column that is NaN
+                    # EVERYWHERE -- so a transient outage on some timesteps passed.
+                    if direct:
+                        raise CitiVelocityError(
+                            f"Direct read: the add-in refused to serve while repricing "
+                            f"{q.col_name()} at {self._index_value(ref_point)}. Direct "
+                            "mode does not fill transport failures with NaN and does not "
+                            "fall back to cache, so the request is refused rather than "
+                            f"returned with a hole. Underlying error: {exc}"
+                        ) from exc
+                    failures += 1
+                    failed_columns.add(q.col_name())
+                    if first_error is None:
+                        first_error = f"{type(exc).__name__}: {exc}"
                 except Exception as exc:  # noqa: BLE001 - counted and reported below
                     failures += 1
                     failed_columns.add(q.col_name())
@@ -514,9 +539,11 @@ class CitiVelocityTB(BaseTimeseriesTB):
                         first_error = f"{type(exc).__name__}: {exc}"
 
         if direct and failures:
-            # Fill the holes with explicit NaN so the grid is complete. Done
-            # after the loop because a query's column name is only known once
-            # it has succeeded somewhere.
+            # Anything reaching here is a PRICING failure, not a transport one -- the
+            # transport case raises above. Fill those holes with explicit NaN so the
+            # caller still gets one row per reference point, which is direct mode's
+            # documented full-grid promise. Done after the loop because a query's column
+            # name is only known once it has succeeded somewhere.
             for ref_point in reference_points:
                 idx = self._index_value(ref_point)
                 for q in queries:
