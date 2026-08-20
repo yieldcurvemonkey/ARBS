@@ -61,6 +61,65 @@ in flight, and the next run skips everything already done. That is what makes
 "warm the entire universe" a thing you can finish across several sessions instead
 of one heroic pass that must not fail.
 
+An outage and a matured bond are the same observation until you ask
+-------------------------------------------------------------------
+``CitiVeloQuotes.frame`` returns an EMPTY FRAME and raises NOTHING both when every
+tag in the request failed and when every tag legitimately held no rows - its own
+docstring says a failed tag "is simply an absent COLUMN here, which is
+indistinguishable from a tag that returned no rows unless the reasons are asked
+for". Both cases are real here: 528 of the 877 catalogued bonds have matured, and
+Velocity does go away.
+
+Conflating them has now cost this warm in both directions. Calling "no rows" a
+fault aborted the whole 877-bond intraday warm at 0/877 on five of ten retained
+nightly runs. Calling a fault "no rows" is worse and silent: measured against a
+dead transport, the warm stamped 877 bonds done, warmed 0, returned
+``stopped=False`` - so the job wrapper did not raise, the warmer exited 0, and the
+stamped manifest blocked the same-day re-run that would have recovered the day.
+
+So the reasons ARE asked for, through ``failures=``, and
+:data:`BENIGN_FAILURE_REASONS` is the line between them.
+
+A file that exists is not a window that is covered
+--------------------------------------------------
+The cache check above counts FILES. That is the right question for "did the
+transport write anything at all" and the wrong one for "is what it wrote
+current", and the tag cache is CUMULATIVE, so after the first ever run the file
+is always there. Measured on the real cache on 2026-08-19, against the nightly
+window ``2026-07-19..2026-08-18``: all 877 bonds stamped done, **522 of them with
+DAILY data ending before the window started**, and 0 missing sidecars. At tag
+level it is worse - of the 8,510 DAILY tags belonging to bonds that were ALIVE
+through that window, **2,891 hold no row inside it**. The job was green every
+night regardless, and a warm that cannot fail cannot be trusted.
+
+The fix is not a calendar bar. Three different things produce an empty window
+and only one is a fault:
+
+* the bond **matured** - 528 of 877 have, so this is the majority answer and
+  flagging it re-creates the batch-0 abort;
+* the tag is **sparse** - ``ASW_4_CHF/EUR/GBP`` went from daily to roughly
+  monthly in October 2024, widest historical gap 76 days against a trailing 48;
+* the tag has **stalled** - ``CAS``, ``ZSPREAD``, ``ASW`` and ``OISS`` stop dead
+  on 2025-10-03 and the four ``*_SOFR`` spreads on 2025-11-28, across every bond
+  that serves them, widest historical gap 4 days against a trailing 320 and 264.
+
+No fixed number separates the last two. Each tag's OWN widest observed gap does,
+with nothing to configure. :func:`tag_states` is that predicate,
+:func:`coverage_record` is what it writes into the manifest, and the exit code
+alarms on a tag falling silent SINCE THE LAST RUN rather than on the standing
+level - because the standing level is ten dead value families and an exit code
+that is always 1 is an exit code nobody reads.
+
+THE FIRST RUN AFTER THIS SHIPS WILL EXIT 1, once, and that is intended. Manifest
+entries written before this change carry no ``stalled`` key, so the "what did we
+know last night" set is empty and the entire standing level - the ten dead value
+families, plus the three 2026-07-31 auctions that have never been warmed at MI01
+- reads as new. There is no honest way to distinguish "silent since October" from
+"silent since last night" against a manifest that never recorded either, and
+guessing the level away on the first run would hide a real outage that happened
+to land on the same night. One loud night, then only changes. It is pinned by
+``test_a_value_that_falls_silent_since_the_last_run_is_a_regression``.
+
 Usage
 -----
 ::
@@ -81,7 +140,7 @@ import os
 import pathlib
 import sys
 import time
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -121,8 +180,54 @@ INTRADAY_VALUES = ("PRICE", "YIELD")
 #: loses little; large enough that per-call overhead is not the cost.
 DEFAULT_BATCH = 8
 
+#: Per-tag failure reasons that mean "the add-in ANSWERED for this column, and
+#: the answer was that there is nothing here". These are not a transport fault
+#: and must not stop the warm.
+#:
+#: The split is by whether the add-in answered, not by whether the caller liked
+#: the answer, and the reasons are the ones ``block_parser.parse_tshist_block``
+#: actually writes (``block_parser.py:360, 365, 385``):
+#:
+#: ``"empty"``      the column came back with no rows in this window. Exactly
+#:                  what an MI01 request against a bond that matured in 2016
+#:                  returns, and 528 of the 877 catalogued bonds have matured.
+#: ``"bad tag"``    the add-in replied ``Bad tag: ...`` in the column. A live
+#:                  add-in rejecting one symbol, not a dead wire.
+#: ``"no column"``  the block came back and this tag was not in it. Same.
+#:
+#: Everything else - ``"no block"``, ``"no header row"``, and any Excel error
+#: NAME - means the request did not produce a readable block at all, which is
+#: the signature of the outage this discriminates against: ``fetch_timeseries``
+#: writes ``failures[tag] = excel_error_name(value) or "no block"`` for EVERY
+#: tag in a chunk that came back with no rows (``com_client.py:968-971``).
+#:
+#: Unknown reasons fall in the STOP set on purpose. A reason nobody has seen is
+#: not evidence that the wire is healthy, and this guard exists because the
+#: previous version failed open. If nightly evidence ever shows a matured bond
+#: producing a per-column Excel error name, demote that name here - with the
+#: measurement, as everything else in this file is.
+BENIGN_FAILURE_REASONS = frozenset({"empty", "bad tag", "no column"})
 
-def _warm_intraday(quotes, tags: Sequence[str], *, start: datetime.date, end: datetime.date) -> None:
+
+def _transport_faults(reported) -> Dict[str, str]:
+    """The subset of ``{tag: reason}`` that means the transport did not answer."""
+    if not reported:
+        return {}
+    return {
+        str(tag): str(why)
+        for tag, why in reported.items()
+        if str(why).strip().lower() not in BENIGN_FAILURE_REASONS
+    }
+
+
+def _warm_intraday(
+    quotes,
+    tags: Sequence[str],
+    *,
+    start: datetime.date,
+    end: datetime.date,
+    failures: Optional[Dict[str, str]] = None,
+) -> None:
     r"""Fetch ``MI01`` through the CACHE, in windows held under the cliff.
 
     This is deliberately NOT ``CitiVeloBondFetcher.fetch``. That is the right call
@@ -145,16 +250,32 @@ def _warm_intraday(quotes, tags: Sequence[str], *, start: datetime.date, end: da
     The loop itself now lives in ``windowed.warm_windows``, because the intraday
     FRB read path needs exactly the same warm and a second copy of a bound whose
     whole value is that it is measured once is how the two drift apart.
+
+    Returns the number of ROWS Velocity served across every window. The caller
+    needs that number to tell the two things apart that the cache check alone
+    cannot: a transport that fetched rows and persisted none (the real fault) and
+    a window that legitimately held no rows at all (a matured bond). See the
+    guard in :func:`warm`.
+
+    ``failures`` is threaded through to :func:`warm_windows`, which merges the
+    per-tag reasons across every window it issues. This used to be passed as
+    ``None``, and passing ``None`` discarded the ONE piece of information that
+    separates "Velocity has nothing for this window" from "Velocity answered
+    nothing at all": ``frame`` returns an empty frame and raises nothing in both
+    cases, so a total outage was byte-for-byte a batch of matured bonds. See the
+    guard in :func:`warm` and :data:`BENIGN_FAILURE_REASONS`.
     """
     from MDP.CitiVelocityExcel.windowed import warm_windows
 
-    warm_windows(
+    windows = warm_windows(
         quotes,
         list(tags),
         "MI01",
         datetime.datetime.combine(start, datetime.time(0, 0)),
         datetime.datetime.combine(end, datetime.time(23, 59)),
+        failures=failures,
     )
+    return sum(int(w.n_rows) for w in windows)
 
 
 def cached_tags(freq: str, tags: Sequence[str]) -> int:
@@ -163,6 +284,16 @@ def cached_tags(freq: str, tags: Sequence[str]) -> int:
     The point of a warm is the file, not the fetch. This reads the cache
     directly rather than trusting a return value, because the bug this guards
     against is precisely a fetch that succeeds and persists nothing.
+
+    EXISTENCE ONLY, and deliberately so
+    -----------------------------------
+    This answers "did the transport write anything at all", which is the only
+    question the 134-second lie needed. It cannot answer "is what it wrote
+    current": a file whose newest row is from 2016 counts here exactly like one
+    written five minutes ago. That is not a defect in this function - it is the
+    reason :func:`tag_states` exists beside it. Both guards run, in that order,
+    because they fail differently: this one catches a transport that lost the
+    cache, and that one catches a cache that stopped moving.
     """
     from MDP.CitiVelocityExcel.cache import default_cache_dir
     from MDP.CitiVelocityExcel.frequencies import normalise_frequency
@@ -172,6 +303,236 @@ def cached_tags(freq: str, tags: Sequence[str]) -> int:
         return 0
     on_disk = {p.stem for p in root.rglob("*.parquet")}
     return sum(1 for t in tags if str(t) in on_disk)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# COVERAGE: what the cache holds for the window that was asked for
+# ──────────────────────────────────────────────────────────────────────────
+#
+# ``cached_tags`` above is membership by FILE NAME. Measured against the real
+# cache on 2026-08-19, that check calls the whole universe warm while a third of
+# it holds nothing inside the requested window: for the nightly window
+# ``2026-07-19..2026-08-18``, 522 of 877 bonds have DAILY data ENDING BEFORE the
+# window starts, and every one of the 877 was stamped done. Worse at tag level -
+# of the 8,510 DAILY tags belonging to bonds that were ALIVE through that window,
+# 2,891 hold no row inside it.
+#
+# Three separate things have to be told apart, and only one of them is a fault:
+#
+# ``matured``   The bond redeemed before the window. 528 of the 877 catalogued
+#               USTs have matured, so "no rows in this window" is the CORRECT
+#               answer for the majority of the universe. A freshness check that
+#               ignores maturity flags two thirds of the catalog for ever, which
+#               is the batch-0 abort that cost five of ten nightly runs.
+# ``sparse``    The tag still prints, just not every day. ``ASW_4_CHF/EUR/GBP``
+#               went from daily to roughly monthly in October 2024: measured
+#               over 60 bonds, median gap 1 day, WIDEST gap 76 days, and the
+#               trailing gap on 2026-08-19 was 48 days. A fixed calendar bar
+#               calls all 345 of them stale every month and is simply wrong.
+# ``stalled``   Velocity stopped answering. ``CAS``, ``ZSPREAD``, ``ASW`` and
+#               ``OISS`` all stop dead on 2025-10-03 and the four ``*_SOFR``
+#               spread tags on 2025-11-28, across every bond that serves them,
+#               with a widest historical gap of 4 days against a trailing gap of
+#               320 and 264. Nothing about a calendar separates that from the
+#               sparse case; the tag's OWN gap envelope separates both cleanly.
+#
+# So the bar is not a constant. It is each tag's own widest observed gap, which
+# needs no configuration, no per-value allowlist, and no guess about what Citi
+# publishes daily.
+
+#: How long BEFORE its maturity a bond can legitimately stop printing.
+#:
+#: Measured over the 522 catalogued USTs that had already matured on 2026-08-19,
+#: as ``maturity - last DAILY row``: 1 day for 127 bonds, 2 for 202, 3 for 80,
+#: 4 for 95, 5 for 18. Never 0, never above 5, and never negative - no matured
+#: bond has a row dated after it redeemed. An exemption pinned to the maturity
+#: date alone would therefore false-flag each maturing bond for the few nights
+#: the rolling window start sits inside that tail.
+MATURITY_GRACE = datetime.timedelta(days=5)
+
+#: Rows a tag needs before its own gap envelope means anything. Two rows give
+#: one gap, which is not an envelope. Below this the tag is reported
+#: ``uncalibrated`` rather than called stalled: "I have never seen this tag
+#: print three times" is not evidence that it stopped.
+MIN_ROWS_TO_CALIBRATE = 3
+
+#: The cache holds a row inside the requested window. Nothing to do.
+COVERED = "covered"
+#: The bond redeemed before the window, so no row inside it can exist. Nothing
+#: to do, and this is the majority of the universe.
+MATURED = "matured"
+#: No row inside the window, but the tag's own history contains a gap at least
+#: this long. It prints; it just did not print here.
+SPARSE = "sparse"
+#: No row inside the window, and the silence is longer than anything this tag
+#: has ever gone quiet for. Velocity has stopped answering for it.
+STALLED = "stalled"
+#: The cache has no file for this tag at all, and the bond is alive. It has
+#: never been warmed at this frequency.
+ABSENT = "absent"
+#: Quiet, alive, and too short to judge. Reported, never alarmed on.
+UNCALIBRATED = "uncalibrated"
+
+#: The states that are NOT explained by maturity or by the tag's own cadence.
+#: These are the only two that can move an exit code.
+ALARMING_STATES = frozenset({STALLED, ABSENT})
+
+
+def _last_row(meta: Mapping[str, object]) -> Optional[datetime.date]:
+    """The newest row the sidecar claims, as a date, or ``None``.
+
+    The sidecar is authoritative and that is measured, not assumed:
+    ``CitiVeloTagCache.write`` writes ``first``/``last``/``n_rows`` from the
+    MERGED series on every write, and on a hand-checked sample of eight tags
+    across a live and a matured bond the sidecar ``last`` equalled the parquet's
+    own maximum timestamp every time. All 14,535 DAILY and 1,502 MI01 parquets
+    in the real cache have a sidecar and all of them carry ``last``, so reading
+    coverage costs a small JSON read rather than a parquet parse.
+    """
+    raw = meta.get("last")
+    if not raw:
+        return None
+    try:
+        return datetime.date.fromisoformat(str(raw)[:10])
+    except ValueError:  # a hand-edited or truncated sidecar is a miss, not a crash
+        return None
+
+
+def _widest_gap_days(cache, tag: str, freq: str) -> Optional[int]:
+    """The longest quiet stretch this tag has ever had, in days.
+
+    This is the whole bar. A tag is only called ``stalled`` when its current
+    silence is longer than anything in its own past, which is what separates
+    ``CAS`` (widest gap 4 days, silent 320) from ``ASW_4_CHF`` (widest gap 76
+    days, silent 48) without knowing anything about either.
+
+    Distinct DAYS, not rows: an ``MI01`` series has hundreds of rows per day and
+    the question is which days Velocity answered on.
+
+    Costs a parquet parse, so it is asked ONLY for a tag that is already known
+    to be quiet and not exempt - measured on the real cache that is 2,891 of the
+    11,120 tags a nightly EOD warm plans, and zero of the intraday ones.
+    """
+    series = cache.read(tag, freq)
+    if series is None or series.empty:
+        return None
+    days = series.index.normalize().unique()
+    if len(days) < MIN_ROWS_TO_CALIBRATE:
+        return None
+    gaps = days.to_series().diff().dropna()
+    if gaps.empty:
+        return None
+    return int(gaps.dt.days.max())
+
+
+def tag_states(
+    freq: str,
+    tags: Mapping[str, str],
+    *,
+    start: datetime.date,
+    end: datetime.date,
+    maturity: Optional[datetime.date] = None,
+    cache=None,
+) -> Dict[str, Tuple[str, Optional[datetime.date]]]:
+    """``{value: (state, last row)}`` for one bond's tags at one window.
+
+    ``tags`` is the ``{value: tag}`` mapping ``CitiVeloBondFetcher.plan`` builds,
+    so the answer is keyed by the value token a human reads (``ASW_4_CHF``)
+    rather than by the full tag string.
+
+    The order of the tests is the meaning of the answer:
+
+    1. a row inside the window is the strongest claim available, so it wins even
+       for a bond that matured during the window - six of the 877 did;
+    2. maturity next, because for 522 of 877 bonds it is the CORRECT explanation
+       for an empty window and must never look like a fault;
+    3. no file at all, for a live bond, is "never warmed" - three USTs auctioned
+       2026-07-31 are in exactly that state at ``MI01``;
+    4. only then is the parquet opened and the tag judged against its own
+       history.
+
+    ``maturity`` comes from ``BondResolution.descriptor.maturity``, which
+    ``bonds.universe._descriptor_from_ref`` takes from the catalog's dedicated
+    ``maturity`` column in preference to the parsed description - the two
+    disagree on exactly one of 2,162 catalogued rows. It is already in hand
+    inside :func:`warm`: ``plan[isin]["resolution"].descriptor``. ``None`` means
+    "not known to have matured", which is treated as ALIVE on purpose - an
+    unknown maturity must fail towards visibility, not towards silence. Measured
+    on the real catalog, no USA.USD.GOVT bond has one.
+    """
+    from MDP.CitiVelocityExcel.cache import CitiVeloTagCache, default_cache_dir
+    from MDP.CitiVelocityExcel.frequencies import normalise_frequency
+
+    if cache is None:
+        cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    token = normalise_frequency(freq)
+    retired = maturity is not None and maturity < start + MATURITY_GRACE
+
+    out: Dict[str, Tuple[str, Optional[datetime.date]]] = {}
+    for value, tag in dict(tags).items():
+        meta: Dict[str, object] = {}
+        path = cache.meta_path(str(tag), token)
+        if path.is_file():
+            try:
+                meta = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001 - an unreadable sidecar is a miss
+                meta = {}
+        last = _last_row(meta)
+        if last is not None and last >= start:
+            out[value] = (COVERED, last)
+        elif retired:
+            out[value] = (MATURED, last)
+        elif last is None:
+            out[value] = (ABSENT, None)
+        else:
+            widest = _widest_gap_days(cache, str(tag), token)
+            if widest is None:
+                out[value] = (UNCALIBRATED, last)
+            elif (end - last).days > widest:
+                out[value] = (STALLED, last)
+            else:
+                out[value] = (SPARSE, last)
+    return out
+
+
+def coverage_record(
+    states: Mapping[str, Tuple[str, Optional[datetime.date]]]
+) -> Dict[str, object]:
+    """The compact per-bond coverage record that goes into the manifest.
+
+    Compact because the manifest is rewritten after every batch for 877 bonds:
+    counts for the two states that need no attention, and the quiet tags named
+    with the date they stop at. ``stalled`` is the list an exit code is allowed
+    to look at - the tags whose silence is explained by neither maturity nor
+    their own cadence, plus the ones with no file at all.
+
+    Writing the OBSERVATION rather than a boolean is the point. "Done" used to
+    mean "the batch did not abort", which is true of a night that cached
+    nothing; it now carries what the cache actually holds, so the next run can
+    tell a shortfall that is new from one that has been there since October.
+    """
+    counts: Dict[str, int] = {}
+    quiet: Dict[str, str] = {}
+    for value, (state, last) in sorted(states.items()):
+        counts[state] = counts.get(state, 0) + 1
+        if state not in (COVERED, MATURED):
+            quiet[value] = last.isoformat() if last is not None else ""
+    record: Dict[str, object] = {
+        "covered": counts.get(COVERED, 0),
+        "matured": counts.get(MATURED, 0),
+    }
+    if quiet:
+        record["quiet"] = quiet
+    stalled = sorted(v for v, (state, _) in states.items() if state in ALARMING_STATES)
+    if stalled:
+        record["stalled"] = stalled
+    return record
+
+
+def _maturity_of(entry: Mapping[str, object]) -> Optional[datetime.date]:
+    """The maturity on a ``plan`` entry, or ``None`` when Citi never gave one."""
+    descriptor = getattr(entry.get("resolution"), "descriptor", None)
+    return getattr(descriptor, "maturity", None)
 
 
 class WarmCachedNothingError(RuntimeError):
@@ -282,6 +643,10 @@ def warm(
     man = _load_manifest()
     book = man.setdefault(mode, {})
     stamp = _key(mode, start, end, wanted)
+    # One token, named once. The cache check and the coverage check MUST ask at
+    # the same frequency the fetch used - a DAILY answer to an MI01 question is
+    # the original 349/349 lie in a different place.
+    freq_token = "DAILY" if mode == "eod" else "MI01"
 
     everything = universe()
     # "already done" means done AT THIS EXACT WINDOW AND VALUE SET. Counting the
@@ -303,10 +668,18 @@ def warm(
     )
     if not todo:
         log.info("  nothing to do — the manifest says this window is fully warm")
-        return {"mode": mode, "done": 0, "already": len(book), "stopped": False}
+        return {"mode": mode, "done": 0, "already": len(book), "stopped": False,
+                "coverage": {}, "regressed": {}}
+
+    from MDP.CitiVelocityExcel.cache import CitiVeloTagCache, default_cache_dir
 
     fetcher = CitiVeloBondFetcher()
     quotes = fetcher.quotes()
+    # One cache handle for the whole run: its parquet parse is memoised per
+    # instance, and the coverage check re-reads a quiet tag once per bond.
+    cover_cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    coverage: Dict[str, int] = {}
+    regressed: Dict[str, List[str]] = {}
     done = tags_done = 0
     stopped_reason = ""
     t_start = time.perf_counter()
@@ -334,35 +707,158 @@ def warm(
                 for r in chunk:
                     book[r.isin] = {"key": stamp, "tags": 0, "note": "serves none of these values"}
                 continue
+            # ASK FOR THE REASONS. ``frame`` returns an empty frame and raises
+            # nothing whether every tag failed or every tag legitimately held no
+            # rows - its own docstring says so - and this loop used to ask for
+            # neither, which made a total Velocity outage indistinguishable from
+            # a batch of matured bonds. It is only indistinguishable if you do
+            # not ask.
+            reported: Dict[str, str] = {}
             try:
                 if mode == "eod":
-                    quotes.frame(tags, "DAILY", start=start, end=end)
+                    frame = quotes.frame(tags, "DAILY", start=start, end=end,
+                                         failures=reported)
+                    rows_served = int(len(frame)) if frame is not None else 0
                 else:
-                    _warm_intraday(quotes, tags, start=start, end=end)
+                    rows_served = _warm_intraday(quotes, tags, start=start, end=end,
+                                                 failures=reported)
             except Exception as exc:  # noqa: BLE001 - one bad batch must not lose the rest
                 stopped_reason = f"{type(exc).__name__}: {exc}"
                 log.warning("STOPPING at batch %d: %s", i // batch, stopped_reason[:200])
                 break
+
+            # DID THE TRANSPORT ANSWER? That question comes first, deliberately
+            # before anything looks at the cache, and it is the one the guards
+            # below cannot ask.
+            #
+            # ``landed`` cannot carry it, because the tag cache is CUMULATIVE: on
+            # any night after the first, last night's parquets are still on disk,
+            # so ``landed`` is the full tag count even while tonight's wire is
+            # serving nothing at all. A fault check gated on ``landed == 0``
+            # would pass on precisely the nights it exists for.
+            #
+            # ``rows_served`` cannot carry it either - zero rows is what a total
+            # outage and a matured bond both look like. The REASONS separate
+            # them, they are scoped to the call that just happened, and
+            # ``failures=`` is how they are asked for. See
+            # :data:`BENIGN_FAILURE_REASONS` for which reason means which.
+            faults = _transport_faults(reported)
+            if faults:
+                shown = ", ".join(f"{t} ({why})" for t, why in sorted(faults.items())[:5])
+                stopped_reason = (
+                    f"batch {i // batch}: Velocity FAILED {len(faults)} of {len(tags)} "
+                    f"tag(s) - {shown}"
+                    f"{f' and {len(faults) - 5} more' if len(faults) > 5 else ''}. "
+                    f"That is the transport, not a matured bond: a bond with nothing "
+                    f"in this window comes back as {sorted(BENIGN_FAILURE_REASONS)}. "
+                    f"Nothing in this batch is recorded, so a re-run retries it."
+                )
+                log.error("STOPPING: %s", stopped_reason)
+                break
+
+            # WHAT DOES THE CACHE NOW HOLD FOR THE WINDOW THAT WAS ASKED FOR?
+            #
+            # Asked after the fetch has had its chance to write and after the
+            # transport has been cleared, because it is a question about the
+            # DATA and the two guards around it are questions about the wire.
+            # It never breaks the loop: a batch whose bonds are quiet is not a
+            # fault, and stopping on one would abort every night on the first
+            # batch that serves ``CAS``. It is recorded, aggregated, and judged
+            # once at the end of the run. See :func:`tag_states`.
+            covers = {
+                r.isin: tag_states(
+                    freq_token, plan[r.isin]["tags"], start=start, end=end,
+                    maturity=_maturity_of(plan[r.isin]), cache=cover_cache,
+                )
+                for r in chunk
+            }
+            records = {isin: coverage_record(s) for isin, s in covers.items()}
+            for states in covers.values():
+                for state, _ in states.values():
+                    coverage[state] = coverage.get(state, 0) + 1
+            for isin, record in records.items():
+                # NEW silence, against what the previous run recorded for this
+                # same bond. The level cannot drive an alarm - ten value
+                # families have been dead since October 2025 and a job that is
+                # red every night is a job nobody reads - but a tag that fell
+                # silent since last night is exactly the event nothing here
+                # could see before.
+                known = set(book.get(isin, {}).get("stalled") or ())
+                fresh_stalls = sorted(set(record.get("stalled") or ()) - known)
+                if fresh_stalls:
+                    regressed[isin] = fresh_stalls
 
             # A warm is the file on disk, not the call returning. The first
             # version of this script "warmed" 349 bonds intraday in 134 s and
             # left zero MI01 parquets, because the transport it used bypassed the
             # cache — and recorded 349/349 done. Nothing is marked done now until
             # the cache is asked whether it actually holds the tags.
-            landed = cached_tags("DAILY" if mode == "eod" else "MI01", tags)
-            if landed == 0:
+            #
+            # But "nothing landed" has TWO causes and they need opposite actions,
+            # and conflating them cost this warm more than the bug it was written
+            # to catch. ``rows_served`` is what separates them.
+            #
+            # Rows came back and none of them landed: that IS the transport, stop.
+            # NO rows came back: Velocity was asked for a window it has nothing
+            # in, which for an MI01 request against a matured bond is the correct
+            # and expected answer. 528 of the 877 bonds in the catalog have
+            # matured, ``universe()`` sorts by ISIN, and the 22 lowest ISINs all
+            # matured between 2016 and 2025 — so with ``DEFAULT_BATCH = 8``,
+            # batch 0 is all-dead BY CONSTRUCTION. Treating that as a broken
+            # transport aborted the whole 877-bond intraday warm at 0/877 on five
+            # of ten retained nightly runs, in 2.9-4.4 s each, and it had never
+            # once warmed a bond since the universe grew past the live 349.
+            landed = cached_tags(freq_token, tags)
+            if landed == 0 and rows_served > 0:
                 stopped_reason = (
-                    f"batch {i // batch} fetched {len(tags)} tags without error and cached "
-                    f"NONE of them — the transport is not writing to the tag cache"
+                    f"batch {i // batch} fetched {len(tags)} tags and {rows_served} rows "
+                    f"without error and cached NONE of them — the transport is not "
+                    f"writing to the tag cache"
                 )
                 log.error("STOPPING: %s", stopped_reason)
                 break
+            if landed == 0:
+                # Recorded, not skipped. A bond left out of the manifest is a
+                # bond re-requested from Velocity on every run for ever — and
+                # these are precisely the ones that will never have anything to
+                # serve. The ``note`` idiom is the one already used above for a
+                # bond that serves none of the requested values, so ``status``
+                # and any later reader can tell "warm" from "nothing to warm"
+                # without inventing a second vocabulary.
+                #
+                # Reaching here now MEANS something it did not mean before: the
+                # reasons were asked for above and none of them was a transport
+                # fault, so "no rows" is Velocity's answer rather than its
+                # silence. The answer it gave is recorded alongside, because a
+                # note that cannot say WHY there were no rows is the same
+                # unfalsifiable claim in a smaller place.
+                why = sorted({str(w) for w in reported.values()}) or ["nothing reported"]
+                log.info(
+                    "  batch %d served no rows for %d tags (%s) — recorded and "
+                    "skipped, not treated as a fault",
+                    i // batch, len(tags), ", ".join(why),
+                )
+                for r in chunk:
+                    book[r.isin] = {
+                        "key": stamp,
+                        "tags": 0,
+                        "note": "no rows in this window",
+                        "why": ", ".join(why),
+                        "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                        **records[r.isin],
+                    }
+                _save_manifest(man)
+                continue
 
             for r in chunk:
                 book[r.isin] = {
                     "key": stamp,
                     "tags": len(plan[r.isin]["tags"]),
                     "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                    # The MEASUREMENT, not a boolean. "Done" used to mean only
+                    # "this batch did not abort" - true of a night that fetched
+                    # nothing new for a third of the universe.
+                    **records[r.isin],
                 }
             done += len(chunk)
             tags_done += len(tags)
@@ -385,15 +881,46 @@ def warm(
         f"{mem_end:.0f}" if mem_end is not None else "?",
         f" (STOPPED: {stopped_reason})" if stopped_reason else "",
     )
+    if coverage:
+        log.info(
+            "  coverage of %s..%s across %d tag(s): %s",
+            start, end, sum(coverage.values()),
+            ", ".join(f"{state}={n}" for state, n in sorted(coverage.items())),
+        )
+    quiet_now = coverage.get(STALLED, 0) + coverage.get(ABSENT, 0)
+    if quiet_now:
+        log.warning(
+            "  %d tag(s) are quiet with no explanation — the bond is alive and the "
+            "silence is longer than that tag has ever gone quiet for. Not a fault "
+            "of this run; see the per-bond 'stalled' lists in %s",
+            quiet_now, MANIFEST,
+        )
+    if regressed:
+        shown = "; ".join(
+            f"{isin}: {', '.join(vals)}" for isin, vals in sorted(regressed.items())[:5]
+        )
+        log.error(
+            "COVERAGE REGRESSED on %d bond(s) since the last run — %s%s",
+            len(regressed), shown,
+            f" and {len(regressed) - 5} more" if len(regressed) > 5 else "",
+        )
     return {
         "mode": mode, "done": done, "of": total, "tags": tags_done,
         "stopped": bool(stopped_reason), "reason": stopped_reason,
         "mem_before": mem0, "mem_after": mem_end,
+        "coverage": coverage, "regressed": regressed,
     }
 
 
 def status() -> None:
-    """What the manifest says is warm, without touching Excel."""
+    """What the manifest says is warm, without touching Excel.
+
+    Now also what it says is QUIET, which is the half that was unreadable
+    before: a bond count against a window told you a request went out, not that
+    anything came back for it. The ``stalled`` lists are per bond and per value,
+    so ``status`` can name the value families that stopped rather than leaving a
+    reader to notice that a number never moves.
+    """
     man = _load_manifest()
     try:
         uni = universe()
@@ -410,6 +937,15 @@ def status() -> None:
         for k in sorted(x for x in keys if x):
             n = sum(1 for v in book.values() if v.get("key") == k)
             print(f"            {n:>4} bonds @ {k}")
+        stalled: Dict[str, int] = {}
+        for entry in book.values():
+            for value in entry.get("stalled") or ():
+                stalled[value] = stalled.get(value, 0) + 1
+        if stalled:
+            n_bonds = sum(1 for e in book.values() if e.get("stalled"))
+            print(f"            quiet with no explanation: {n_bonds} bond(s), by value:")
+            for value, n in sorted(stalled.items(), key=lambda kv: (-kv[1], kv[0])):
+                print(f"              {value:<18} {n:>4} bond(s)")
 
 
 def main() -> None:
@@ -446,6 +982,15 @@ def main() -> None:
         # A partial warm is a real outcome, not a failure to hide: exit non-zero so
         # a scheduled task's summary shows it, but the manifest keeps the progress.
         sys.exit(2)
+    if out.get("regressed"):
+        # 1 is "a real defect, read the log" in the parent warmer's own three-code
+        # scheme, and a tag that fell silent since the last run is exactly that.
+        # The LEVEL deliberately does not come here: ten value families have been
+        # dead since 2025-10-03 and 2025-11-28, and a job that exits 1 every night
+        # for them is the always-1 exit code the parent warmer's docstring says
+        # nobody reads. The level goes to the log and to ``status``; only the
+        # CHANGE reaches the scheduler.
+        sys.exit(1)
 
 
 if __name__ == "__main__":

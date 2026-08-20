@@ -55,6 +55,8 @@ from typing import Any, Iterable, Optional
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+from utils.atomic_replace import replace_with_retry
 import pytz
 import rateslib as rl
 
@@ -131,7 +133,9 @@ def extract_par_rates(
                 table = pa.Table.from_arrays(arrays, names=names)
                 tmp = out.with_suffix(".parquet.tmp")
                 pq.write_table(table, tmp, compression="zstd")
-                os.replace(tmp, out)
+                # Retried, not bare - the same WinError 5 as every other
+                # temp-then-rename on this path. See ``utils/atomic_replace.py``.
+                replace_with_retry(tmp, out)
                 n_written += 1
                 n_rows += len(sub)
             if i % 20 == 0 or i == len(populated):

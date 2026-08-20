@@ -32,8 +32,8 @@
 # 1. **Citi's 90% does not reproduce — and what replaces it is not a weaker
 #    relationship but an unstable one.** Over the full window with Citi's own
 #    published weights, `corr(3y1y ATMF normal vol, scaled fly)` in levels is
-#    **−0.61** (n = 1,403) and `corr(Blues CA, scaled fly)` is **−0.62**
-#    (n = 503), against the stated **+0.90**. But by calendar year Fig 8 runs
+#    **−0.61** (n = 1,403) and `corr(Blues CA, scaled fly)` is **−0.33**
+#    (n = 607), against the stated **+0.90**. But by calendar year Fig 8 runs
 #    **+0.91 / −0.59 / +0.68 / −0.52 / +0.37 / −0.23** (2021…2026) and Fig 9
 #    **+0.68 / −0.67 / +0.07 / −0.01**. It held in 2021, broke in 2022 and has
 #    flipped sign every year since. The negative full-sample number is that
@@ -50,12 +50,18 @@
 #    moves a quarter as much per unit of fly, so a hedge sized off the 2017 β is
 #    ~4× too large.
 #
-# 3. **Blues coverage is the binding constraint and it collapses in 2023.** 503
-#    gate-passed pack-days over 2021-01-04 .. 2026-07-27, but by year: 246 / 186
-#    / 49 / 19 / 2 / 1. The Q20 deep-pack panel needs a contiguous 16-contract
-#    SR3 strip and the local store stops supplying one after mid-2023. Golds
-#    (needs 20) gets 160 days ending 2024-04-10. **Plotted with gaps, never
-#    interpolated.**
+# 3. **Blues coverage is the binding constraint, and as of 2026-08-19 it is
+#    partly a repaired defect and partly a real absence.** The coverage table in
+#    cell 2 is measured on every run — read it there, not from this paragraph.
+#    What changed: the CA panel this notebook reads was rebuilt after
+#    `strat2_q20.strip_depth_by_date` was found to discard a whole date whenever
+#    its DEFERRED end was cold, and after a 103-date SR3 settle warm
+#    (`scripts/warm_sr3_deferred.py`). Blues still needs a contiguous
+#    16-contract SR3 strip and Golds needs 20, so wherever the local store stops
+#    supplying one the series stops — **and that is now drawn as a hole rather
+#    than bridged.** The gap table printed in cell 2 lists every hole with its
+#    span; see `notebooks/backtests/convexity_rv/ca_coverage_repair.ipynb` and
+#    `docs/convexityrv/ca_coverage_diagnosis.md` Part II.
 #
 # 4. **The CA level ties out to Citi; the model level does not, by construction.**
 #    On 2023-06-09 our 13 CA rows reproduce Citi's Figure 58 at corr **0.966**
@@ -96,6 +102,7 @@ import plotly.io as pio
 
 pio.renderers.default = "plotly_mimetype+notebook_connected"
 
+import RVUtils.ConvexityRV.ca_plots as CAP
 import RVUtils.ConvexityRV.citi_fig89 as CF
 from RVUtils.ConvexityRV.strat2_q20 import CITI_SOFR_20230609
 
@@ -327,8 +334,19 @@ _bdays = pd.bdate_range(max(CFG.start, BLUES.index.min().date()),
                         min(CFG.end, RATES.index.max().date()))
 print(f"\n{CFG.colour}: {len(BLUES)} gate-passed days out of {len(_bdays)} business days "
       f"in its own span = {100 * len(BLUES) / len(_bdays):.1f}%")
-print("The series is NOT interpolated across the 2023+ gap; every chart below "
-      "uses connectgaps=False so the hole is visible.")
+print(f"\n{CFG.colour} coverage: {CAP.coverage_note(BLUES['ca_bp'])}")
+_gaps = CAP.gap_table(BLUES.index)
+if len(_gaps):
+    print(f"gaps longer than {CAP.GAP_DAYS} days in the {CFG.colour} series:")
+    print(_gaps.to_string(index=False))
+else:
+    print(f"no gap longer than {CAP.GAP_DAYS} days in the {CFG.colour} series.")
+print("\nEvery chart below reindexes onto the business-day grid FIRST and then "
+      "sets connectgaps=False, so the holes above are drawn as holes.")
+print("(This cell used to print the same claim while the charts drew straight "
+      "lines across a 502-day hole: the frames are inner-joined, so they carried "
+      "no NaN rows and the flag had nothing to break on. Audited on the rendered "
+      "traces 2026-08-19 and fixed.)")
 
 _ungated = CF.load_ca_panel(DATA / "strat2_q20_panel.parquet", start=CFG.start,
                             end=CFG.end, rank_start=CFG.ca_rank_start,
@@ -464,8 +482,21 @@ assert (TIEOUT["d_model"] > 0).all(), "the fitted-sigma model should sit ABOVE C
 
 # %%
 def _line(fig, s, name, color, dash=None, width=1.7, axis="y"):
+    """One gap-honest trace.
+
+    `connectgaps=False` was here from the start and was **inert**: it only breaks
+    a line where `y` is null, and `F8`/`F9` are built by an INNER join (cell 3),
+    so they carry zero NaN rows for it to act on. Measured on the rendered
+    notebook before this fix: the Blues CA trace held 503 points and drew
+    straight lines across gaps of **301 and 502 days**.
+
+    `bday_reindex` is the missing half — it puts the series back on a business-day
+    grid so the holes become NaN rows and the flag finally has something to break
+    on. Neither works alone.
+    """
+    s = CAP.bday_reindex(s)
     fig.add_trace(go.Scatter(
-        x=s.index, y=s.to_numpy(float), name=name, yaxis=axis,
+        x=list(s.index), y=s.to_numpy(float), name=name, yaxis=axis,
         mode="lines", connectgaps=False,
         line=dict(color=color, width=width, dash=dash)))
 
@@ -496,9 +527,11 @@ fig8.show()
 # %% [markdown]
 # ## 6. FIGURE 9 — Blues convexity adjustment vs the scaled 2s5s10s fly
 #
-# Same treatment. Note the gap after mid-2023: the SR3 strip stops reaching 16
-# contiguous contracts and the series simply stops. `connectgaps=False`, so the
-# hole is a hole.
+# Same treatment. Note the gaps: wherever the SR3 strip stops reaching 16
+# contiguous contracts the Blues series simply stops. Every trace is reindexed
+# onto the business-day grid before `connectgaps=False` is applied, so those
+# stretches are drawn as holes rather than bridged by a straight line — the gap
+# table printed in cell 2 lists each one with its span.
 
 # %%
 FLY9_PUB = CF.scaled_fly(F9, CF.CITI_FIG9)
@@ -706,25 +739,31 @@ print("\n'sign_changes' counts consecutive observations whose signs differ — h
 # %% [markdown]
 # ## 11. Verdict
 #
+# > **Numbers below recomputed 2026-08-19** on the rebuilt CA panel — Blues goes
+# > from 503 to **607** gate-passed pack-days and Greens from 739 to **825**, via
+# > the coverage repair (`docs/convexityrv/ca_coverage_diagnosis.md` Part II) plus
+# > a 103-date SR3 settle warm. Every figure quoted here is printed by a cell
+# > above; read those, not this paragraph, if the two ever disagree.
+#
 # **The claim "convexity can be hedged with the fly" does not survive on 2021–26
 # SOFR data.**
 #
 # * With Citi's own printed coefficients the two relationships are **negatively**
 #   correlated in levels over the full window — Fig 8 −0.61 (n = 1,403), Fig 9
-#   −0.62 (n = 503) — against the stated +0.90. Year by year they flip sign
+#   −0.33 (n = 607) — against the stated +0.90. Year by year they flip sign
 #   repeatedly (Fig 8 +0.91 in 2021 to −0.59 in 2022; Fig 9 +0.68 to −0.67 over
 #   the same pair). The rolling 6-month correlation sits below zero on **28%** of
 #   days for Fig 8 and **54%** for Fig 9, and clears +0.90 on **6.7%** and
 #   **0.0%** respectively. Unstable, not merely weak — and an unstable hedge
 #   ratio is worse than a small one, because it cannot be corrected by resizing.
-# * In daily changes, which is what a hedge lives on, Fig 9 is **+0.03**. Sizing
-#   the fly at Citi's β = 21.4 *increases* the daily variance of the Blues CA
-#   package by **10.5%** (section 9) — and the refitted β still increases it by
-#   2.9%, in-sample.
+# * In daily changes, which is what a hedge lives on, Fig 9 is **+0.01**. Sizing
+#   the fly at Citi's β = 21.4 *increases* the daily standard deviation of the
+#   Blues CA package by **9.1%** (section 9) — and the refitted β still
+#   increases it by 1.9%, in-sample.
 # * Refitting restores fit but destroys the structure: the Fig-8 2y DV01 weight
 #   collapses from 0.71 to ~0.01 — a combination of 5s and 10s *does* still track
 #   3y1y vol at +0.89 in levels, which is the interesting half of the result, but
-#   it is not the butterfly Citi specifies. The Fig-9 β falls from 21.4 to ~5.7,
+#   it is not the butterfly Citi specifies. The Fig-9 β falls from 21.4 to ~4.8,
 #   so a hedge sized on the 2017 note is roughly 4× too big.
 # * None of this is surprising. The 2017 relationship is a **ZIRP-era, Eurodollar,
 #   1999–2017** artefact in which 5s valuations and 3y1y vol were both proxies for
@@ -740,7 +779,8 @@ print("\n'sign_changes' counts consecutive observations whose signs differ — h
 # The measurement is sound; it is the 2017 hedge relationship that has expired.
 #
 # **Caveats that bound all of the above**, stated so they are not discovered later:
-# 503 Blues pack-days, effectively 2021-01 .. 2023-mid, is a short and regime-
+# The Blues pack-day count printed above, concentrated in 2021 .. 2023-mid with a
+# recovered 2026 block, is a short and regime-
 # specific sample; the model σ is fitted to the CA cross-section rather than
 # calibrated to cap/floor vols; and the matched swap is `USD-SOFR-1D` rather than
 # CME-cleared, which puts every CA level here about 3.9bp below Citi's (it shifts

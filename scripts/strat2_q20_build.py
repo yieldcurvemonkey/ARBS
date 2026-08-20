@@ -108,8 +108,9 @@ def _chunk(items) -> dict:
     swaps = IRSwapsMDP(source=cfg.swap_source)
 
     rows, rate_rows, settle_rows = [], [], []
+    failed: list = []
     skips = {"ok": 0, "swap_curve": 0, "swap_ref_mismatch": 0, "q20_build": 0,
-             "no_settles": 0, "error": 0}
+             "no_settles": 0, "error": 0, "q20_unbuilt": 0}
     n_blocked_0 = network_calls_blocked()
 
     for d, depth in items:
@@ -119,6 +120,7 @@ def _chunk(items) -> dict:
                                            "timestamp": d, "offline": True})
             except Exception:                                   # noqa: BLE001
                 skips["swap_curve"] += 1
+                failed.append((d, depth))
                 continue
             ref = pricer.reference_date()
             ref = ref.date() if hasattr(ref, "date") else ref
@@ -132,12 +134,19 @@ def _chunk(items) -> dict:
                                    swap_pricer=pricer)
                 except Exception:                               # noqa: BLE001
                     skips["q20_build"] += 1
+                    failed.append((d, depth))
                     continue
                 setl = builder.settles(d, depth)
 
             if not r:
                 skips["no_settles"] += 1
+                failed.append((d, depth))
                 continue
+            # A date whose Q20 curve would not build is KEPT -- its settle rows
+            # are real -- but it is counted, because a blocked request has to be
+            # explainable and this is now the explanation for most of them.
+            if not r[0].get("q20_built", True):
+                skips["q20_unbuilt"] += 1
             rows.extend(r)
 
             row = {"date": pd.Timestamp(d)}
@@ -154,10 +163,12 @@ def _chunk(items) -> dict:
             skips["ok"] += 1
         except Exception:                                       # noqa: BLE001
             skips["error"] += 1
+            failed.append((d, depth))
             continue
 
     skips["blocked_requests"] = network_calls_blocked() - n_blocked_0
-    return {"rows": rows, "rates": rate_rows, "settles": settle_rows, "skips": skips}
+    return {"rows": rows, "rates": rate_rows, "settles": settle_rows,
+            "skips": skips, "failed": failed}
 
 
 def build(workers: int = 6) -> pd.DataFrame:
@@ -166,7 +177,18 @@ def build(workers: int = 6) -> pd.DataFrame:
     t0 = time.time()
     cfg = Q.Q20Config()
     depths = Q.strip_depth_by_date(cfg)
-    items = sorted(depths.items())
+    # THE RUNNING SESSION IS NOT A SETTLE. Both legs of the adjustment are still
+    # moving today: the 17:00 EOD alias holds whatever the vendor served when it
+    # was last requested, and the CITIVELO swap curve for today re-prices through
+    # the session. Measured 2026-08-19 -- two builds forty minutes apart
+    # disagreed on today's 10Y par rate by 0.046% while every one of the other
+    # 1,945 dates agreed to 1e-9. Including it makes the panel unreproducible and
+    # marks a live quote as a settlement mark; excluding it costs one date.
+    today = dt.date.today()
+    dropped_today = [d for d in depths if d >= today]
+    items = sorted((d, v) for d, v in depths.items() if d < today)
+    if dropped_today:
+        print(f"excluding the running session: {dropped_today}", flush=True)
     print(f"universe: {len(items)} dates {items[0][0]}..{items[-1][0]} "
           f"({time.time() - t0:.0f}s)", flush=True)
     by_depth = pd.Series([v for _, v in items]).value_counts().sort_index()
@@ -181,6 +203,7 @@ def build(workers: int = 6) -> pd.DataFrame:
     print(f"scan: {len(chunks)} chunks x ~{size} dates, {workers} workers", flush=True)
 
     rows, rate_rows, settle_rows, skips = [], [], [], {}
+    failed: list = []
     with ProcessPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_chunk, c): k for k, c in enumerate(chunks)}
         done = 0
@@ -189,11 +212,39 @@ def build(workers: int = 6) -> pd.DataFrame:
             rows.extend(r["rows"])
             rate_rows.extend(r["rates"])
             settle_rows.extend(r["settles"])
+            failed.extend(r.get("failed", []))
             for k, v in r["skips"].items():
                 skips[k] = skips.get(k, 0) + v
             done += 1
             print(f"  chunk {done}/{len(chunks)} ({len(rows)} rows, "
                   f"{time.time() - t0:.0f}s)", flush=True)
+
+    # --- serial retry of every skipped date --------------------------------
+    # Six workers share eight sqlite shards, and contention on them surfaces as a
+    # cache MISS rather than as a lock error: the MDP shrugs, reaches for the
+    # vendor, and `cache_only()` turns that into an exception. The result was a
+    # build whose skipped dates changed from run to run -- 2022-06-22 dropped in
+    # one pass and priced cleanly in the next, with 0 blocked requests. That
+    # nondeterminism is fatal to a before/after comparison, so every skipped date
+    # is retried ONCE, serially, in the parent. Dates that fail both times are
+    # genuine (holidays whose swap curve serves the previous close, mostly) and
+    # stay counted.
+    if failed:
+        print(f"\nretrying {len(failed)} skipped dates serially "
+              f"({time.time() - t0:.0f}s)", flush=True)
+        rr = _chunk(sorted(set(failed)))
+        rows.extend(rr["rows"])
+        rate_rows.extend(rr["rates"])
+        settle_rows.extend(rr["settles"])
+        skips["retry_recovered"] = int(rr["skips"]["ok"])
+        skips["retry_failed"] = len(rr.get("failed", []))
+        skips["retry_q20_build"] = int(rr["skips"]["q20_build"])
+        skips["retry_swap_ref_mismatch"] = int(rr["skips"]["swap_ref_mismatch"])
+        skips["q20_unbuilt"] = skips.get("q20_unbuilt", 0) + int(rr["skips"]["q20_unbuilt"])
+        skips["blocked_requests"] = (skips.get("blocked_requests", 0)
+                                     + rr["skips"].get("blocked_requests", 0))
+        print(f"  recovered {skips['retry_recovered']}, still failing "
+              f"{skips['retry_failed']}", flush=True)
 
     panel = pd.DataFrame(rows).sort_values(["date", "rank"]).reset_index(drop=True)
     rates = pd.DataFrame(rate_rows).set_index("date").sort_index()
@@ -216,6 +267,14 @@ def build(workers: int = 6) -> pd.DataFrame:
         "rank_max": int(panel["rank"].max()),
         "gate": {c: float(panel[c].mean()) for c in panel.columns
                  if c.startswith("gate_")},
+        "availability": {
+            "rows_q20_built": int(panel["q20_built"].sum()) if "q20_built" in panel else None,
+            "rows_settle_finite": int(np.isfinite(panel["ca_bp_settle"]).sum()),
+            "dates_by_max_rank": {str(k): int(v) for k, v in
+                                  panel.groupby("date")["max_rank_available"].max()
+                                  .value_counts().sort_index().items()}
+            if "max_rank_available" in panel else None,
+        },
     }, indent=2))
 
     print(f"\n{len(panel)} rows x {panel['date'].nunique()} dates -> {PANEL} "
@@ -230,18 +289,23 @@ def build(workers: int = 6) -> pd.DataFrame:
     #                 vendor and that has to be explained.
     #
     # A date with genuinely no local data will always attempt once and fail;
-    # that is the guard working, and those dates are counted in ``q20_build``.
-    # What must never happen is an attempt on a date that then landed IN the
-    # panel, because that would mean a successful row was assembled by a path
-    # that was willing to fetch.
+    # that is the guard working. Since 2026-08-19 such a date is no longer
+    # dropped -- ``day_rows`` degrades to settle-only rows and records
+    # ``q20_built=False`` -- so the attempt is now explained by EITHER a skipped
+    # date (``q20_build``) OR a kept-but-unbuilt one (``q20_unbuilt``). What must
+    # never happen is a blocked request that neither explains, because that would
+    # mean a fully successful row was assembled by a path willing to fetch.
     blocked = skips.get("blocked_requests", 0)
-    failed = skips.get("q20_build", 0)
+    failed = (skips.get("q20_build", 0) + skips.get("q20_unbuilt", 0)
+              + skips.get("retry_failed", 0))
     assert not (blocked and not failed), (
         f"{blocked} outbound requests were blocked on dates that all succeeded -- "
         "a code path reached for the network on a good date. Investigate before "
         "trusting this panel.")
     print(f"blocked requests: {blocked} (attempted, refused, nothing sent) "
-          f"across {failed} dates with no local data")
+          f"across {failed} dates with no local Q20 curve")
+    n_unbuilt = int((~panel["q20_built"]).sum()) if "q20_built" in panel else 0
+    print(f"rows with no Q20 curve (settle-only, recorded as data): {n_unbuilt:,}")
     return panel
 
 

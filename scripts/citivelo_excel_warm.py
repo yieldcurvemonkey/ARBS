@@ -7,6 +7,17 @@ r"""Warm the CurveStore with historical EOD Citi Velocity curves.
 Runs entirely **offline** against the banked tag cache - no Excel, no network.
 Interruptible and resumable: days already in the store are skipped unless
 ``--force``, and each day is written atomically.
+
+Exit codes
+----------
+``0``  curve-days were written, or every curve was already present.
+``1``  a real defect - a curve wrote nothing for a reason this process owns.
+``2``  ``--push-l2`` was asked for with Supabase disabled; refused rather than
+       pushing nothing silently.
+``3``  every idle curve is idle because the banked DAILY par grid ENDS BEFORE the
+       requested window. Not a failure of this warm: it is offline by
+       construction and cannot fetch, so the grid is an input it does not own.
+       The caller reports it as SKIPPED and names the refresh. See ``cmd_warm``.
 """
 
 from __future__ import annotations
@@ -72,7 +83,59 @@ def cmd_warm(args) -> int:
     )
     total = sum(s.written for s in stats.values())
     print(f"\nwrote {total} curve-days across {len(stats)} curve(s)")
-    return 0 if total or all(s.skipped_existing for s in stats.values()) else 1
+
+    # A curve that wrote nothing AND kept nothing warmed nothing at all. Say so
+    # even when the run "succeeded": ``total`` is a sum across curves, so one
+    # curve writing masks four writing nothing - which is exactly what happened
+    # on 2026-08-15, when USD wrote 2 days, the other four curves were stale
+    # since 2026-08-07, and this returned 0.
+    idle = [s for s in stats.values() if not s.written and not s.skipped_existing]
+    for s in idle:
+        reason = s.errors[0] if s.errors else "no reason recorded"
+        print(f"  WARMED NOTHING: {s.curve_name}: {reason}", flush=True)
+
+    if total or all(s.skipped_existing for s in stats.values()):
+        return 0
+
+    # STALE GRID IS A SKIP, NOT A FAILURE, and that distinction is the whole
+    # point of this branch.
+    #
+    # This warm is offline by construction - it reads the banked DAILY par grid
+    # through a ``CitiVeloQuotes(offline=True)`` that cannot fetch. So when every
+    # idle curve is idle because the grid ends before the window, nothing here is
+    # broken: the grid simply has not been advanced. That is an input this
+    # process does not own.
+    #
+    # Reporting it as FAILED is what actually happened on six of ten retained
+    # nights ("EOD warm exited 1"), and an exit code that is red every night for
+    # something the code cannot fix is the exit code nobody reads - the same
+    # training failure that let two real bugs survive ten runs unnoticed. 3 is
+    # free here (0 OK, 1 defect, 2 the ``--push-l2`` refusal) and the nightly
+    # maps it to SKIPPED with the harvest named.
+    #
+    # ALL of them, not any: one curve failing for a real reason while four have
+    # stale grids is a real failure, and must stay 1.
+    stale = [s for s in idle if s.stale_grid is not None]
+    if idle and len(stale) == len(idle):
+        ends = ", ".join(f"{s.curve_name} ends {s.stale_grid}" for s in stale)
+        # Printed LAST, because the nightly's ``_last_meaningful_line`` keeps
+        # only the child's final line and the actionable half must be in it.
+        print(
+            f"SKIPPED: no banked DAILY rows in {args.start or 'start'}.."
+            f"{args.end or 'end'} for {len(stale)} curve(s) - {ends}. Nothing in "
+            f"this process fetches DAILY par tags; run "
+            f"scripts/citivelo_daily_par_refresh.py refresh (needs Excel), or the "
+            f"harvest for a curve that has never been banked.",
+            flush=True,
+        )
+        return 3
+
+    # The exit code has to carry a cause. Printing it LAST is what puts it in
+    # front of a caller that keeps only the child's final line.
+    lead = idle[0] if idle else next(iter(stats.values()))
+    why = lead.errors[0] if lead.errors else "no reason recorded"
+    print(f"nothing written and nothing already present: {lead.curve_name}: {why}", flush=True)
+    return 1
 
 
 def cmd_status(args) -> int:

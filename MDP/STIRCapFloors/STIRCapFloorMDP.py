@@ -15,10 +15,12 @@ from MDP.STIRFutures._sofr_option_contracts import (
     _contract_to_barchart_contract,
     _format_strike4,
     _snap_to_listed_strike_for_offset,
+    next_quarterly_contract,
     quarterly_contract_expiry_date,
     quarterly_reference_window,
     resolve_quarterly_contracts,
 )
+from Query.IRSwaps.backends.quantlib.utils import ql_date_to_datetime
 from Query.IRSwaptions.utils import normalize_tenor, parse_expiry_tail_shorthandle
 from Query.STIRCapFloors.pricer import STIRCapFloorLegMarket
 from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
@@ -26,6 +28,11 @@ from SDRUtils.analytics.seasonality import get_fomc_dates
 
 
 DateLike = dt.date | dt.datetime | str
+
+# Runaway guard on the quarterly ladder walk: 50 years past the front contract.
+# The walk terminates on the window's end date, so this only fires on a caller
+# asking for a window further out than the contract grid is meaningful.
+_MAX_LADDER_QUARTERS = 200
 
 
 def _as_date(value: DateLike) -> dt.date:
@@ -90,10 +97,34 @@ def _fomc_loading(start: dt.date, end: dt.date, fomc_dates: list[dt.date]) -> fl
 
 
 def _discount(curve: Any, ql_date: ql.Date) -> float:
+    """Discount factor to ``ql_date``, whichever library built the curve.
+
+    Under a ``-QL`` source the handle is a ``ql.YieldTermStructureHandle`` and is
+    *called*; under an ``-RL`` source (``CITIVELO_EXCEL``, ``SDR_INTRADAY-RL``,
+    ``ERIS_EOD_LIVE-RL_BASIC``, ...) it is a ``rateslib.Curve`` and is
+    *subscripted*. The subscript key must be a ``datetime.datetime``:
+    ``rateslib.curves.Curve.__getitem__`` compares it against
+    ``self.nodes.initial``, which is a ``datetime``, so BOTH a ``ql.Date`` and a
+    plain ``datetime.date`` raise ``TypeError: '<' not supported between
+    instances of ... and 'datetime.datetime'``. Passing the ``ql.Date`` straight
+    through is what made ``strike_convention="flat_swap_rate"`` (via
+    :meth:`STIRCapFloorMDP._contract_forward_price`) and
+    ``weight_method="duration"`` (via :meth:`STIRCapFloorMDP._resolve_weights`)
+    unusable on every rateslib-backed curve, while the QuantLib branch below hid
+    it on the Eris source.
+
+    ``ql_date_to_datetime`` is the repo's existing canonicaliser for this - the
+    same one ``MDP/IRSwaps/*/rl_*`` fetchers use when they hand QuantLib dates to
+    rateslib. The QuantLib branch is tried first and by duck typing rather than
+    ``isinstance`` for the same reason as
+    :func:`Query.IRSwaptions.pricer.discount_factor`, which solves this identical
+    dispatch: test fakes supply a bare object carrying a ``discount`` method and
+    an ``isinstance`` gate would silently route them into the rateslib branch.
+    """
     handle = curve.handle() if hasattr(curve, "handle") else curve
     if hasattr(handle, "discount"):
         return float(handle.discount(ql_date))
-    return float(handle[ql_date])  # pragma: no cover
+    return float(handle[ql_date_to_datetime(ql_date)])
 
 
 def _bachelier_price(right: str, strike: float, forward: float, vol_normal: float, tte: float, discount: float) -> float:
@@ -287,15 +318,45 @@ class STIRCapFloorMDP(MarketDataProvider[STIRCapFloorMarketContext]):
         return swap_start, swap_end, strip_contracts
 
     def _contracts_for_explicit_window(self, *, as_of: dt.date, swap_start: dt.date, swap_end: dt.date) -> list[str]:
-        approx_quarters = max(1, int(math.ceil(max((swap_end - swap_start).days, 1) / 75.0)) + 4)
-        ladder = resolve_quarterly_contracts(as_of, start_index=0, count=approx_quarters)
+        """Quarterly SFR contracts whose reference quarters tile ``[swap_start, swap_end)``.
+
+        The ladder is walked forward from the front contract until it reaches the
+        window's **end**.  Sizing it from the window's *length* instead - which
+        ``ceil(window_days / 75) + 4`` contracts taken from the front of the curve
+        did - runs off the end of the ladder for any forward-starting window and
+        returns a short strip with no error: measured on 2023-06-09 the rank-9
+        pack window 2025-06-18..2026-06-17 came back as one contract instead of
+        four, and rank 13 came back empty.
+
+        Raises rather than returning a partial cover.  Callers aggregate over the
+        legs without checking the count (``STIRCapFloorValueFunctionMap``), so a
+        strip that does not tile the requested window is indistinguishable from a
+        correct one; ``_resolve_window`` already raises on a window that starts
+        before the front contract, and this is the same rule at the far end.
+        """
+        contract = resolve_quarterly_contracts(as_of, start_index=0, count=1)[0]
         out: list[str] = []
-        for contract in ladder:
-            ref_start, _ = quarterly_reference_window(contract)
+        for _ in range(_MAX_LADDER_QUARTERS):
+            ref_start, _ref_end = quarterly_reference_window(contract)
             if ref_start >= swap_end:
                 break
             if ref_start >= swap_start:
                 out.append(contract)
+            contract = next_quarterly_contract(contract)
+        else:
+            raise ValueError(
+                f"Quarterly SFR ladder did not reach {swap_end.isoformat()} within "
+                f"{_MAX_LADDER_QUARTERS} contracts of {as_of.isoformat()}."
+            )
+
+        if out:
+            first_start, _ = quarterly_reference_window(out[0])
+            _, last_end = quarterly_reference_window(out[-1])
+            if first_start != swap_start or last_end != swap_end:
+                raise ValueError(
+                    f"Quarterly SFR grid does not tile {swap_start.isoformat()}..{swap_end.isoformat()}: "
+                    f"{out[0]}..{out[-1]} covers {first_start.isoformat()}..{last_end.isoformat()}."
+                )
         return out
 
     def _build_context(

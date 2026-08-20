@@ -21,9 +21,12 @@ or, tolerantly::
 This is what makes an unattended harvest safe: the worst case for a wholly
 uncached universe is a fast sweep of Nones rather than an overnight crawl
 against a vendor. It is deliberately a blunt instrument -- it blackholes *all*
-requests traffic in the calling thread, not just Barchart's -- because the
-alternative is guessing which of several fetcher classes and session objects a
-6,900-line MDP will reach for.
+``requests`` and ``httpx`` traffic in the calling process, not just Barchart's --
+because the alternative is guessing which of several fetcher classes and session
+objects a 6,900-line MDP will reach for. That guess was in fact wrong once: the
+Barchart STIR path is ``httpx.AsyncClient``, and until 2026-08-19 only the
+``requests`` layer was patched, so the guarantee rested on the session-token
+fetch raising first. It no longer does.
 """
 
 from __future__ import annotations
@@ -64,9 +67,14 @@ def _blocked(*args: Any, **kwargs: Any):
     )
 
 
+async def _blocked_async(*args: Any, **kwargs: Any):
+    """``httpx.AsyncClient.send`` is a coroutine; a sync stub would not await."""
+    return _blocked(*args, **kwargs)
+
+
 @contextlib.contextmanager
 def cache_only(*, block: bool = True):
-    """Refuse all outbound ``requests`` traffic inside the block.
+    """Refuse all outbound ``requests`` **and** ``httpx`` traffic inside the block.
 
     ``block=False`` makes this a no-op, so a caller can expose the behaviour as
     a config knob without branching at every call site.
@@ -75,6 +83,19 @@ def cache_only(*, block: bool = True):
     ``HTTPAdapter.send``: the MDPs use ``requests.get`` directly in some paths
     and a pooled ``Session`` in others, and the fetchers build their own
     sessions, so patching only one layer leaves a hole.
+
+    **``httpx`` is patched too, and that is not belt-and-braces.** The Barchart
+    data path is ``httpx.AsyncClient``
+    (``MDP/STIRFutures/BARCHART/BarchartFetcher.py:1248, 1343-1347``), not
+    ``requests``. Before 2026-08-19 this guard stopped a Barchart crawl only
+    *indirectly* -- the session-token fetch goes through ``requests`` and raised
+    first, so the httpx call was never reached. Measured at the time: 17 requests
+    calls blocked, 0 httpx calls escaped. That guarantee held by accident of
+    ordering; anything that memoised a token, or any future path reaching httpx
+    without one, would have been unguarded. Both ``httpx.Client.send`` and
+    ``httpx.AsyncClient.send`` are now blocked directly, so the guarantee is
+    structural. ``httpx`` is optional: if it is not installed, nothing is patched
+    and nothing breaks.
     """
     if not block:
         yield
@@ -95,6 +116,20 @@ def cache_only(*, block: bool = True):
     requests.request = _blocked
     requests.Session.request = _blocked
     requests.adapters.HTTPAdapter.send = _blocked
+
+    try:
+        import httpx
+    except Exception:                                          # noqa: BLE001
+        httpx = None
+    hx_saved = {}
+    if httpx is not None:
+        hx_saved = {
+            "Client.send": httpx.Client.send,
+            "AsyncClient.send": httpx.AsyncClient.send,
+        }
+        httpx.Client.send = _blocked
+        httpx.AsyncClient.send = _blocked_async
+
     try:
         yield
     finally:
@@ -103,6 +138,9 @@ def cache_only(*, block: bool = True):
         requests.request = saved["request"]
         requests.Session.request = saved["Session.request"]
         requests.adapters.HTTPAdapter.send = saved["HTTPAdapter.send"]
+        if httpx is not None:
+            httpx.Client.send = hx_saved["Client.send"]
+            httpx.AsyncClient.send = hx_saved["AsyncClient.send"]
 
 
 def try_cached(

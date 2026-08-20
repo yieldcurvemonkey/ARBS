@@ -66,6 +66,19 @@ Fetcher = Callable[
 ]
 
 
+#: The shared atomic-replace helper, moved to ``utils/atomic_replace.py``.
+#:
+#: It was measured here - a held-open ``.meta.json`` cost the 2026-08-12
+#: nightly warm 829 of 877 bonds - but the fault is Windows and CPython's
+#: ``open()``, not Velocity, and five other temp-then-rename writes on the same
+#: nightly path were bare. A second copy of a bounded retry whose whole value is
+#: that its budget is MEASURED is how the two drift apart, so there is one.
+#: Imported under the old private name because this module's own three call
+#: sites and the tests that pin them read the same either way.
+from utils.atomic_replace import REPLACE_BUDGET_S as _REPLACE_BUDGET_S  # noqa: E402
+from utils.atomic_replace import replace_with_retry as _replace_with_retry  # noqa: E402
+
+
 def default_cache_dir() -> pathlib.Path:
     """Resolve the cache root, mirroring the repo's cache-root ladder."""
     explicit = os.environ.get("CITIVELO_EXCEL_CACHE_DIR")
@@ -291,7 +304,7 @@ class CitiVeloTagCache:
             )
             tmp = path.with_suffix(".parquet.tmp")
             pq.write_table(table, tmp, compression="zstd")
-            os.replace(tmp, path)
+            _replace_with_retry(tmp, path)
 
             meta = self._read_meta(tag, freq_token, point_token)
             meta["tag"] = str(tag)
@@ -307,7 +320,7 @@ class CitiVeloTagCache:
                 meta["history_start"] = pd.Timestamp(history_start).isoformat()
             meta_tmp = self.meta_path(tag, freq_token, point_token).with_suffix(".json.tmp")
             meta_tmp.write_text(json.dumps(meta, indent=1), encoding="utf-8")
-            os.replace(meta_tmp, self.meta_path(tag, freq_token, point_token))
+            _replace_with_retry(meta_tmp, self.meta_path(tag, freq_token, point_token))
         return merged
 
     def set_history_start(
@@ -323,7 +336,7 @@ class CitiVeloTagCache:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(meta, indent=1), encoding="utf-8")
-            os.replace(tmp, path)
+            _replace_with_retry(tmp, path)
 
     # -- incremental fetch ----------------------------------------------
 

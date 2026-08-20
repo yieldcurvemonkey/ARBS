@@ -35,6 +35,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from utils.atomic_replace import replace_with_retry
+
 # --------------- Thread-safe DuckDB connection for read-only queries ----------
 _duckdb_local = threading.local()
 
@@ -1380,7 +1382,13 @@ def _atomic_content_write(
         os.fsync(tmp.fileno())
         tmp_path = Path(tmp.name)
 
-    os.replace(tmp_path, final_path)
+    # Retried, not bare. CPython's ``open()`` does not pass FILE_SHARE_DELETE, so
+    # any concurrent reader of the target makes this raise PermissionError
+    # [WinError 5] with no antivirus and no second process involved - measured on
+    # this machine from a plain read-only open(). The identical write in the tag
+    # cache cost the 2026-08-12 nightly warm 829 of 877 bonds. Still raises on a
+    # permanent holder; see ``utils/atomic_replace.py``.
+    replace_with_retry(tmp_path, final_path)
 
     return {
         "path": str(final_path),
