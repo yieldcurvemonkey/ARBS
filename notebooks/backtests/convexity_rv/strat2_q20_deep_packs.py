@@ -664,17 +664,26 @@ print("   real panel is a real measurement: these deep SR3 settles are NOT stale
 # %% [markdown]
 # ## 12. The backtest
 #
-# Windows 9..14 (Greens through one past Blues), the longest contiguous
-# gate-passed run in the store. Four runs: the Q20 rate source and the raw-settle
-# control, each hedged and unhedged.
+# Windows 9..14 (Greens through one past Blues), the **most recent contiguous
+# gate-passed run long enough to carry the 252-day z-score** — see `prep` below
+# for why "most recent" alone is a trap. Four runs: the Q20 rate source and the
+# raw-settle control, each hedged and unhedged.
 #
 # **The book is marked off settles in every run.** The screen may be computed off
 # Q20 forwards, but a settle is what you can transact at and a curve forward is
 # not.
 
 # %%
-def prep(lo, hi, source, keep="latest"):
-    """Gate -> require every rank present -> keep one contiguous run.
+# A contiguous run shorter than the z-score's own warm-up cannot produce a
+# signal -- `vs_model_z1y` is NaN on every day of it, `plan_epochs` skips every
+# rebalance mark as warm-up, and the backtest marks a flat book. Runs below this
+# floor are therefore not selectable at all; see `trim_to_contiguous_run`.
+MIN_RUN_DAYS = DEEP.min_history_for_z1y
+assert NEAR.min_history_for_z1y == MIN_RUN_DAYS, "both bands must share the floor"
+
+
+def prep(lo, hi, source, keep="latest", min_days=MIN_RUN_DAYS):
+    """Gate -> require every rank present -> keep one contiguous *viable* run.
 
     `keep="latest"` since 2026-08-19. The legacy `"longest"` rule cut this
     notebook's NEAR band from 518 dates to **301**, discarding every date in
@@ -682,6 +691,21 @@ def prep(lo, hi, source, keep="latest"):
     2021 -- there it was the single largest killer in the whole pipeline, larger
     than the depth gate. Coverage is printed both ways below rather than one
     being chosen in silence.
+
+    `min_days` since 2026-08-20, and it is the fix for a total, silent failure.
+    Bare `"latest"` is `runs[-1]`, and on the rebuilt panel `runs[-1]` is a
+    trailing island the store happened to warm last: **12 dates** for the deep
+    band (2026-07-31..2026-08-18) and **9** for the near band, both cut off from
+    2026-07-01 by an 18-day hole. Against `min_history_for_z1y` = 252 every
+    `vs_model_z1y` on such a window is NaN, `plan_epochs` returns **zero**
+    epochs, and the whole notebook died at `assert_ran` with `equity is
+    identically zero -- no trigger fired` -- a message that reads as "the
+    strategy made no money". Nothing upstream of it printed a warning.
+
+    Note what this does NOT do: it touches no gate. `apply_gate`, the 2.0bp
+    settle-agreement threshold and require-every-rank are all unchanged, and no
+    date is admitted that was not already admitted. It only refuses to *select*
+    a window too short to carry the statistic.
     """
     sub = Q.apply_gate(PANEL)
     sub = sub[(sub["rank"] >= lo) & (sub["rank"] <= hi)].copy()
@@ -690,16 +714,23 @@ def prep(lo, hi, source, keep="latest"):
     sub["ca_bp"] = sub[f"ca_bp_{source}"]
     sub["pack_rate"] = sub[f"pack_rate_{source}"]
     return S2.trim_to_contiguous_run(
-        sub, RATES.loc[RATES.index.isin(sub["date"].unique())], keep=keep)
+        sub, RATES.loc[RATES.index.isin(sub["date"].unique())], keep=keep,
+        min_days=min_days)
 
 
 _lo, _hi = DEEP.rank_start - 1, DEEP.rank_start + DEEP.n_packs - 1
+# Every run in the deep band, so the choice below is argued rather than assumed.
+print(S2.coverage_by_run(prep(_lo, _hi, "q20", keep="none", min_days=0)[0])
+      .to_string(), "\n")
 for _src in ("q20", "settle"):
     for _keep in ("longest", "latest", "none"):
-        _p, _r = prep(_lo, _hi, _src, keep=_keep)
-        _dd = pd.DatetimeIndex(sorted(_p["date"].unique()))
-        print(f"deep/{_src:6s} keep={_keep:<7s}: {len(_p):,} rows, {len(_dd)} days "
-              f"{_dd[0].date()}..{_dd[-1].date()}")
+        for _floor in (0, MIN_RUN_DAYS):
+            _p, _r = prep(_lo, _hi, _src, keep=_keep, min_days=_floor)
+            _dd = pd.DatetimeIndex(sorted(_p["date"].unique()))
+            _mark = " <- USED" if (_keep == "latest" and _floor == MIN_RUN_DAYS) else ""
+            print(f"deep/{_src:6s} keep={_keep:<7s} min_days={_floor:<3d}: "
+                  f"{len(_p):,} rows, {len(_dd)} days "
+                  f"{_dd[0].date()}..{_dd[-1].date()}{_mark}")
 DEEP_PANEL, DEEP_RATES = prep(_lo, _hi, "q20")
 DEEP_DAYS = pd.DatetimeIndex(sorted(DEEP_PANEL["date"].unique()))
 SPAN_YEARS = (DEEP_DAYS[-1] - DEEP_DAYS[0]).days / 365.25
@@ -868,7 +899,7 @@ print("=> the ~10% of days where the two disagree is what produces the P&L gap a
 # | 2 | **Wrong futures source.** The production builder fetches from `BARCHART_TOS_LIVE_STIRF-RL` (22:xx intraday, depth 20 on zero local dates), not the 17:00 EOD settle. | would be a 52–57-request-per-date crawl AND the wrong mark | **fixed by injection**; guard asserts 0 requests |
 # | 3 | **Settle-timing.** Barchart "EOD" is ~2h after the CME settle. | 0.6–1.6bp/pack-day; **30.1%** of the CA level at ranks 1–8, **6.7%** at 13–17 | irreducible; the reason to trade deep |
 # | 4 | **Selection fragility.** A 0.03bp CA difference flips the ranked winner on ~10% of screen days. | ~2× on total P&L | **reported, not fixed** — the dominant caveat |
-# | 5 | **IMM roll off-by-one.** The `SFRCM` ladder rolls on the IMM date; the pack universe does not. | 8 of 10 network reaches in a full build | fixed (`instrument_count`) |
+# | 5 | **IMM roll off-by-one.** The `SFRCM` ladder rolled on the IMM date; the pack universe did not. | 8 of 10 network reaches in a full build | **fixed at source** 2026-08-19 (`tos._imm_cutoff` keeps the contract; the `instrument_count` shim was deleted with it) |
 # | 6 | **Swap-leg frequency.** `usd_irs` quotes annual fixed; Citi specifies Q/Q. | up to 12bp (`0.375·r²`) | fixed upstream (`matched_forward_swap_rate`) |
 # | 7 | **Stale deferred settles.** | `stale_run` 0.055%, 4 catch-up dates; removing them moves deep hedged P&L by ~$0.8mn | **reported both ways** |
 # | 8 | **Universe truncation.** Golds needs depth 20 → 681 dates whose longest contiguous run (309 days) is entirely inside ZIRP. | Golds cannot be backtested daily | **documented gap** |

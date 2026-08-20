@@ -1116,7 +1116,8 @@ def coverage_by_run(panel: pd.DataFrame, *, max_gap_days: int = 15) -> pd.DataFr
 
 def trim_to_contiguous_run(panel: pd.DataFrame, rates: pd.DataFrame,
                            *, max_gap_days: int = 15,
-                           keep: str = "longest") -> Tuple[pd.DataFrame, pd.DataFrame]:
+                           keep: str = "longest",
+                           min_days: int = 0) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Keep one run of dates with no gap longer than *max_gap_days*, or keep all.
 
     The Barchart store is demand-driven, so a panel built over "every date whose
@@ -1153,16 +1154,56 @@ def trim_to_contiguous_run(panel: pd.DataFrame, rates: pd.DataFrame,
                    or the statistics silently bridge the holes instead.
 
     Report :func:`coverage_by_run` alongside whichever is used.
+
+    **``min_days`` is not optional bookkeeping -- it is what stops this
+    function returning a window that cannot possibly produce a signal.**
+    ``"latest"`` means ``runs[-1]``, and ``runs[-1]`` is whatever the store
+    happened to warm last. Measured 2026-08-20 on the rebuilt Q20 panel, the
+    last run of the deep band (ranks 8-14) is **12 dates**, 2026-07-31..
+    2026-08-18, and of the near band **9 dates** -- trailing islands cut off
+    from 2026-07-01 by an 18-day hole. Against
+    :attr:`Strat2Config.min_history_for_z1y` = 252 every ``vs_model_z1y`` on
+    such a window is NaN, so :func:`plan_epochs` skips every rebalance mark as
+    warm-up, returns **zero** epochs, and :func:`run_backtest` marks a flat
+    book over the 12 days. Nothing raises until :func:`assert_ran`, ~600 lines
+    later, reports ``equity is identically zero`` -- which reads as "the
+    strategy made no money", not "you selected a fortnight".
+
+    So a run shorter than *min_days* is **not a candidate**, and when no run
+    clears the floor this raises with the coverage table rather than handing
+    back a statistically inert slice. ``min_days=0`` (the default) is the
+    legacy behaviour, unchanged, so existing call sites and shipped artifacts
+    reproduce; every caller whose signal has a warm-up should pass that
+    warm-up. The floor is a **viability bound, not a sufficiency guarantee** --
+    a run of exactly ``min_history_for_z1y`` days has one usable day and may
+    still plan no epochs. The raise above and :func:`assert_ran` below cover
+    the residual; what is no longer possible is failing *silently*.
     """
     if keep not in ("longest", "latest", "none"):
         raise ValueError(f"keep must be 'longest' | 'latest' | 'none', got {keep!r}")
+    min_days = int(min_days)
+    if min_days < 0:
+        raise ValueError(f"min_days must be >= 0, got {min_days}")
     if keep == "none":
         return panel, rates
     days = pd.DatetimeIndex(sorted(panel["date"].unique()))
+
+    def _too_short() -> ValueError:
+        return ValueError(
+            f"no contiguous run reaches min_days={min_days} "
+            f"(max_gap_days={max_gap_days}); the panel offers only:\n"
+            f"{coverage_by_run(panel, max_gap_days=max_gap_days).to_string()}\n"
+            "Widen the panel, lower the floor deliberately, or use keep='none' "
+            "with Strat2Config.window_span_tolerance set.")
+
     if len(days) < 2:
+        if len(days) < min_days:
+            raise _too_short()
         return panel, rates
-    runs = _runs_of(days, max_gap_days)
-    lo, hi = (max(runs, key=lambda r: r[1] - r[0]) if keep == "longest" else runs[-1])
+    usable = [r for r in _runs_of(days, max_gap_days) if (r[1] - r[0]) >= min_days]
+    if not usable:
+        raise _too_short()
+    lo, hi = (max(usable, key=lambda r: r[1] - r[0]) if keep == "longest" else usable[-1])
     keep_days = days[lo:hi]
     return (panel[panel["date"].isin(keep_days)].copy(),
             rates.loc[rates.index.isin(keep_days)].copy() if len(rates) else rates)
@@ -1735,7 +1776,22 @@ def assert_ran(bt: Any, specs: Sequence[TradeSpec], *, hedged: bool,
     A backtest that never fired a trigger has no equity-curve holes, no NaNs
     and a perfectly flat curve. Every assertion here exists because that failure
     mode is indistinguishable from "the strategy made no money".
+
+    ``specs`` is checked FIRST and by name. An empty plan is not a trading
+    result, it is a planning failure, and reporting it as ``equity is
+    identically zero`` sends the reader looking for a P&L bug when the cause
+    is upstream -- measured 2026-08-20, a 12-date panel window whose
+    ``vs_model_z1y`` is NaN throughout, so :func:`plan_epochs` warm-up-skipped
+    every rebalance mark. The window, not the book, is what to look at.
     """
+    n_days = len(pd.DatetimeIndex(sorted(pd.Series(bt.mtm_history).index)))
+    assert len(specs) > 0, (
+        f"plan_epochs produced NO epochs over the {n_days}-day window -- nothing "
+        "was ever planned, so the flat equity curve is a planning failure, not a "
+        "trading result. Usual cause: the window is shorter than "
+        "Strat2Config.min_history_for_z1y, so every vs_model_z1y is NaN and every "
+        "rebalance mark is skipped as warm-up. Check coverage_by_run() and the "
+        "min_days floor passed to trim_to_contiguous_run().")
     eq = pd.Series(bt.mtm_history)
     assert len(eq) > 0, "mtm_history is empty -- the engine swallowed an exception"
     if expect_days is not None:
