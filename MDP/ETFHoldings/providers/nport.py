@@ -11,12 +11,28 @@ is the entire historical basis for an aggregated SPTL/VGLT/EDV/ZROZ signal.
 
 What it actually gives you -- measured 2026-08-20, not assumed
 ---------------------------------------------------------------
-**Quarterly. Not monthly.** Funds file N-PORT with the SEC monthly, but only the report
-for the third month of each fiscal quarter is made public, so EDGAR shows one NPORT-P
-per quarter. Measured over all 27-29 filings for each of SPTL/VGLT/TLT/EDV/ZROZ, the
-gap between consecutive ``repPdDate`` values is 90-92 days with **no exceptions**. The
-2024 amendments that make every monthly report public had not taken effect for any of
-these funds as at the most recent filing (2026-07-29).
+**Quarterly. Not monthly, and not before November 2027.** Funds file N-PORT with the SEC
+monthly, but only the report for the third month of each fiscal quarter is made public,
+so EDGAR shows one NPORT-P per quarter. Measured over all 27-29 filings for each of
+SPTL/VGLT/TLT/EDV/ZROZ, the gap between consecutive ``repPdDate`` values is 90-92 days
+with **no exceptions**.
+
+The August 2024 amendments would have made every monthly report public. They have not
+taken effect and will not soon: the SEC delayed the compliance date from 2025-11-17 to
+**2027-11-17** for fund groups with $1bn+ net assets (and to 2028-05-18 for smaller
+ones), and in February 2026 proposed scaling the amendments back further. So quarterly
+is not a temporary state of the world to design around -- it is the granularity for at
+least another year and a half, and possibly permanently.
+
+**Before 2019 there is more history, but not in this format.** Form N-Q carried the
+quarterly schedule for the fiscal quarters N-PORT now covers, and N-CSR/N-CSRS carry the
+other two. Counts measured 2026-08-20: SPTL 23 N-Q back to 2007-11-29 plus 38 N-CSR(S);
+VGLT 19 back to 2010-01-28 plus 33; EDV 25 back to 2007-07-27; ZROZ 18 back to
+2010-05-28. Together they would roughly double the sample. They are **not implemented
+here** because the payload is an unstructured ``.txt``/HTML schedule of investments
+(SPTL's oldest N-Q is a 734 KB text file), so it needs a bespoke table parser per filing
+agent rather than one XML schema -- a different piece of work with a different risk of
+silently mis-parsing a column.
 
 **Window: 2019-Q3/Q4 to 2026-Q2.** First filings: SPTL/ZROZ 2019-09-30, TLT/VGLT/EDV
 2019-11-30. Roughly 27 observations per fund.
@@ -82,6 +98,30 @@ date carried $116mm, the pre-rebalance figure. Joining N-PORT to a daily panel o
 calendar date misallocates 1.1%-3.8% of the book (L1 in par share, median 2.1%) and
 misallocates it precisely onto the rebalance names. :func:`align_to_daily` does the
 shift; use it rather than joining on ``date``.
+
+Why the history cannot instead be MODELLED from float
+------------------------------------------------------
+The obvious shortcut -- SPTL and VGLT hold nearly the whole board, so reconstruct their
+weights from free float and skip the scraping -- was tested on these 27 quarters and it
+does not work, for a reason worth stating precisely because the summary statistic looks
+encouraging.
+
+Regressing each fund's weight on the ex-SOMA float-implied weight (through the origin,
+``float_panel.benchmark_fit``) gives a median R^2 of 0.958 for SPTL and 0.998 for VGLT in
+the 20y+ bucket; total-outstanding fits far worse (0.56 / 0.77), which independently
+confirms the study's ex-SOMA benchmark choice. But the residual of that regression **is
+the active weight**, which is the entire signal. Measured: the ratio of residual
+dispersion to active-weight dispersion is 0.988-1.001, and the correlation between the
+two is 0.998-0.9998. A float reconstruction therefore reproduces the benchmark and
+**none** of the deviation from it. A synthetic pre-2019 history built this way would
+have approximately zero active weight by construction -- a dataset in which the strategy
+cannot have a signal, which would then be reported as the strategy not working.
+
+The same numbers carry the other implication the reconstruction was meant to test: only
+0.2% (VGLT 20y+) to 4.2% (SPTL 10y+) of the cross-sectional variance of these funds'
+weights is discretionary. Median active-weight dispersion is 18.7bp of portfolio weight
+for SPTL and 5.5bp for VGLT. VGLT tracks its index roughly three times more tightly than
+SPTL, so as an *independent* view VGLT carries the less information of the two.
 
 Rate limiting and identification
 ---------------------------------
