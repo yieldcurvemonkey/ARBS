@@ -170,7 +170,7 @@ Sorting on richness first and on `active_w` inside each richness quintile, 63-da
 
 | richness quintile | 0 (rich) | 1 | 2 | 3 | 4 (cheap) |
 |---|---|---|---|---|---|
-| high-minus-low `active_w` | +0.029 | +0.012 | −0.019 | −0.033 | +0.030 |
+| high-minus-low `active_w` | +0.028 | +0.010 | −0.021 | −0.033 | +0.030 |
 
 Not monotone, sign-flipping, and of the same size as its own noise. **A naive t of 4 that survives neither a
 HAC correction nor a double sort is a linear artefact.**
@@ -295,8 +295,11 @@ days, by year and by rate-volatility regime: the share of positive outcomes stay
 The verification agents found real defects rather than rubber-stamping, and two changed
 numbers that had already been written down:
 
-* **GOVT's apparent signal was a curve-fit artifact.** `bucket_active` IC of −0.056
-  came from a whole-curve fit; refitting locally it collapses to **−0.0009**.
+* **IEI's apparent signal was a curve-fit artifact.** `bucket_active` IC of −0.056
+  came from a whole-curve fit; refitting locally it collapses to **−0.0009**. (This bullet
+  previously attributed the −0.056 to GOVT, contradicting §4.2's own table, where −0.056 is
+  IEI and GOVT is **+0.050**. `_data/adv_calnull_recheck.csv` holds IEI −0.0562 and GOVT
+  +0.0497; the table was right and this bullet was wrong.)
 * **Naive t-statistics were inflated 5–6×** by overlapping windows — measured
   independently at 5.19× (TLT `bucket_hist_z`) and 5.95× (GOVT `bucket_active`), which is
   the same correction §3.4 applies.
