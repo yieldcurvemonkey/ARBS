@@ -1,0 +1,980 @@
+<title>Treasury ETF Risk Ladders</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+
+<style>
+/* ---------------------------------------------------------------- tokens
+   Light is the complete palette on bare :root. Dark redefines ONLY tokens,
+   twice: once behind prefers-color-scheme for the un-stamped default state,
+   guarded so an explicit light choice still wins, and once behind the
+   [data-theme="dark"] stamp so the toggle wins in the other direction. */
+:root {
+  --paper:        #F4F5F3;
+  --surface:      #FFFFFF;
+  --surface-sunk: #EDEFEC;
+  --ink:          #161A18;
+  --ink-2:        #5A625E;
+  --ink-3:        #8B928E;
+  --rule:         #D8DBD7;
+  --rule-soft:    #E6E8E4;
+
+  /* The diverging pair. Structural, not decorative: the ladder's headline
+     quantity is signed and must read as signed at a glance. */
+  --over:         #B4531F;   /* fund holds MORE than its index */
+  --under:        #0F6E68;   /* fund holds LESS */
+  --over-soft:    #E4B79B;
+  --under-soft:   #9AC4C0;
+
+  --accent:       #0F6E68;
+  --accent-ink:   #FFFFFF;
+  --focus:        #B4531F;
+
+  --shadow: 0 1px 2px rgba(22,26,24,.06), 0 8px 24px rgba(22,26,24,.05);
+
+  --step--1: .78rem;
+  --step-0:  .935rem;
+  --step-1:  1.12rem;
+  --step-2:  1.5rem;
+  --step-3:  2.1rem;
+
+  --sans:  "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --cond:  "IBM Plex Sans Condensed", "IBM Plex Sans", ui-sans-serif, sans-serif;
+  --serif: "IBM Plex Serif", ui-serif, Georgia, serif;
+  --mono:  "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:        #12161A;
+    --surface:      #181D22;
+    --surface-sunk: #0D1114;
+    --ink:          #E8EBE8;
+    --ink-2:        #A2ABA6;
+    --ink-3:        #6F7A75;
+    --rule:         #2B333A;
+    --rule-soft:    #222A30;
+    --over:         #E0803F;
+    --under:        #3FA79C;
+    --over-soft:    #7A4522;
+    --under-soft:   #1E5B57;
+    --accent:       #3FA79C;
+    --accent-ink:   #0D1114;
+    --focus:        #E0803F;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] {
+  --paper:        #12161A;
+  --surface:      #181D22;
+  --surface-sunk: #0D1114;
+  --ink:          #E8EBE8;
+  --ink-2:        #A2ABA6;
+  --ink-3:        #6F7A75;
+  --rule:         #2B333A;
+  --rule-soft:    #222A30;
+  --over:         #E0803F;
+  --under:        #3FA79C;
+  --over-soft:    #7A4522;
+  --under-soft:   #1E5B57;
+  --accent:       #3FA79C;
+  --accent-ink:   #0D1114;
+  --focus:        #E0803F;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: clamp(20px, 3vw, 40px) clamp(16px, 3vw, 32px) 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* ---------------------------------------------------------------- masthead */
+.masthead { display: flex; flex-direction: column; gap: 8px; }
+.eyebrow {
+  font-family: var(--cond);
+  font-weight: 600;
+  font-size: var(--step--1);
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+h1 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: var(--step-3);
+  line-height: 1.1;
+  margin: 0;
+  text-wrap: balance;
+  letter-spacing: -.015em;
+}
+.standfirst {
+  margin: 0;
+  max-width: 66ch;
+  color: var(--ink-2);
+  font-size: var(--step-1);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+/* ---------------------------------------------------------------- layout */
+.stage {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+}
+.panel-hd {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.panel-ttl {
+  font-family: var(--cond);
+  font-weight: 600;
+  font-size: var(--step--1);
+  letter-spacing: .11em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.panel-note { font-size: var(--step--1); color: var(--ink-3); font-family: var(--mono); }
+
+/* ------------------------------------------------- the rail as a ruler
+   Each fund is drawn at its true maturity extent, so the rail reads as a
+   maturity axis and choosing a fund is choosing a slice of the curve. */
+.rail { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.fundbtn {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px 10px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.fundbtn:hover { background: var(--surface-sunk); }
+.fundbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.fundbtn[aria-pressed="true"] { background: var(--surface-sunk); border-color: var(--rule); }
+.fundbtn[aria-pressed="true"] .tk { color: var(--accent); }
+.fundbtn-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.tk {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: var(--step-0);
+  letter-spacing: .02em;
+}
+.bandlbl { font-family: var(--mono); font-size: var(--step--1); color: var(--ink-3); }
+.ruler { position: relative; height: 7px; background: var(--rule-soft); border-radius: 1px; }
+.ruler i { position: absolute; top: 0; bottom: 0; background: var(--under-soft); border-radius: 1px; }
+.fundbtn[aria-pressed="true"] .ruler i { background: var(--accent); }
+.railfoot {
+  padding: 4px 12px 10px;
+  font-family: var(--mono);
+  font-size: .68rem;
+  color: var(--ink-3);
+  display: flex;
+  justify-content: space-between;
+}
+
+/* ---------------------------------------------------------------- controls */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 26px;
+  padding: 12px 14px;
+  align-items: flex-end;
+}
+.ctl { display: flex; flex-direction: column; gap: 6px; }
+.ctl > span {
+  font-family: var(--cond);
+  font-weight: 600;
+  font-size: .7rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.seg { display: flex; border: 1px solid var(--rule); border-radius: 2px; overflow: hidden; }
+.seg button {
+  font: 500 var(--step--1)/1 var(--sans);
+  padding: 7px 12px;
+  background: var(--surface);
+  border: 0;
+  border-right: 1px solid var(--rule);
+  color: var(--ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg button:last-child { border-right: 0; }
+.seg button:hover { background: var(--surface-sunk); color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+.rangewrap { display: flex; align-items: center; gap: 10px; }
+input[type="range"] { width: 190px; accent-color: var(--accent); }
+input[type="range"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+/* ---------------------------------------------------------------- stats */
+/* Six stats, so the track count is 3 or 6 -- never auto-fit. auto-fit packed five
+   into the first row and left the sixth alone beside a run of empty grid, which
+   reads as a missing panel rather than as a tidy row. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--rule-soft);
+  border-top: 1px solid var(--rule-soft);
+}
+/* Six only when a track is genuinely wide enough for "2026-08-19" set in mono at
+   this size -- measured, not guessed: below ~1180px the six-up row truncated the
+   date, the gross tilt and the z, which is three of the six. */
+@media (min-width: 1180px) { .stats { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.stat { background: var(--surface); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 3px; }
+.stat b {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: .96rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.035em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stat span {
+  font-family: var(--cond);
+  font-weight: 600;
+  font-size: .68rem;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* ---------------------------------------------------------------- charts */
+.charts { display: grid; grid-template-columns: minmax(0,1fr) 268px; gap: 20px; align-items: start; }
+@media (max-width: 1080px) { .charts { grid-template-columns: 1fr; } }
+
+.canvas-host { position: relative; padding: 10px 12px 12px; }
+canvas { display: block; width: 100%; touch-action: none; }
+#heat { height: 430px; cursor: crosshair; }
+#profile { height: 430px; }
+#series { height: 200px; }
+
+.legend { display: flex; align-items: center; gap: 10px; padding: 0 14px 12px; }
+.ramp { height: 9px; flex: 1; border-radius: 1px; border: 1px solid var(--rule-soft); }
+.legend small { font-family: var(--mono); font-size: .68rem; color: var(--ink-3); white-space: nowrap; }
+
+.readout {
+  position: absolute;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  box-shadow: var(--shadow);
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: .72rem;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity .1s;
+  z-index: 5;
+}
+.readout.on { opacity: 1; }
+.readout k { color: var(--ink-3); font-weight: 400; }
+.readout em { font-style: normal; font-weight: 600; }
+
+/* ---------------------------------------------------------------- notes */
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 20px; }
+.note { padding: 14px 16px 16px; }
+.note h3 {
+  margin: 0 0 7px;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: var(--step-1);
+  letter-spacing: -.01em;
+}
+.note p { margin: 0 0 9px; color: var(--ink-2); font-size: var(--step--1); line-height: 1.55; }
+.note p:last-child { margin-bottom: 0; }
+.note b { color: var(--ink); font-weight: 600; }
+.note code {
+  font-family: var(--mono);
+  font-size: .95em;
+  background: var(--surface-sunk);
+  padding: .08em .34em;
+  border-radius: 2px;
+}
+
+.colophon {
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+  font-size: var(--step--1);
+  color: var(--ink-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  font-family: var(--mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">iShares Treasury funds &middot; weekly &middot; 2016&ndash;2026</p>
+    <h1>Treasury ETF Risk Ladders</h1>
+    <p class="standfirst">
+      Every fund tracks a maturity band, and every band divides into three-month rungs counted up
+      from the edge where the index must sell. This is what six funds actually held on each rung,
+      against what their index held, for every week on record.
+    </p>
+  </header>
+
+  <div class="stage">
+
+    <nav class="panel" aria-label="Fund">
+      <div class="panel-hd"><span class="panel-ttl">Fund</span><span class="panel-note" id="railScale">1&ndash;30y</span></div>
+      <div class="rail" id="rail" role="group" aria-label="Choose a fund"></div>
+      <div class="railfoot"><span>1y</span><span>maturity band</span><span>30y</span></div>
+    </nav>
+
+    <div style="display:flex;flex-direction:column;gap:20px;min-width:0">
+
+      <section class="panel">
+        <div class="controls">
+          <label class="ctl"><span>Weighting basis</span>
+            <div class="seg" id="segBasis" role="group" aria-label="Weighting basis">
+              <button type="button" data-v="dv01" aria-pressed="true">DV01</button>
+              <button type="button" data-v="mv" aria-pressed="false">Market value</button>
+            </div>
+          </label>
+          <label class="ctl"><span>Measure</span>
+            <div class="seg" id="segMeasure" role="group" aria-label="Measure">
+              <button type="button" data-v="active" aria-pressed="true">Active weight</button>
+              <button type="button" data-v="z" aria-pressed="false">Z vs own history</button>
+              <button type="button" data-v="w_f" aria-pressed="false">Fund</button>
+              <button type="button" data-v="w_i" aria-pressed="false">Index</button>
+            </div>
+          </label>
+          <label class="ctl" for="fromYear"><span>From</span>
+            <span class="rangewrap">
+              <input type="range" id="fromYear" min="0" max="10" value="0" step="1">
+              <b class="tk" id="fromYearLbl">2016</b>
+            </span>
+          </label>
+        </div>
+        <div class="stats" id="stats"></div>
+      </section>
+
+      <div class="charts">
+
+        <section class="panel">
+          <div class="panel-hd">
+            <span class="panel-ttl">Ladder through time</span>
+            <span class="panel-note" id="heatNote">hover a cell</span>
+          </div>
+          <div class="canvas-host">
+            <canvas id="heat" role="img"
+                    aria-label="Heatmap of ladder rung by week. Use the rung profile beside it for values."></canvas>
+            <div class="readout" id="readout"></div>
+          </div>
+          <div class="legend">
+            <small id="lgLo">&minus;</small>
+            <div class="ramp" id="ramp"></div>
+            <small id="lgHi">+</small>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-hd">
+            <span class="panel-ttl">Rung profile</span>
+            <span class="panel-note" id="profNote"></span>
+          </div>
+          <div class="canvas-host">
+            <canvas id="profile" role="img" aria-label="Ladder rung profile for the selected week."></canvas>
+          </div>
+        </section>
+
+      </div>
+
+      <section class="panel">
+        <div class="panel-hd">
+          <span class="panel-ttl">One rung through time</span>
+          <span class="panel-note" id="serNote">click a rung on the heatmap</span>
+        </div>
+        <div class="canvas-host">
+          <canvas id="series" role="img" aria-label="Time series of the selected rung."></canvas>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <div class="notes">
+    <article class="panel note">
+      <h3>Rung 0 is the selling edge</h3>
+      <p>
+        Rungs count <b>up from the fund&rsquo;s deletion boundary</b>, not down from thirty years.
+        Rung&nbsp;0 is the last three months a bond spends inside the index before the fund must
+        sell it, and it means that on every date and in every fund. That is the one edge the six
+        ladders share, so it is the one they are aligned on.
+      </p>
+    </article>
+    <article class="panel note">
+      <h3>The pattern is diagonal, and that matters</h3>
+      <p>
+        Streaks run <b>down and to the right</b>: a bond keeps its weight and descends one rung per
+        quarter as it ages. What looks like a queue of dislocations is mostly one sampling policy
+        seen in motion &mdash; the same holding, re-labelled each quarter.
+      </p>
+      <p>
+        It is also why the fund&rsquo;s position is a poor forecast. An active weight persists for
+        years; the richness it would have to predict has a <b>17-day half-life</b>.
+      </p>
+    </article>
+    <article class="panel note">
+      <h3>What sits off the ladder</h3>
+      <p>
+        Rungs exist only where the index carries weight, so a bond the fund still holds after the
+        index has dropped it falls off the axis. That residual is published as
+        <b>off-index</b> above &mdash; it runs from <code>0.4%</code> of TLT on a DV01 basis to
+        <code>7.7%</code> of TLH by market value, and it is largely the deletion shed in progress.
+      </p>
+      <p>Index weight sums to 100.0% by construction; fund weight does not, and the gap is that.</p>
+    </article>
+  </div>
+
+  <p class="colophon">
+    <span>Weekly, last file each ISO week</span>
+    <span>Index weight ex-SOMA (ICE rule)</span>
+    <span>Z is backward-looking, 52-week minimum</span>
+    <span id="cologen"></span>
+  </p>
+</div>
+
+<script type="application/json" id="payload">__PAYLOAD__</script>
+
+<script>
+(function () {
+  "use strict";
+
+  var DATA = JSON.parse(document.getElementById("payload").textContent);
+  var TICKERS = Object.keys(DATA.funds);
+
+  var state = {
+    fund: TICKERS.indexOf("TLT") >= 0 ? "TLT" : TICKERS[0],
+    basis: "dv01",
+    measure: "active",
+    fromIdx: 0,
+    hover: null,     // {d, b}
+    pinned: null,    // {d, b}
+    rung: null
+  };
+
+  // ---------------------------------------------------------------- helpers
+  function css(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function num(v, dp) {
+    if (v === null || v === undefined || !isFinite(v)) return "\u2014";
+    return (v < 0 ? "\u2212" : "") + Math.abs(v).toFixed(dp);
+  }
+  function hex2rgb(h) {
+    h = h.replace("#", "");
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  function mix(a, b, t) {
+    return "rgb(" + Math.round(a[0] + (b[0] - a[0]) * t) + "," +
+                    Math.round(a[1] + (b[1] - a[1]) * t) + "," +
+                    Math.round(a[2] + (b[2] - a[2]) * t) + ")";
+  }
+
+  // The measure decides the colour job: signed quantities get the diverging pair
+  // through a neutral midpoint, magnitudes get one hue light-to-dark.
+  var MEASURES = {
+    active: { key: "active_bp",  scale: 10,  signed: true,  unit: "bp", dp: 1,
+              label: "Active weight (fund \u2212 index)" },
+    z:      { key: "z",          scale: 100, signed: true,  unit: "\u03c3", dp: 2,
+              label: "Z vs the rung's own past" },
+    w_f:    { key: "w_f_bp",     scale: 10,  signed: false, unit: "bp", dp: 1,
+              label: "Fund weight" },
+    w_i:    { key: "w_i_bp",     scale: 10,  signed: false, unit: "bp", dp: 1,
+              label: "Index weight" }
+  };
+
+  function fund() { return DATA.funds[state.fund]; }
+  function basis() { return fund().bases[state.basis]; }
+  function meas() { return MEASURES[state.measure]; }
+
+  function cell(di, bi) {
+    var m = meas(), raw = basis()[m.key][di];
+    if (!raw) return NaN;
+    var v = raw[bi];
+    return (v === null || v === undefined) ? NaN : v / m.scale;
+  }
+
+  // Domain from the visible window, robust to the tail so one week does not
+  // flatten a decade. Symmetric when the quantity is signed, so zero stays the
+  // midpoint of the ramp and not merely a colour somewhere along it.
+  function domain() {
+    var f = fund(), m = meas(), vals = [];
+    for (var d = state.fromIdx; d < f.dates.length; d++) {
+      for (var b = 0; b < f.buckets.length; b++) {
+        var v = cell(d, b);
+        if (isFinite(v)) vals.push(m.signed ? Math.abs(v) : v);
+      }
+    }
+    if (!vals.length) return m.signed ? [-1, 1] : [0, 1];
+    vals.sort(function (a, b) { return a - b; });
+    var hi = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.98))] || 1;
+    return m.signed ? [-hi, hi] : [0, hi];
+  }
+
+  function colorFor(v, dom, C) {
+    if (!isFinite(v)) return C.hole;
+    if (meas().signed) {
+      var t = Math.max(-1, Math.min(1, v / dom[1]));
+      return t >= 0 ? mix(C.mid, C.over, Math.pow(t, 0.72))
+                    : mix(C.mid, C.under, Math.pow(-t, 0.72));
+    }
+    var u = Math.max(0, Math.min(1, (v - dom[0]) / (dom[1] - dom[0] || 1)));
+    return mix(C.mid, C.under, Math.pow(u, 0.7));
+  }
+
+  function palette() {
+    return {
+      over: hex2rgb(css("--over")),
+      under: hex2rgb(css("--under")),
+      mid: hex2rgb(css("--surface")),
+      hole: css("--surface-sunk"),
+      ink: css("--ink"),
+      ink2: css("--ink-2"),
+      ink3: css("--ink-3"),
+      rule: css("--rule"),
+      ruleSoft: css("--rule-soft"),
+      accent: css("--accent"),
+      surface: css("--surface")
+    };
+  }
+
+  function fit(cv) {
+    var r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    cv.width = Math.max(1, Math.round(r.width * dpr));
+    cv.height = Math.max(1, Math.round(r.height * dpr));
+    var ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, r.width, r.height);
+    return { ctx: ctx, w: r.width, h: r.height };
+  }
+
+  function rungLabel(k) {
+    var lo = fund().band[0] + k * DATA.width_y;
+    return lo.toFixed(2).replace(/\.00$/, "") + "\u2013" + (lo + DATA.width_y).toFixed(2) + "y";
+  }
+  // Axis form: the lower edge only. The full range is 14 characters and the rung axis
+  // is 46px wide, so the range label collided with the heatmap on every fund.
+  function rungShort(k) {
+    var lo = fund().band[0] + k * DATA.width_y;
+    return (Math.round(lo * 100) % 100 === 0 ? lo.toFixed(0) : lo.toFixed(2)) + "y";
+  }
+
+  // ---------------------------------------------------------------- rail
+  function buildRail() {
+    var rail = document.getElementById("rail");
+    rail.innerHTML = "";
+    var LO = 1, HI = 30;
+    TICKERS.forEach(function (tk) {
+      var f = DATA.funds[tk];
+      var lo = f.band[0], hi = f.band[1] === null ? HI : f.band[1];
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "fundbtn";
+      b.setAttribute("aria-pressed", String(tk === state.fund));
+      b.innerHTML =
+        '<span class="fundbtn-top"><span class="tk">' + tk + '</span>' +
+        '<span class="bandlbl">' + (f.band[1] === null ? lo + "y+" : lo + "\u2013" + hi + "y") + '</span></span>' +
+        '<span class="ruler"><i style="left:' + ((lo - LO) / (HI - LO) * 100) + '%;width:' +
+        (Math.max(2, (hi - lo) / (HI - LO) * 100)) + '%"></i></span>';
+      b.addEventListener("click", function () {
+        state.fund = tk;
+        state.pinned = null; state.hover = null; state.rung = null;
+        state.fromIdx = 0;
+        document.getElementById("fromYear").value = 0;
+        buildRail(); syncYear(); renderAll();
+      });
+      rail.appendChild(b);
+    });
+  }
+
+  // ---------------------------------------------------------------- stats
+  function renderStats() {
+    var f = fund(), bs = basis(), di = (state.pinned || state.hover || {}).d;
+    if (di === undefined || di === null) di = f.dates.length - 1;
+
+    var over = 0, under = 0, nb = 0, worst = null;
+    for (var b = 0; b < f.buckets.length; b++) {
+      var a = (bs.active_bp[di] || [])[b];
+      if (a === null || a === undefined) continue;
+      nb++;
+      if (a > 0) over += a / 10; else under += a / 10;
+      var z = (bs.z[di] || [])[b];
+      if (z !== null && z !== undefined && (worst === null || Math.abs(z) > Math.abs(worst.z))) {
+        worst = { z: z / 100, b: b };
+      }
+    }
+    var off = (bs.off_index_bp || [])[di];
+    var held = (f.n_held[di] || []).reduce(function (s, v) { return s + (v || 0); }, 0);
+
+    var rows = [
+      ["Week", f.dates[di]],
+      ["Rungs", nb + " of " + f.buckets.length],
+      ["Bonds held", String(held)],
+      ["Gross tilt", "\u00b1" + num(over, 1) + " bp"],
+      ["Off-index", off === null || off === undefined ? "\u2014" : num(off / 10 / 100, 2) + " %"],
+      ["Widest z", worst ? num(worst.z, 2) + "\u03c3 @ " + rungShort(f.buckets[worst.b]) : "\u2014"]
+    ];
+    document.getElementById("stats").innerHTML = rows.map(function (r) {
+      return '<div class="stat"><b>' + r[1] + '</b><span>' + r[0] + '</span></div>';
+    }).join("");
+  }
+
+  // ---------------------------------------------------------------- heatmap
+  var HEAT = { x0: 0, y0: 0, cw: 0, ch: 0, n: 0 };
+
+  function renderHeat() {
+    var cv = document.getElementById("heat"), g = fit(cv), ctx = g.ctx;
+    var f = fund(), C = palette(), dom = domain();
+    var padL = 52, padR = 8, padT = 8, padB = 26;
+    var n = f.dates.length - state.fromIdx;
+    var nb = f.buckets.length;
+    if (n <= 0 || nb <= 0) return;
+
+    var cw = (g.w - padL - padR) / n;
+    var ch = (g.h - padT - padB) / nb;
+    HEAT = { x0: padL, y0: padT, cw: cw, ch: ch, n: n, nb: nb };
+
+    for (var d = 0; d < n; d++) {
+      for (var b = 0; b < nb; b++) {
+        var v = cell(d + state.fromIdx, b);
+        ctx.fillStyle = colorFor(v, dom, C);
+        // Rung 0 at the BOTTOM: the ladder is read from the selling edge up.
+        ctx.fillRect(padL + d * cw, padT + (nb - 1 - b) * ch, Math.ceil(cw) + .5, Math.ceil(ch) + .5);
+      }
+    }
+
+    // rung axis
+    ctx.font = '500 9.5px ' + '"IBM Plex Mono", monospace';
+    ctx.fillStyle = C.ink3;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    var stepB = Math.max(1, Math.round(nb / 12));
+    for (var b2 = 0; b2 < nb; b2 += stepB) {
+      var y = padT + (nb - 1 - b2) * ch + ch / 2;
+      ctx.fillText(rungShort(f.buckets[b2]), padL - 6, y);
+    }
+
+    // year axis
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    var lastYr = null;
+    for (var d2 = 0; d2 < n; d2++) {
+      var yr = f.dates[d2 + state.fromIdx].slice(0, 4);
+      if (yr !== lastYr) {
+        lastYr = yr;
+        var x = padL + d2 * cw;
+        ctx.strokeStyle = C.ruleSoft;
+        ctx.beginPath(); ctx.moveTo(x + .5, padT); ctx.lineTo(x + .5, padT + nb * ch); ctx.stroke();
+        ctx.fillStyle = C.ink3;
+        ctx.fillText(yr, x, padT + nb * ch + 6);
+      }
+    }
+
+    // crosshair
+    var sel = state.pinned || state.hover;
+    if (sel && sel.d >= state.fromIdx) {
+      var cx = padL + (sel.d - state.fromIdx) * cw;
+      var cy = padT + (nb - 1 - sel.b) * ch;
+      ctx.strokeStyle = C.ink;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cx - .5, cy - .5, Math.max(2, cw) + 1, Math.max(2, ch) + 1);
+    }
+
+    // ramp + legend numbers
+    var lo = document.getElementById("lgLo"), hi = document.getElementById("lgHi");
+    var m = meas();
+    if (m.signed) {
+      document.getElementById("ramp").style.background =
+        "linear-gradient(90deg," + css("--under") + ",var(--surface)," + css("--over") + ")";
+      lo.textContent = num(dom[0], m.dp) + " " + m.unit + " under";
+      hi.textContent = "over " + num(dom[1], m.dp) + " " + m.unit;
+    } else {
+      document.getElementById("ramp").style.background =
+        "linear-gradient(90deg,var(--surface)," + css("--under") + ")";
+      lo.textContent = "0 " + m.unit;
+      hi.textContent = num(dom[1], m.dp) + " " + m.unit;
+    }
+  }
+
+  // ---------------------------------------------------------------- profile
+  function renderProfile() {
+    var cv = document.getElementById("profile"), g = fit(cv), ctx = g.ctx;
+    var f = fund(), C = palette();
+    var sel = state.pinned || state.hover;
+    var di = sel ? sel.d : f.dates.length - 1;
+    var nb = f.buckets.length;
+    var padT = 8, padB = 22, padL = 46, padR = 10;
+    var ch = (g.h - padT - padB) / nb;
+    var midX = padL + (g.w - padL - padR) / 2;
+    var halfW = (g.w - padL - padR) / 2;
+
+    var m = meas(), dom = domain();
+    var maxAbs = m.signed ? dom[1] : dom[1];
+
+    ctx.strokeStyle = C.ruleSoft;
+    ctx.lineWidth = 1;
+
+    for (var b = 0; b < nb; b++) {
+      var v = cell(di, b);
+      var y = padT + (nb - 1 - b) * ch;
+      if (!isFinite(v)) continue;
+      var frac = Math.max(-1, Math.min(1, (m.signed ? v : v) / (maxAbs || 1)));
+      var wpx = Math.abs(frac) * (m.signed ? halfW : halfW * 2) ;
+      var x = m.signed ? (frac >= 0 ? midX : midX - wpx) : padL;
+      ctx.fillStyle = m.signed ? (frac >= 0 ? css("--over") : css("--under")) : css("--under");
+      ctx.fillRect(x, y + Math.max(.5, ch * .16), Math.max(1, wpx), Math.max(1.5, ch * .68));
+    }
+
+    // zero rule / baseline
+    ctx.strokeStyle = C.ink3;
+    ctx.beginPath();
+    var bx = m.signed ? midX : padL;
+    ctx.moveTo(bx + .5, padT); ctx.lineTo(bx + .5, padT + nb * ch);
+    ctx.stroke();
+
+    ctx.font = '500 9.5px "IBM Plex Mono", monospace';
+    ctx.fillStyle = C.ink3;
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    var stepB = Math.max(1, Math.round(nb / 14));
+    for (var b3 = 0; b3 < nb; b3 += stepB) {
+      ctx.fillText(rungShort(f.buckets[b3]), padL - 6, padT + (nb - 1 - b3) * ch + ch / 2);
+    }
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(m.signed ? "under \u2190 0 \u2192 over" : m.label,
+                 padL + (g.w - padL - padR) / 2, padT + nb * ch + 5);
+
+    document.getElementById("profNote").textContent =
+      f.dates[di] + (state.pinned ? "  \u00b7 pinned" : "");
+  }
+
+  // ---------------------------------------------------------------- series
+  function renderSeries() {
+    var cv = document.getElementById("series"), g = fit(cv), ctx = g.ctx;
+    var f = fund(), C = palette();
+    var note = document.getElementById("serNote");
+    if (state.rung === null) {
+      ctx.font = '400 12px "IBM Plex Sans", sans-serif';
+      ctx.fillStyle = C.ink3; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("Click a cell on the ladder to follow that rung through time.", g.w / 2, g.h / 2);
+      note.textContent = "click a rung on the heatmap";
+      return;
+    }
+    var b = state.rung;
+    note.textContent = rungLabel(f.buckets[b]) + "  \u00b7  " + meas().label;
+
+    var padL = 52, padR = 10, padT = 10, padB = 20;
+    var n = f.dates.length - state.fromIdx;
+    var vals = [];
+    for (var d = 0; d < n; d++) vals.push(cell(d + state.fromIdx, b));
+    var fin = vals.filter(isFinite);
+    if (!fin.length) return;
+    var lo = Math.min.apply(null, fin), hi = Math.max.apply(null, fin);
+    if (meas().signed) { var a = Math.max(Math.abs(lo), Math.abs(hi)); lo = -a; hi = a; }
+    if (hi === lo) { hi += 1; lo -= 1; }
+
+    var X = function (i) { return padL + i / Math.max(1, n - 1) * (g.w - padL - padR); };
+    var Y = function (v) { return padT + (1 - (v - lo) / (hi - lo)) * (g.h - padT - padB); };
+
+    if (meas().signed) {
+      ctx.strokeStyle = C.rule;
+      ctx.beginPath(); ctx.moveTo(padL, Y(0)); ctx.lineTo(g.w - padR, Y(0)); ctx.stroke();
+    }
+
+    ctx.strokeStyle = C.accent;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    var started = false;
+    for (var i = 0; i < n; i++) {
+      if (!isFinite(vals[i])) { started = false; continue; }
+      if (!started) { ctx.moveTo(X(i), Y(vals[i])); started = true; }
+      else ctx.lineTo(X(i), Y(vals[i]));
+    }
+    ctx.stroke();
+
+    // emphasised endpoint
+    var lastI = -1;
+    for (var j = n - 1; j >= 0; j--) if (isFinite(vals[j])) { lastI = j; break; }
+    if (lastI >= 0) {
+      ctx.fillStyle = C.accent;
+      ctx.beginPath(); ctx.arc(X(lastI), Y(vals[lastI]), 3, 0, Math.PI * 2); ctx.fill();
+    }
+
+    ctx.font = '500 9.5px "IBM Plex Mono", monospace';
+    ctx.fillStyle = C.ink3; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.fillText(num(hi, meas().dp), padL - 6, Y(hi) + 4);
+    ctx.fillText(num(lo, meas().dp), padL - 6, Y(lo) - 4);
+  }
+
+  // ---------------------------------------------------------------- readout
+  function showReadout(evt, di, bi) {
+    var el = document.getElementById("readout");
+    var f = fund(), bs = basis();
+    var host = document.getElementById("heat").getBoundingClientRect();
+    var a = (bs.active_bp[di] || [])[bi], z = (bs.z[di] || [])[bi];
+    var wf = (bs.w_f_bp[di] || [])[bi], wi = (bs.w_i_bp[di] || [])[bi];
+    var nh = (f.n_held[di] || [])[bi];
+    el.innerHTML =
+      "<em>" + f.dates[di] + "</em> &middot; rung " + f.buckets[bi] + "<br>" +
+      "<k>maturity</k> " + rungLabel(f.buckets[bi]) + "<br>" +
+      "<k>fund</k> " + (wf == null ? "\u2014" : num(wf / 10 / 100, 2) + "%") +
+      "  <k>index</k> " + (wi == null ? "\u2014" : num(wi / 10 / 100, 2) + "%") + "<br>" +
+      "<k>active</k> <em>" + (a == null ? "\u2014" : num(a / 10, 1) + " bp") + "</em>" +
+      "  <k>z</k> " + (z == null ? "\u2014" : num(z / 100, 2) + "\u03c3") + "<br>" +
+      "<k>bonds held</k> " + (nh == null ? "\u2014" : nh);
+    el.classList.add("on");
+    var x = evt.clientX - host.left + 14, y = evt.clientY - host.top + 14;
+    if (x + 210 > host.width) x = evt.clientX - host.left - 210;
+    if (y + 92 > host.height) y = evt.clientY - host.top - 92;
+    el.style.left = Math.max(0, x) + "px";
+    el.style.top = Math.max(0, y) + "px";
+  }
+
+  function hitTest(evt) {
+    var cv = document.getElementById("heat"), r = cv.getBoundingClientRect();
+    var px = evt.clientX - r.left, py = evt.clientY - r.top;
+    if (HEAT.cw <= 0) return null;
+    var d = Math.floor((px - HEAT.x0) / HEAT.cw);
+    var bFromTop = Math.floor((py - HEAT.y0) / HEAT.ch);
+    var b = HEAT.nb - 1 - bFromTop;
+    if (d < 0 || d >= HEAT.n || b < 0 || b >= HEAT.nb) return null;
+    return { d: d + state.fromIdx, b: b };
+  }
+
+  // ---------------------------------------------------------------- wiring
+  function seg(id, key, after) {
+    var host = document.getElementById(id);
+    host.addEventListener("click", function (e) {
+      var btn = e.target.closest("button[data-v]");
+      if (!btn) return;
+      state[key] = btn.dataset.v;
+      Array.prototype.forEach.call(host.querySelectorAll("button"), function (b) {
+        b.setAttribute("aria-pressed", String(b === btn));
+      });
+      if (after) after();
+      renderAll();
+    });
+  }
+
+  function syncYear() {
+    var f = fund();
+    var years = [];
+    f.dates.forEach(function (d) { var y = d.slice(0, 4); if (years.indexOf(y) < 0) years.push(y); });
+    var sl = document.getElementById("fromYear");
+    sl.min = 0; sl.max = Math.max(0, years.length - 2); sl.value = 0;
+    sl._years = years;
+    document.getElementById("fromYearLbl").textContent = years[0];
+    state.fromIdx = 0;
+  }
+
+  document.getElementById("fromYear").addEventListener("input", function () {
+    var f = fund(), years = this._years || [], y = years[+this.value];
+    if (!y) return;
+    document.getElementById("fromYearLbl").textContent = y;
+    for (var i = 0; i < f.dates.length; i++) {
+      if (f.dates[i].slice(0, 4) === y) { state.fromIdx = i; break; }
+    }
+    if (state.pinned && state.pinned.d < state.fromIdx) state.pinned = null;
+    renderAll();
+  });
+
+  var heat = document.getElementById("heat");
+  heat.addEventListener("mousemove", function (e) {
+    var h = hitTest(e);
+    if (!h) { document.getElementById("readout").classList.remove("on"); state.hover = null; renderHeat(); renderProfile(); renderStats(); return; }
+    state.hover = h;
+    showReadout(e, h.d, h.b);
+    document.getElementById("heatNote").textContent =
+      fund().dates[h.d] + "  \u00b7  " + rungLabel(fund().buckets[h.b]);
+    renderHeat(); renderProfile(); renderStats();
+  });
+  heat.addEventListener("mouseleave", function () {
+    document.getElementById("readout").classList.remove("on");
+    state.hover = null;
+    document.getElementById("heatNote").textContent = state.pinned ? "pinned" : "hover a cell";
+    renderHeat(); renderProfile(); renderStats();
+  });
+  heat.addEventListener("click", function (e) {
+    var h = hitTest(e);
+    if (!h) return;
+    state.pinned = (state.pinned && state.pinned.d === h.d && state.pinned.b === h.b) ? null : h;
+    state.rung = state.pinned ? h.b : state.rung;
+    renderAll();
+  });
+
+  seg("segBasis", "basis");
+  seg("segMeasure", "measure");
+
+  function renderAll() { renderStats(); renderHeat(); renderProfile(); renderSeries(); }
+
+  var rt;
+  window.addEventListener("resize", function () {
+    clearTimeout(rt); rt = setTimeout(renderAll, 120);
+  });
+  // The canvases read their colours from the CSS tokens at draw time, so a theme
+  // change has to redraw them -- CSS alone cannot repaint a bitmap.
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    (mq.addEventListener ? mq.addEventListener.bind(mq, "change") : mq.addListener.bind(mq))(renderAll);
+  }
+  new MutationObserver(renderAll).observe(document.documentElement,
+    { attributes: true, attributeFilter: ["data-theme"] });
+
+  document.getElementById("cologen").textContent = "Built " + DATA.generated;
+  buildRail();
+  syncYear();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(renderAll);
+  renderAll();
+})();
+</script>
