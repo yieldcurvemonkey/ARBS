@@ -46,11 +46,12 @@ import io
 import random
 import re
 import time
-from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
 import requests
+
+from MDP.ETFHoldings.providers import _base
 
 BASE_URL = (
     "https://www.blackrock.com/varnish-api/blk-one01-product-data/product-data/api/v1"
@@ -81,20 +82,14 @@ _RE_SHARES = re.compile(r'Shares Outstanding,"?([\d,\.]+)"?')
 _RE_HEADER = re.compile(r"^Name,Sector,Asset Class,", re.MULTILINE)
 
 
-@dataclass(frozen=True)
-class HoldingsFile:
-    """One published holdings document, already parsed."""
-
-    ticker: str
-    as_of: datetime.date          # the date the DOCUMENT claims, not the one requested
-    requested: datetime.date
-    shares_outstanding: float
-    content_sha1: str
-    frame: pd.DataFrame
-
-
-class FetchError(RuntimeError):
-    pass
+#: The record, the exceptions and the refusal set now live in ``_base`` so that the three
+#: issuers raise ONE ``Blocked`` and return ONE ``HoldingsFile``. They are re-exported
+#: under their original names because ``tests/test_etf_rebalance.py`` and
+#: ``tests/_mutate_etf_rebalance.py`` refer to ``ishares.Blocked`` /
+#: ``ishares.BLOCKED_STATUSES``, and because a caller that catches
+#: ``ishares.Blocked`` must also catch a refusal raised by the SSGA or Vanguard path.
+HoldingsFile = _base.HoldingsFile
+FetchError = _base.FetchError
 
 
 def parse(text: str, *, ticker: str, requested: datetime.date) -> Optional[HoldingsFile]:
@@ -153,11 +148,8 @@ def parse(text: str, *, ticker: str, requested: datetime.date) -> Optional[Holdi
 #: completion, exited 0, and produced a manifest that resume would have honoured. The
 #: block is IP-level and outlasts a four-attempt backoff, so a refusal has to
 #: **propagate as an exception** and stop the run rather than be absorbed into the data.
-BLOCKED_STATUSES = frozenset({403, 429, 500, 502, 503, 504})
-
-
-class Blocked(FetchError):
-    """The host refused the request. Distinct from "there is no file for this date"."""
+BLOCKED_STATUSES = _base.BLOCKED_STATUSES
+Blocked = _base.Blocked
 
 
 def fetch(

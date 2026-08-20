@@ -20,11 +20,21 @@ each one separately, and benches an exit that is refused instead of retrying int
 Aggregate throughput is ``n_exits x per_exit_rate``; the per-IP rate stays well under
 what tripped the block.
 
+**A snapshot is not a backfill, and the runner must know the difference.** iShares serves
+a file for any date you name. SSGA serves one workbook -- the current one -- and Vanguard
+accepts an ``asOfDate`` parameter and ignores it, answering 200 with a different date in
+the body. Looping either over a decade of business days would make ~2,500 requests that
+all return the same document, and would write 2,500 manifest rows pointing at one
+``as_of``. :func:`backfill_ticker` therefore REFUSES a fund whose spec says
+``history="current_only"`` and :func:`snapshot_ticker` takes it instead: one request per
+run, keyed on the document's own date, so a panel accumulates forward one day at a time.
+
 Plans
 -----
 ``--plan`` names a prioritised set, so the funds the study actually needs land first and
 an interrupted run has produced the useful half rather than a uniform tenth of
-everything.
+everything. ``--plan multi_issuer`` is the snapshot set; it is cheap (three requests) and
+is the one that wants running on a daily schedule.
 """
 
 from __future__ import annotations
@@ -36,6 +46,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
 os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
 
@@ -45,21 +56,24 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..", "..")))
 
 from MDP.ETFHoldings import store  # noqa: E402
-from MDP.ETFHoldings.providers import ishares  # noqa: E402
 from MDP.ETFHoldings.proxy_pool import ProxyPool  # noqa: E402
-from MDP.ETFHoldings.universe import REGISTRY, spec  # noqa: E402
+from MDP.ETFHoldings.universe import REGISTRY, provider_module, spec  # noqa: E402
 
 #: (ticker, start) in priority order. TLT and TLH get the full history because the
 #: long-end micro-RV study is the point and ten years doubles its statistical power;
 #: everything else gets the five years the study window needs.
+#:
+#: The start date in ``multi_issuer`` is inert -- those three funds are ``current_only``
+#: and get one request each -- but it is carried so every plan has one shape.
 PLANS: dict[str, list[tuple[str, str]]] = {
     "long_end": [("TLT", "2016-01-01"), ("TLH", "2016-01-01"), ("GOVZ", "2020-09-22")],
     "ladder": [("GOVT", "2018-01-01"), ("IEF", "2018-01-01"),
                ("IEI", "2018-01-01"), ("SHY", "2018-01-01")],
     "term": [("IBTH", "2020-03-03"), ("IBTG", "2020-03-03"), ("IBTI", "2020-03-03"),
              ("IBTJ", "2020-03-03"), ("IBTK", "2021-06-08")],
+    "multi_issuer": [("SPTL", "2026-08-20"), ("VGLT", "2026-08-20"), ("EDV", "2026-08-20")],
 }
-PLANS["all"] = PLANS["long_end"] + PLANS["ladder"] + PLANS["term"]
+PLANS["all"] = PLANS["long_end"] + PLANS["ladder"] + PLANS["term"] + PLANS["multi_issuer"]
 
 _print_lock = threading.Lock()
 
@@ -81,6 +95,99 @@ def business_days(start: datetime.date, end: datetime.date) -> list[datetime.dat
     ]
 
 
+def _manifest_row(d: datetime.date, hf=None) -> dict:
+    """One attempt, recorded. ``hf=None`` is a 200 that carried no holdings document.
+
+    Only ever called for an answer. A refusal never reaches here -- that is the whole
+    point of the provider raising :class:`Blocked` -- because a manifest row is a claim
+    that the endpoint was asked and had nothing, and resume honours that claim.
+
+    ``requested_date`` is ``d``, the date THIS RUN asked for, never ``hf.requested``.
+    They coincide for iShares. They do not for a snapshot: the provider defaults its
+    ``requested`` to ``date.today()`` while the runner may be keying the attempt on a
+    different day, and a manifest whose key disagrees with the resume check silently
+    re-requests (or silently skips) every run.
+    """
+    if hf is None:
+        return {"requested_date": pd.Timestamp(d), "as_of": pd.NaT,
+                "content_sha1": None, "n_rows": 0,
+                "shares_outstanding": float("nan"),
+                "fetched_at": pd.Timestamp.utcnow().tz_localize(None)}
+    return {"requested_date": pd.Timestamp(d),
+            "as_of": pd.Timestamp(hf.as_of),
+            "content_sha1": hf.content_sha1, "n_rows": len(hf.frame),
+            "shares_outstanding": hf.shares_outstanding,
+            "fetched_at": pd.Timestamp.utcnow().tz_localize(None)}
+
+
+def fetch_one(sp, d: datetime.date, *, pool: ProxyPool, max_attempts: int = 6):
+    """Dispatch to the issuer's provider. All three share one call shape by design.
+
+    ``fetch(fund_id, date, *, ticker, pool, max_attempts)``: for iShares the second
+    argument is the date requested on the wire; for the current-only issuers it is
+    bookkeeping the provider compares against the document and warns about. Nothing here
+    branches on issuer, so adding a fourth is a registry entry and a module, not an
+    edit to the runner.
+    """
+    mod = provider_module(sp)
+    return mod.fetch(sp.fund_id, d, ticker=sp.ticker, pool=pool, max_attempts=max_attempts)
+
+
+def snapshot_ticker(
+    ticker: str,
+    *,
+    pool: ProxyPool,
+    force: bool = False,
+    on_date: Optional[datetime.date] = None,
+) -> dict:
+    """One request for a fund whose issuer publishes only its current holdings.
+
+    Keyed on the document's own ``as_of``, so re-running on a day when the issuer has not
+    published anything new re-stores the same rows onto the same date (idempotent, by
+    ``store.append_holdings``' ["date", "CUSIP"] dedupe) rather than inventing a second
+    observation of it. The content hash is reported against the previous attempt so a
+    re-serve is visible: for a month-end publisher like Vanguard, roughly twenty of every
+    twenty-one daily runs are re-serves and that is expected, not a fault.
+
+    A refusal is counted and returned; it does NOT write a manifest row.
+    """
+    sp = spec(ticker)
+    if not sp.is_snapshot_only:
+        raise ValueError(
+            f"{ticker} is history={sp.history!r} -- it has a dated endpoint. Use "
+            f"backfill_ticker, which will fetch its real history."
+        )
+    today = on_date or datetime.date.today()
+    man = store.read_manifest(ticker)
+    if not force and today in store.attempted_dates(ticker):
+        _say(f"[{ticker}] snapshot for {today} already attempted; --force to re-request")
+        return {"ticker": ticker, "requested": 0, "stored": 0, "no_file": 0, "blocked": 0}
+
+    t0 = time.time()
+    try:
+        hf = provider_module(sp).fetch(sp.fund_id, ticker=ticker, pool=pool, max_attempts=6)
+    except Exception as exc:
+        where = f"   pool: {pool.status()}" if pool is not None else ""
+        _say(f"[{ticker}] REFUSED {type(exc).__name__}: {exc}{where}")
+        return {"ticker": ticker, "requested": 1, "stored": 0, "no_file": 0, "blocked": 1}
+
+    if hf is None:
+        store.write_manifest(ticker, [_manifest_row(today)])
+        _say(f"[{ticker}] 200 but no holdings document ({time.time() - t0:.1f}s)")
+        return {"ticker": ticker, "requested": 1, "stored": 0, "no_file": 1, "blocked": 0}
+
+    prev = None
+    if not man.empty and "content_sha1" in man.columns:
+        s = man.dropna(subset=["content_sha1"])
+        prev = s.sort_values("requested_date")["content_sha1"].iloc[-1] if not s.empty else None
+    store.append_holdings(ticker, [hf.frame])
+    store.write_manifest(ticker, [_manifest_row(today, hf)])
+    tag = "UNCHANGED re-serve" if prev == hf.content_sha1 else "new document"
+    _say(f"[{ticker}] as_of {hf.as_of} ({sp.cadence}, {tag})  {len(hf.frame):,} rows  "
+         f"{time.time() - t0:.1f}s")
+    return {"ticker": ticker, "requested": 1, "stored": 1, "no_file": 0, "blocked": 0}
+
+
 def backfill_ticker(
     ticker: str,
     start: datetime.date,
@@ -92,6 +199,12 @@ def backfill_ticker(
     force: bool = False,
 ) -> dict:
     sp = spec(ticker)
+    if sp.is_snapshot_only:
+        raise ValueError(
+            f"{ticker} ({sp.issuer}) publishes only its CURRENT holdings -- there is no "
+            f"date parameter that works. Looping it over a business-day grid would make "
+            f"one request per day for the same document. Use snapshot_ticker()."
+        )
     lo = max(start, sp.inception)
     grid = business_days(lo, end)
     done = set() if force else store.attempted_dates(ticker)
@@ -117,7 +230,7 @@ def backfill_ticker(
         frames, manifest_rows = [], []
 
     def one(d: datetime.date):
-        return d, ishares.fetch(sp.fund_id, d, ticker=ticker, pool=pool, max_attempts=6)
+        return d, fetch_one(sp, d, pool=pool, max_attempts=6)
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(one, d) for d in todo]
@@ -134,22 +247,11 @@ def backfill_ticker(
             with lock:
                 if hf is None:
                     counts["no_file"] += 1
-                    manifest_rows.append({
-                        "requested_date": pd.Timestamp(d), "as_of": pd.NaT,
-                        "content_sha1": None, "n_rows": 0,
-                        "shares_outstanding": float("nan"),
-                        "fetched_at": pd.Timestamp.utcnow().tz_localize(None),
-                    })
+                    manifest_rows.append(_manifest_row(d))
                 else:
                     counts["stored"] += 1
                     frames.append(hf.frame)
-                    manifest_rows.append({
-                        "requested_date": pd.Timestamp(hf.requested),
-                        "as_of": pd.Timestamp(hf.as_of),
-                        "content_sha1": hf.content_sha1, "n_rows": len(hf.frame),
-                        "shares_outstanding": hf.shares_outstanding,
-                        "fetched_at": pd.Timestamp.utcnow().tz_localize(None),
-                    })
+                    manifest_rows.append(_manifest_row(d, hf))
 
                 if len(manifest_rows) >= flush_every:
                     _flush_locked()
@@ -201,8 +303,18 @@ def main(argv=None) -> int:
         if t not in REGISTRY:
             _say(f"[{t}] not in registry, skipping")
             continue
+        sp = spec(t)
         try:
-            results.append(backfill_ticker(t, s, end, pool=pool, workers=workers, force=a.force))
+            if sp.is_snapshot_only:
+                # One request. The date on the command line is inert for these funds and
+                # saying so is cheaper than letting an operator believe --start worked.
+                if s > end or a.start != "2021-01-01":
+                    _say(f"[{t}] {sp.issuer} publishes CURRENT holdings only; --start/--end "
+                         f"are ignored. Taking one snapshot.")
+                results.append(snapshot_ticker(t, pool=pool, force=a.force, on_date=end))
+            else:
+                results.append(backfill_ticker(t, s, end, pool=pool, workers=workers,
+                                               force=a.force))
         except Exception as exc:
             _say(f"[{t}] FATAL {type(exc).__name__}: {exc}")
             results.append({"ticker": t, "requested": 0, "stored": 0, "no_file": 0, "blocked": -1})
