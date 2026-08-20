@@ -1098,10 +1098,18 @@ a weighting error, nor residual duration.
 
 What remains is the **decomposition**: the QDB books coupon cash and realized closes into
 `bond_realized` and marks the rest at dirty NPV, while the fast engine folds all of it into one
-yield-space carry term. The two therefore agree on the **level** of a book — which is the
-conclusion this notebook draws — and disagree on the **path**. The measured daily-change
-correlation is around 0.45. That is a real limitation of the cross-check, stated rather than
-smoothed over: it confirms the book, not the day.
+yield-space carry term. On a common basis the two agree to **0.05bp on the level** over the window
+with a **daily-change correlation of 0.71**; the residual days are coupon dates, where the two
+methods place the same cash differently in time.
+
+> **How this number was nearly reported wrong.** The first version of this comparison measured a
+> correlation of 0.45 and concluded that the two marking models simply disagree on the path. They
+> do, but less than that: `price_basis="eod"` was **inert**. `prepare_universe` repriced the panel,
+> while every price column the universe actually uses comes from the *holdings join*, which was
+> untouched — so the two bases produced books identical to six decimal places and the "common
+> basis" comparison was still mid-against-eod. Wiring it properly took the correlation from 0.45 to
+> 0.71 and the level gap from 0.44bp to 0.05bp. A knob that changes nothing reads exactly like a
+> knob that works, which is why there is now a test asserting that this one bites.
 """)
 
 code(r"""

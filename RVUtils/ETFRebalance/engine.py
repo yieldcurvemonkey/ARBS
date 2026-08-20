@@ -192,7 +192,15 @@ def prepare_universe(
         # A genuine alternative basis, not a fallback: FedInvest's eod and its quoted
         # range disagree by many spread widths and neither is stale, so the study is
         # required to survive the swap rather than to assume it away.
+        #
+        # BOTH frames, and that is the whole point. ``with_active_weight`` takes the
+        # benchmark weights from ``p`` but every price column -- ytm, mod_dur, convexity
+        # -- from the HOLDINGS join ``j``. Repricing only ``p`` therefore changed the
+        # index weights and left the yields alone, and the two bases produced books that
+        # were identical to six decimal places: the knob read as working and tested
+        # nothing, while the two series genuinely differ by a median of 1.07bp.
         p = _reprice_on_eod(p)
+        j = _reprice_on_eod(j)
 
     lo = u["ttm_min"] if u["ttm_min"] is not None else (sp.band_low or 0.0)
     hi = u["ttm_max"] if u["ttm_max"] is not None else (sp.band_high or 1e9)

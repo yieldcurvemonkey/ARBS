@@ -137,7 +137,12 @@ def build(
     f = floats if floats is not None else FP.load()
     p = FP.asof_join(p, f)
 
+    # ``ytm_eod``/``mod_dur_eod``/``convexity_eod`` are carried through deliberately.
+    # The universe's prices come from THIS join, not from the panel the caller may have
+    # repriced, so without them a ``price_basis="eod"`` request silently produced an
+    # identical book -- the knob looked like it worked and tested nothing.
     cols = ["date", "cusip", "ytm", "mod_dur", "convexity", "clean_price", "eod_price",
+            "ytm_eod", "mod_dur_eod", "convexity_eod",
             "spread_price_bp", "spread_yield_bp", "price_source", "yield_gate_fail",
             "ttm", "age", "cpn", "issue_date", "maturity_date", "rank", "oi",
             "dv01_per_mm", "outstanding_amt", "soma_holdings", "free_float",

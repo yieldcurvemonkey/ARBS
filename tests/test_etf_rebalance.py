@@ -510,6 +510,50 @@ def test_the_same_belly_is_never_open_twice():
         assert (g["opened_at"].to_numpy()[1:] >= g["closed_at"].to_numpy()[:-1]).all()
 
 
+def test_price_basis_knob_actually_changes_the_book():
+    """A knob that changes nothing is a knob that is not wired, and it reads as a pass.
+
+    ``prepare_universe`` repriced the PANEL for ``price_basis="eod"``, but every price
+    column the universe actually uses -- ytm, mod_dur, convexity -- comes from the
+    HOLDINGS join, which was untouched. The two bases therefore produced books identical
+    to six decimal places while the underlying series differ by a median of 1.07bp, so
+    the sensitivity section compared a thing to itself and reported that the result was
+    robust. This asserts the knob bites.
+    """
+    n = 40
+    dates = pd.bdate_range("2024-01-02", periods=30)
+    rows = []
+    for d in dates:
+        for i in range(n):
+            ttm = 20.2 + 0.25 * i
+            y = 4.0 + 0.02 * (ttm - 24.0)
+            rows.append({
+                "date": d, "cusip": f"C{i:03d}", "ttm": ttm,
+                "ytm": y, "ytm_eod": y + 0.03,            # a 3bp basis difference
+                "mod_dur": 13.0 + 0.05 * i, "mod_dur_eod": 13.0 + 0.05 * i,
+                "convexity": 300.0, "convexity_eod": 300.0,
+                "clean_price": 95.0, "eod_price": 94.8,
+                "spread_price_bp": 5.0, "cpn": 4.0, "rank": 8,
+                "outstanding_amt": 2e10, "soma_holdings": 0.0, "free_float": 2e10,
+                "yield_gate_fail": False, "price_source": "mid",
+                "issue_date": pd.Timestamp("2020-01-02"),
+                "maturity_date": d + pd.Timedelta(days=int(ttm * 365.25)),
+                "par": 1e8, "mv": 1e8, "dv01_per_mm": 1450.0,
+                "shares_out": 1e6, "ticker": "TLT",
+            })
+    p = pd.DataFrame(rows)
+    p["priced"] = True
+
+    mid = EN._reprice_on_eod.__wrapped__ if hasattr(EN._reprice_on_eod, "__wrapped__") else None
+    swapped = EN._reprice_on_eod(p)
+    assert not np.allclose(swapped["ytm"], p["ytm"]), "_reprice_on_eod did not swap the yields"
+    assert np.allclose(swapped["ytm"], p["ytm_eod"]), "_reprice_on_eod swapped the wrong column"
+
+    # And it must refuse rather than silently no-op when the panel lacks the columns.
+    with pytest.raises(KeyError, match="price_basis"):
+        EN._reprice_on_eod(p.drop(columns=["ytm_eod"]))
+
+
 def test_merge_config_is_shallow_one_level_down():
     cfg = EN.merge_config({"timing": {"hold_days": 42}})
     assert cfg["timing"]["hold_days"] == 42

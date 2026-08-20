@@ -22,7 +22,7 @@ Four things exist that did not before.
 | `BT/signals/etf_rebalance.py` | The same book on `QueryDrivenBacktest`, marked at dirty NPV with coupon cash. |
 | `etf_rebalance_configurable_backtest.ipynb` | One `CONFIG` dict = one backtest. Knob sweeps, grid search, DSR, robustness, trade log. |
 
-Plus `tests/test_etf_rebalance.py` — 33 tests, every one of them **mutation-verified**: the code
+Plus `tests/test_etf_rebalance.py` — 34 tests, every one of them **mutation-verified**: the code
 each test covers was deliberately broken and the test was required to fail (see
 `tests/_mutate_etf_rebalance.py`). Three of the first five mutations were **not** caught, and fixing
 that found a genuinely weak test — a butterfly fixture with symmetric wings, where hard-coding the
@@ -334,12 +334,23 @@ non-holdings body. 2016 is complete; 2017 H1 does not exist.
 
 **A butterfly amplifies the price basis, and that is not a rounding error.** Three near-identical
 legs cancel the level and leave whatever differs between them — which includes the choice of price
-basis. Marking the same ten packages on the mid and on `eod_price` produced daily P&L that
-disagreed by **13×** on a single day of the March 2023 SVB week. Putting both sides on the same
-basis brought the level agreement to **0.011bp** over the window. The first version of the eod
-sensitivity used a first-order conversion `dy = −dP/(D·P/100)`; the panel now solves **both** bases
-exactly (`ytm`, `ytm_eod`) because the approximation's error lives precisely where the structure is
-most sensitive. Any future cash-UST butterfly study should assume the same.
+basis. The two FedInvest series differ by a median of **1.07bp** in yield, and marking the same ten
+packages on each produced daily P&L that disagreed by **13×** on a single day of the March 2023 SVB
+week. On a genuinely common basis the same 60-package book agrees to **0.05bp on the level** with a
+daily-change correlation of **0.71**.
+
+Two defects had to be removed to get there, and both are the same shape — *something that looked
+like it was working*:
+
+* the first eod conversion was first-order (`dy = −dP/(D·P/100)`), and its error lives exactly where
+  a butterfly is most sensitive; the panel now solves **both** bases exactly (`ytm`, `ytm_eod`);
+* the `price_basis` **knob itself was inert**. `prepare_universe` repriced the panel, but every
+  price column the universe uses comes from the *holdings join*, which was untouched — so the two
+  bases produced books identical to six decimal places, and the sensitivity check compared a thing
+  to itself while reporting the result as robust. Wiring it took the QDB correlation from 0.45 to
+  0.71 and the level gap from 0.44bp to 0.05bp. The headline is genuinely basis-robust
+  (gross +0.0045bp on mid, +0.0047bp on eod) — but that is now a measurement rather than an
+  artefact of a knob that did nothing.
 
 ---
 
