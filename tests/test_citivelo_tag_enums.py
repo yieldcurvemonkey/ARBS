@@ -600,6 +600,27 @@ def test_a_tag_reports_its_kind_and_whether_a_model_can_reprice_it():
     assert raw.is_repriceable is False
 
 
+def test_every_attribute_path_the_docstrings_advertise_actually_resolves():
+    """Documented paths rot silently, and this design makes rotting easy.
+
+    A node splits only above 1,024 tags, so whether ``VOL.USD.ATM_RFR.BLACK_1Y_10Y``
+    or ``VOL.USD.ATM_RFR.BLACK.N1Y_10Y`` is correct depends on how big that node
+    happens to be - and the wrong one was in the ``CitiVeloQuery`` docstring until a
+    type checker caught it. These are the exact expressions the docstrings show.
+    """
+    assert CitiVeloQuery.Tags.OIS.USD_SOFR.PAR_10Y == SOFR_10Y
+    assert CitiVeloTags.VOL.USD.ATM_RFR.BLACK_1Y_10Y == VOL_RFR
+    assert CitiVeloTags.VOL.USD.OTM_RFR.NORMALABSOLUTE.node() == (
+        "RATES.VOL.USD.OTM_RFR.NORMALABSOLUTE"
+    )
+    from Query.CitiVelocity.tag_enums import OIS  # the module-level re-export
+
+    assert OIS.USD_SOFR.PAR_10Y == SOFR_10Y
+    assert CitiVeloQuery(tag=CitiVeloTags.OIS.USD_FEDFUND.PAR_10Y).tag == (
+        "RATES.OIS.USD_FEDFUND.PAR.10Y"
+    )
+
+
 def test_verification_is_probe_residue_and_the_docstring_says_so():
     """Pinned so the near-vacuity is on the record rather than assumed away.
 

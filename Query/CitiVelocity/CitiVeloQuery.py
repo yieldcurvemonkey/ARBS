@@ -18,7 +18,13 @@ Naming a tag you can find
 catalog can name, arranged as a tree a language server can complete through::
 
     CitiVeloQuery(tag=CitiVeloQuery.Tags.OIS.USD_SOFR.PAR_10Y)
-    CitiVeloQuery(tag=CitiVeloQuery.Tags.VOL.USD.ATM_RFR.BLACK.N1Y_10Y)
+    CitiVeloQuery(tag=CitiVeloQuery.Tags.VOL.USD.ATM_RFR.BLACK_1Y_10Y)
+
+Depth varies - a node splits only once it holds more than 1,024 tags - so
+``ATM_RFR`` is a flat enum with 765 members while its ``OTM_RFR`` sibling splits
+one level further into ``NORMALABSOLUTE`` and friends. You do not have to know
+that: type the dot. ``CitiVeloQuery.Tags.find("RATES...")`` resolves any tag
+string whatever its depth.
 
 That is the same string either way - members are ``StrEnum``, and
 ``__post_init__`` normalises them to a plain ``str`` so nothing downstream can
