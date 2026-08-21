@@ -436,32 +436,58 @@ def test_3y1y_vol_is_normal_vol_in_bp_and_covers_the_window():
 
 
 @pytest.mark.skipif(not _Q20_PANEL.exists(), reason="Q20 deep-pack panel not built")
-def test_blues_coverage_is_the_binding_constraint():
-    """The finding, asserted so it cannot rot: Blues needs a contiguous
-    16-contract SR3 strip, and the local store stops supplying one after
-    mid-2023.
+def test_deep_pack_coverage_is_no_longer_the_binding_constraint():
+    """**The "2023 collapse" was a coverage artifact, and it is now repaired.**
 
-    **The upper bound was removed on 2026-08-19.** It read
-    ``480 <= len(blues) <= 530`` and the ceiling was a snapshot of a DEFECT, not
-    a property of the market: a universe gate discarded whole dates for want of
-    contracts the front packs never read, and a 103-date SR3 settle warm then
-    restored the deferred end over 2026-03..08. Blues went 503 -> 607 pack-days
-    with 2026 rising from 1 to 104. A test that pins a coverage ceiling fails the
-    moment coverage is repaired, which is backwards — so the floor stays (a
-    collapse to nothing is still a regression) and the ceiling goes.
+    This test used to assert the hole as a finding — ``by_year[2023] < 80``,
+    "the 2023 collapse is the finding", with 2024-25 also pinned below 80
+    because they lay outside a 400-call warm budget. Its own comment said what
+    to do if it ever failed upward: *"the rest of the warm has been run and the
+    docstring above needs re-measuring."* That is exactly what happened.
+
+    A 486-date deferred warm over 2020-2026 (456 dates gained depth, 451 reached
+    depth 20, 0 failures) plus a panel rebuild in a tree containing ``db95871d``
+    moved Blues from **503 to 1,358** pack-days and Golds to **1,348**:
+
+    ======  ====  ====  ====  ====  ====  ====
+    colour  2021  2022  2023  2024  2025  2026
+    ======  ====  ====  ====  ====  ====  ====
+    Reds     250   249   242   246   249   159
+    Greens   250   247   243   239   249   141
+    Blues    246   236   229   239   249   159
+    Golds    213   241   244   250   241   159
+    ======  ====  ====  ====  ====  ====  ====
+
+    So the direction of every assertion below is inverted relative to the
+    version this replaces. The lesson is worth keeping attached to the test: a
+    coverage number measured on a demand-driven cache is a statement about what
+    has been fetched, not about the market, and pinning one as a *finding* means
+    the test fails the moment the data is repaired. The floors here are set well
+    below the measured values so a genuine regression still fails, and no
+    ceiling is asserted at all.
     """
     _, fit = CF.load_ca_panel(_Q20_PANEL, start=datetime.date(2021, 1, 1),
                               end=datetime.date(2026, 8, 31))
     blues = CF.colour_frame(fit, "Blues")
-    assert len(blues) >= 480
+    assert len(blues) >= 1200, (
+        f"Blues has {len(blues)} pack-days; the repaired panel carries 1,358. A "
+        "large fall means the SR3 settle depth has decayed again."
+    )
     by_year = blues.groupby(blues.index.year).size()
-    assert by_year.loc[2021] > 200 and by_year.loc[2022] > 150
-    assert by_year.loc[2023] < 80, "the 2023 collapse is the finding"
-    # 2024-2025 remain the hole: those years were NOT warmed inside the 400-call
-    # budget, so they must still be sparse. If this ever fails upward, the rest
-    # of the warm has been run and the docstring above needs re-measuring.
-    assert by_year.get(2024, 0) < 80 and by_year.get(2025, 0) < 80
+    for y in (2021, 2022, 2023, 2024, 2025):
+        assert by_year.get(y, 0) > 200, (
+            f"Blues {y} has {by_year.get(y, 0)} pack-days; every full year of "
+            "the repaired panel carries more than 200."
+        )
+    assert by_year.get(2026, 0) > 100
     assert blues.index.max() >= pd.Timestamp("2026-01-01")
+
+    golds = CF.colour_frame(fit, "Golds")
+    assert len(golds) >= 1200, (
+        f"Golds has {len(golds)} pack-days; before the repair it was unusable "
+        "for whole years at a time, and the fix that made it usable was a node "
+        "horizon (db95871d), not a fetch."
+    )
 
 
 @pytest.mark.skipif(not _Q20_PANEL.exists(), reason="Q20 deep-pack panel not built")
