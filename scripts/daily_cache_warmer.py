@@ -840,6 +840,7 @@ def warm_citivelo_timeseries_eod(start, end):
     from TB.IRSwapsTB import IRSwapsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
 
+    _warn_unguarded_fallthrough("CitiVelo EOD timeseries")
     mdp = IRSwapsMDP(source="citivelo_excel_rl")
     tb = TimeseriesBuilder()
 
@@ -892,6 +893,7 @@ def warm_citivelo_timeseries_intraday(start, end):
     from TB.IRSwapsTB import IRSwapsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
 
+    _warn_unguarded_fallthrough("CitiVelo intraday timeseries")
     nyc = pytz.timezone("America/New_York")
     days = _business_days(start, end)
     if not days:
@@ -955,6 +957,46 @@ _CV_SWAP_SPREAD_TAGS = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD"
 
 #: Stop below this. See utils/warm_jobs.py and the 2026-08-07 wedge.
 _CV_MEMORY_CEILING_MB = 3800.0
+
+#: Whether the nightly may START Excel and wait for the add-in to sign itself in.
+#:
+#: The pre-flight used to treat "no Excel" and "Excel over the ceiling" as human
+#: problems, and on a machine nobody is sitting at they are terminal ones. Measured
+#: 2026-08-20: six of seventeen jobs failed with ``ExcelNotRunningError`` because the
+#: last process that had been using Excel closed it. Three consecutive nights, three
+#: different causes -- a batch-0 abort, a 12,501 MB ceiling refusal, then no Excel at
+#: all -- and only the middle one had anything to do with this repo's code.
+#:
+#: ``supervisor`` already knows how to fix both, and its launch path is measured
+#: rather than assumed: ``launch_excel`` uses ShellExecute, i.e. exactly what
+#: double-clicking the anchor workbook does, and on 2026-08-09 with everything else
+#: held equal the ShellExecute instance signed in while a ``Popen`` one accepted the
+#: click and did nothing. That is the distinction the old pre-flight message got
+#: wrong: a COM-spawned Excel never registers the ``CV*`` UDFs, but a
+#: ShellExecute'd one is an ordinary user session and does. Measured again
+#: 2026-08-20 across three fresh launches during a multi-hour backfill: signed in
+#: every time, 2.8 min, one Login press.
+#:
+#: Set to 0 to restore the old refuse-and-wait-for-a-human behaviour.
+_CV_EXCEL_AUTOSTART = os.environ.get("ARBS_WARM_EXCEL_AUTOSTART", "1").strip().lower() not in {
+    "0", "false", "f", "no", "n", "off",
+}
+
+#: How long to wait for the add-in to authenticate. Saved credentials resume in
+#: about half a minute once the login pane is open, but the pane's handler is inert
+#: until roughly four minutes after launch, so the wait has to outlast that. Measured
+#: sign-ins have taken 2.8 min; the connect path's own docstring records ~13 for a
+#: cold one. 15 minutes sits above both and well inside a nightly envelope that runs
+#: 1 h 26 m to 2 h 52 m. It is a WALL CLOCK, not a retry count: the failure mode this
+#: has to avoid is the one that wedged 2026-08-20's run for two hours, a COM retry
+#: loop with no deadline at all.
+_CV_SIGNIN_TIMEOUT_S = float(os.environ.get("ARBS_WARM_EXCEL_SIGNIN_TIMEOUT", "900"))
+
+#: One repair per process, ever. A leaking add-in must not be able to turn this into
+#: a restart loop that spends the whole night rescuing and relaunching an Excel that
+#: grows past the ceiling again each time. If one attempt does not produce a usable
+#: session, the run says so and the Velocity jobs are SKIPPED exactly as before.
+_EXCEL_REPAIR_ATTEMPTED = False
 
 #: The bonds warmed daily. On-the-run and first three off-the-runs across the
 #: curve, expressed as ISINs at run time via the alias table, plus whatever the
@@ -1023,6 +1065,125 @@ def _excel_unavailable_errors():
     return (ExcelTooLargeError, ExcelNotRunningError, AddInNotSignedInError)
 
 
+#: This run's pre-flight verdict, so a job can ask without re-probing.
+#:
+#: THE GUARD WAS A FENCE WITH A GATE NEXT TO IT, and this is that gate. Measured
+#: on 2026-08-19: Excel was at 12,501 MB, all three ``needs_excel`` jobs refused
+#: to connect - and then jobs 12, 14 and 15 connected to the SAME Excel and
+#: fetched live. 382 tag-cache parquets were written between 19:24:00 and
+#: 20:07:00, one of them
+#: ``MI01/CLOSE/RATES.OIS.USD_SOFR.PAR.10Y.meta.json`` carrying
+#: ``"fetched_at": "2026-08-19T20:06:22"`` over data stamped 20:05 that evening.
+#: A ceiling three jobs honour and four walk past is decorative.
+#:
+#: The seam is documented a hundred lines above and was enforced only by job
+#: ORDER: "the Velocity sources read their numbers from the tag cache and fall
+#: through to LIVE EXCEL on a miss". Ordering survives a provider that FAILS; it
+#: does not survive one that is SKIPPED, because the consumer still runs and the
+#: cache still misses.
+_EXCEL_BLOCKED = None
+
+
+def _excel_is_blocked():
+    """Why no Velocity job may connect this run, or ``None``."""
+    return _EXCEL_BLOCKED
+
+
+def _warn_unguarded_fallthrough(what):
+    """Say out loud that this job can still reach live Excel on a cache miss.
+
+    NOT a guard, and deliberately named so nobody reads it as one. Three of the
+    four fall-through jobs go through ``IRSwapsMDP``, whose ``offline`` flag is a
+    per-REQUEST kwarg consumed by the Velocity fetcher rather than a constructor
+    setting a ``TimeseriesBuilder`` run could reach - so the one-line fix applied
+    to the FRB values job has no equivalent here, and inventing one against an
+    unverified kwarg would be a guard that silently is not one.
+
+    Until that is closed properly, the seam is at least ATTRIBUTABLE: if these
+    jobs write tag parquets on a night the ceiling refused the store warms, this
+    line is in the log above it.
+    """
+    blocked = _excel_is_blocked()
+    if blocked:
+        log.warning(
+            "  %s reads the tag cache and falls through to LIVE EXCEL on a miss, "
+            "and Excel is not usable this run (%s). This job is NOT guarded - "
+            "measured 2026-08-19, four jobs like it wrote 382 tag parquets while "
+            "every guarded job had refused. Watch for tag-cache writes after this "
+            "line.", what, blocked,
+        )
+
+
+def _repair_excel(reason: str, *, over_ceiling: bool):
+    """Try ONCE to give this run a signed-in Excel. ``None`` on success, else why not.
+
+    Two situations, two different repairs, and the difference matters because one of
+    them can destroy the user's work:
+
+    * **Nothing running.** Launch and wait. Nothing to lose, so nothing to rescue.
+    * **Over the ceiling.** ``restart_excel`` RESCUES FIRST -- a dirty workbook with a
+      path is saved in place, one without is saved into the recovery directory and the
+      path logged -- and if a rescue fails it aborts the restart and leaves Excel alone.
+      ``force=True`` overrides that and is never passed here. ``EXCEL.EXE`` is the
+      user's application, and a warm that discards someone's unsaved ``Book5`` to save
+      itself twenty minutes has made a bad trade on their behalf.
+
+    Never raises. The caller's contract is a reason string or ``None``, and a repair
+    that throws would convert a SKIPPED Velocity block into a FAILED run -- the exact
+    misreporting the SKIPPED/FAILED split exists to prevent.
+    """
+    global _EXCEL_REPAIR_ATTEMPTED
+
+    if not _CV_EXCEL_AUTOSTART:
+        return f"{reason} (autostart is off: ARBS_WARM_EXCEL_AUTOSTART=0)"
+    if _EXCEL_REPAIR_ATTEMPTED:
+        return f"{reason}; a repair was already attempted this run and did not stick"
+    _EXCEL_REPAIR_ATTEMPTED = True
+
+    try:
+        from MDP.CitiVelocityExcel import supervisor
+        from MDP.CitiVelocityExcel.memory_guard import excel_memory_mb
+    except Exception as exc:  # noqa: BLE001 - the eleven non-Velocity jobs must still run
+        return f"{reason}; the supervisor will not import ({exc})"
+
+    t0 = time.perf_counter()
+    try:
+        if over_ceiling:
+            log.warning("Excel pre-flight: %s -- restarting it (rescuing first, force=False)",
+                        reason)
+            client = supervisor.restart_excel(ready_timeout=_CV_SIGNIN_TIMEOUT_S, logger=log)
+        else:
+            log.warning("Excel pre-flight: %s -- starting it and waiting for sign-in", reason)
+            supervisor.launch_excel(logger=log)
+            client = supervisor.wait_for_addin(
+                timeout=_CV_SIGNIN_TIMEOUT_S, press_login=True, logger=log
+            )
+    except Exception as exc:  # noqa: BLE001 - a failed repair is a SKIP, not a crash
+        return (f"{reason}; tried to fix it and could not after "
+                f"{time.perf_counter() - t0:.0f}s ({type(exc).__name__}: {exc})")
+
+    if client is None:
+        return f"{reason}; the repair returned no client after {time.perf_counter() - t0:.0f}s"
+
+    # Re-probe rather than trust the repair. ``wait_for_addin`` proves the add-in
+    # ANSWERS; it says nothing about how big the process is, and a restart that
+    # relands above the ceiling must still block -- otherwise this has replaced a
+    # refusal with a connection to exactly the state the ceiling exists to refuse.
+    try:
+        mb = excel_memory_mb()
+    except Exception as exc:  # noqa: BLE001
+        return f"repaired Excel but could not re-probe its memory ({exc})"
+    if mb is None or mb <= 0.0:
+        return "repaired Excel but the memory probe still cannot see a running instance"
+    if mb >= _CV_MEMORY_CEILING_MB:
+        return (f"repaired Excel but it came back at {mb:.0f} MB, still at or above the "
+                f"{_CV_MEMORY_CEILING_MB:.0f} MB ceiling")
+
+    log.info("Excel pre-flight: repaired in %.1f min, now at %.0f MB and signed in",
+             (time.perf_counter() - t0) / 60.0, mb)
+    return None
+
+
 def _excel_preflight():
     """Ask ONCE whether the Excel jobs can run. ``None`` means go.
 
@@ -1087,16 +1248,24 @@ def _excel_preflight():
             "then no Velocity job can be allowed to connect"
         )
     if mb <= 0.0:
-        return (
-            "no Excel is running, so no Velocity job can work. The bridge attaches "
-            "to a human-authenticated Excel and never spawns one, because a spawned "
-            "instance never registers the CV* UDFs"
+        # NOT "a human must open Excel" any more. The bridge still never spawns an
+        # instance over COM -- one of those does not register the CV* UDFs -- but
+        # ``supervisor.launch_excel`` does not spawn over COM. It ShellExecutes the
+        # anchor workbook, which is an ordinary user session, and that instance signs
+        # itself in from saved credentials.
+        return _repair_excel(
+            "no Excel is running, so no Velocity job can work",
+            over_ceiling=False,
         )
     if mb >= _CV_MEMORY_CEILING_MB:
-        return (
+        # "Only a human restart shrinks it" was true of the memory and false of the
+        # human: ``supervisor.restart_excel`` performs exactly that restart, rescuing
+        # unsaved work before it quits and refusing to proceed if a rescue fails.
+        return _repair_excel(
             f"Excel is at {mb:.0f} MB, at or above the {_CV_MEMORY_CEILING_MB:.0f} MB "
-            "ceiling. Only a human restart shrinks it - the add-in's memory only ever "
-            "grows, and it wedged at 5,249 MB on 2026-08-07"
+            "ceiling (the add-in's memory only ever grows, and it wedged at 5,249 MB "
+            "on 2026-08-07)",
+            over_ceiling=True,
         )
     log.info("Excel pre-flight: %.0f MB, under the %.0f MB ceiling - Velocity jobs may run",
              mb, _CV_MEMORY_CEILING_MB)
@@ -1213,7 +1382,9 @@ def warm_citivelo_ust_universe_intraday(start, end):
     nothing it fetches is cached - the first version of this warm "succeeded" on
     349 bonds and left zero MI01 files on disk. See ``_warm_intraday``.
     """
-    from scripts.citivelo_ust_universe_warm import warm
+    from scripts.citivelo_ust_universe_warm import (
+        DEPTH_BUDGET_S, DEPTH_TARGET_DAYS, backfill_depth, warm,
+    )
 
     days = int(os.environ.get("CITIVELO_UST_INTRADAY_DAYS", "2"))
     out = warm("intraday", start=end - datetime.timedelta(days=days), end=end,
@@ -1223,6 +1394,74 @@ def warm_citivelo_ust_universe_intraday(start, end):
             f"UST universe intraday warm stopped after {out['done']}/{out['of']} bonds: "
             f"{out['reason']}. Progress is in the manifest; re-run to continue."
         )
+
+    # DEPTH, after the current window and never instead of it.
+    #
+    # The rolling window above walks forward and only forward, so on its own this
+    # job can never hold more than `days` of history no matter how many nights it
+    # runs - measured on the real cache, one window banked 2026-08-04..08-07 and
+    # never extended in the twelve days since. The backwards pass is what turns
+    # "MI01 for the entire UST universe" from a nightly snapshot into an
+    # accumulating series. It is deliberately second: a night that spends its
+    # whole budget going backwards and never warmed today would be a regression.
+    #
+    # A spent budget is the EXPECTED end of this pass and is logged, not raised.
+    # The forward warm above raises on `stopped` because a partial forward warm
+    # means today is missing; a partial backwards pass means only that the target
+    # is one night further away, which is the design.
+    depth_days = int(os.environ.get("CITIVELO_UST_DEPTH_DAYS", DEPTH_TARGET_DAYS))
+    if depth_days <= 0:
+        log.info("  depth backfill disabled (CITIVELO_UST_DEPTH_DAYS=%d)", depth_days)
+    else:
+        budget = float(os.environ.get("CITIVELO_UST_DEPTH_BUDGET_S", DEPTH_BUDGET_S))
+        # NOTHING the backwards pass does may escape this block, and the reason
+        # is the line after it rather than tidiness.
+        #
+        # ``backfill_depth`` opens with its own ``assert_safe_to_connect``, which
+        # can raise ``ExcelTooLargeError`` in the seconds between the forward
+        # warm's last between-batch check and this call - Excel grows without
+        # anyone here touching it (1,918 -> 12,501 MB overnight on 08-18/19 with
+        # no cron job connected). Left to propagate, the runner's
+        # ``except excel_errors`` would label the WHOLE job SKIPPED, disowning a
+        # forward warm that had already succeeded, and
+        # ``_raise_on_coverage_regression`` below would never run - silencing the
+        # alarm that exists precisely to notice a bond that stopped updating.
+        #
+        # Depth is the optional half of this job. It may cost the run an exit
+        # code; it may not cost it the forward warm's result or its alarm.
+        try:
+            deep = backfill_depth(end=end, depth_days=depth_days, budget_s=budget,
+                                  ceiling_mb=_CV_MEMORY_CEILING_MB)
+            log.info(
+                "  depth: %d bond-week(s) over %d pass(es), deepest %s, target %s%s",
+                deep["weeks"], deep["passes"], deep.get("deepest"), deep.get("target"),
+                f", stopped: {deep['reason']}" if deep.get("stopped") else "",
+            )
+            if deep.get("stopped") and "budget" not in (deep.get("reason") or ""):
+                # The ceiling, an unreadable probe or a dead wire. Not a failure
+                # of this job - the forward warm above already succeeded - but it
+                # must not be silent either, so it is recorded as a SKIPPED step,
+                # which is what makes the run exit 2 rather than 0.
+                _SUBPROCESS_SKIPS.append(
+                    _StepFailure("UST universe depth backfill", "NOT RUN", deep["reason"])
+                )
+        except _excel_unavailable_errors() as exc:
+            # Excel went away, filled up or signed out between the forward warm
+            # and here. Nobody can act on that at 18:15 and nothing was written.
+            log.warning("  depth backfill SKIPPED (not a failure): %s", exc)
+            _SUBPROCESS_SKIPS.append(
+                _StepFailure("UST universe depth backfill", "NOT RUN", str(exc))
+            )
+        except Exception as exc:  # noqa: BLE001 - a defect here must not eat the alarm
+            # A real defect in the backwards pass. Recorded as a FAILED step so
+            # the run exits 1, and still not allowed to take the forward warm's
+            # coverage check down with it.
+            log.exception("  depth backfill FAILED: %s", exc)
+            _SUBPROCESS_FAILURES.append(
+                _StepFailure("UST universe depth backfill", "NOT RUN",
+                             f"{type(exc).__name__}: {exc}")
+            )
+
     _raise_on_coverage_regression(out, "intraday")
     return None
 
@@ -1264,7 +1503,30 @@ def warm_citivelo_frb_values(start, end):
     from TB.FixedRateBondsTB import FixedRateBondsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
 
-    mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL")
+    # OFFLINE when the pre-flight said no Velocity job may connect, and this is
+    # the only one of the four fall-through jobs where that can be said cleanly:
+    # ``FixedRateBondsMDP`` reads ``offline`` off its constructor config
+    # (``_citivelo_option``), which is the sole route a ``TimeseriesBuilder`` run
+    # has - ``TB.FixedRateBondsTB`` calls ``bulk_get_data`` with a fixed kwarg set
+    # and forwards nothing. ``IRSwapsMDP`` takes ``offline`` as a per-REQUEST
+    # kwarg into its Velocity fetcher instead, so the same one-liner does not
+    # exist there and is not guessed at here.
+    #
+    # The cost is stated rather than hidden: offline turns a live fallback into
+    # an empty column, which becomes a HOLE in the computed store that looks like
+    # a day Citi served nothing. That is the better of the two, because the
+    # alternative measured itself on 2026-08-19 - an unattended scheduled task
+    # opening workbooks against a 12.5 GB add-in - and because the hole is
+    # attributable: the run says so here and carries the provenance in SUMMARY.
+    blocked = _excel_is_blocked()
+    if blocked:
+        log.warning(
+            "  building OFFLINE: %s. A tag the cache does not hold becomes an "
+            "empty column rather than a live workbook; anything it does not "
+            "cover is a hole in the computed store, not a day Citi missed.",
+            blocked,
+        )
+    mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL", offline=bool(blocked))
     tb = TimeseriesBuilder()
     wanted = [UnifiedValue.FRB_YTM, UnifiedValue.FRB_CLEAN_PRICE, UnifiedValue.FRB_SPREAD_TSY]
     queries = [
@@ -1372,6 +1634,7 @@ def warm_citivelo_swap_spread_values(start, end):
     from TB.IRSwapsTB import IRSwapsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
 
+    _warn_unguarded_fallthrough("CitiVelo swap spread values")
     tenors = swap_spread_tenors(_CV_SWAP_SPREAD_INDEX)
     mdp = IRSwapsMDP(source="CITIVELO_EXCEL-RL")
     tb = TimeseriesBuilder()
@@ -1573,8 +1836,21 @@ def main():
     # has no business paying for that - nor for anything the Velocity bridge does
     # on the way. Jobs 7 and 8 call this themselves around their own fetch step,
     # so a selection containing them still gets the probe, once, where it matters.
-    needs_probe = any(job.needs_excel for _, job in selected)
+    #
+    # ``needs_excel`` alone is the WRONG selector for whether to probe, and that
+    # is the 2026-08-19 seam: the four jobs that connected to a 12,501 MB Excel
+    # that night all carry ``needs_excel=False``, because none of them needs
+    # Excel - they need the TAG CACHE, and reach for Excel only on a miss. So the
+    # probe runs for anything that touches a Velocity asset in either direction,
+    # and the verdict is published where a job can read it.
+    needs_probe = any(
+        job.needs_excel
+        or any(str(a).startswith("CITIVELO") for a in (job.requires + job.provides))
+        for _, job in selected
+    )
+    global _EXCEL_BLOCKED
     excel_blocked = _excel_preflight() if needs_probe else None
+    _EXCEL_BLOCKED = excel_blocked
     excel_errors = _excel_unavailable_errors()
 
     # Run jobs

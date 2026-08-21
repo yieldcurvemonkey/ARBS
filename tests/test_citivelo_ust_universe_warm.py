@@ -104,14 +104,26 @@ class FakeQuotes:
     for MI01 — because under the old fake those two are the same object. A fake
     that cannot express the difference the code under test turns on is a fake
     that will agree with whatever the code does.
+
+    ``reports`` is the third thing it has to be able to express, added
+    2026-08-20 for the same reason ``writes_at`` was. "Velocity served nothing
+    for this window" and "Velocity said nothing at all" are DIFFERENT
+    observations - the first comes with a per-tag reason, the second does not -
+    and until the warm could tell them apart every test that meant the first one
+    modelled the second, because the fake had no way to say a reason. Pass
+    ``reports="empty"`` for a matured bond and leave it ``None`` for the silent
+    transport that is the fault.
     """
 
     offline = True
 
-    def __init__(self, *, writes_at="same", raise_on=None, watch_manifest=None):
+    def __init__(self, *, writes_at="same", raise_on=None, watch_manifest=None,
+                 reports=None, reports_for=None):
         self.writes_at = writes_at
         self.raise_on = raise_on
         self.watch_manifest = watch_manifest
+        self.reports = reports
+        self.reports_for = reports_for
         self.calls = []
         self.manifest_seen = []
         self.closed = False
@@ -123,12 +135,18 @@ class FakeQuotes:
                 freq=freq,
                 start=kwargs.get("start"),
                 end=kwargs.get("end"),
+                force_refresh=kwargs.get("force_refresh"),
             )
         )
         if self.watch_manifest is not None:
             self.manifest_seen.append(len(_book(self.watch_manifest, "eod")))
         if self.raise_on is not None and len(self.calls) == self.raise_on:
             raise RuntimeError("Excel went away mid-batch")
+        failures = kwargs.get("failures")
+        if failures is not None and self.reports is not None:
+            for tag in tags:
+                if self.reports_for is None or self.reports_for(str(tag)):
+                    failures[str(tag)] = self.reports
         target = freq if self.writes_at == "same" else self.writes_at
         index = pd.date_range("2026-08-01", periods=2, freq="D")
         served = {str(t): pd.Series([1.0, 2.0], index=index) for t in tags}
@@ -213,11 +231,24 @@ def env(tmp_path, monkeypatch):
     hazard this suite exists downstream of, and the real reading on this machine
     (~2,965 MB) is under the ceiling, so an unstubbed probe would not even fail
     visibly — it would just quietly shell out 44 times per warm.
+
+    ``refresh`` is stubbed for a harder reason than tidiness: it CONNECTS. Only
+    five of this file's twenty-two ``warm()`` calls pass ``do_refresh=False``,
+    and ``warm()`` defaults it to True, so the other seventeen ran
+    ``refresh()`` -> ``assert_safe_to_connect`` (which the 100 MB stub above
+    lets straight through) -> ``CitiVeloQuotes()`` -> ``refresh_universe`` ->
+    ``quotes.client()``. That is a real COM attach to whatever Excel the user
+    has open, from a unit test, on a machine where another workflow may be
+    mid-backfill. Stubbed at the fixture rather than fixed at seventeen call
+    sites so a test added later cannot reintroduce it by forgetting a keyword.
     """
     monkeypatch.setenv("CITIVELO_EXCEL_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(WARM, "MANIFEST", tmp_path / "manifest.json")
     monkeypatch.setattr(MG, "excel_memory_mb", lambda **k: 100.0)
-    return SimpleNamespace(mod=WARM, tmp=tmp_path, manifest=tmp_path / "manifest.json")
+    refreshes = []
+    monkeypatch.setattr(WARM, "refresh", lambda **kwargs: refreshes.append(kwargs) or {})
+    return SimpleNamespace(mod=WARM, tmp=tmp_path, manifest=tmp_path / "manifest.json",
+                           refreshes=refreshes)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -874,6 +905,11 @@ _WIN_END = datetime.date(2026, 8, 18)
 
 #: A real UST that is alive through the window: ``T 3.875 05/31/2030``.
 _ALIVE = "US91282CNG23"
+#: A second real UST alive through the window: ``T 5.5 08/15/2028``. Needed
+#: because a chunk-wide failure only counts as an outage over at least two
+#: alive bonds - one bond is what a per-column Excel error looks like.
+_ALIVE_2 = "US912810FE39"
+
 #: A real UST that redeemed four days before it: ``T 4.5 7/15/2026``. Its last
 #: DAILY row in the real cache is 2026-07-14, one day before maturity.
 _MATURED = "US91282CHM64"
@@ -1155,7 +1191,7 @@ def test_a_warm_over_a_stale_window_records_the_shortfall_instead_of_hiding_it(
     for value in ("PRICE", "YIELD"):
         _plant(f"RATES.BOND.{_MATURED}.{value}", "DAILY", _run_of("2026-07-13", 60))
 
-    quotes = FakeQuotes(writes_at=None)   # answers, persists nothing new
+    quotes = FakeQuotes(writes_at=None, reports="empty")  # Velocity: nothing here
     _install_fetcher(monkeypatch, quotes)
 
     out = WARM.warm(
@@ -1194,7 +1230,7 @@ def test_a_matured_universe_is_never_a_shortfall(env, monkeypatch):
     for value in ("PRICE", "YIELD"):
         _plant(f"RATES.BOND.{_MATURED}.{value}", "DAILY", _run_of("2026-07-13", 60))
 
-    quotes = FakeQuotes(writes_at=None)
+    quotes = FakeQuotes(writes_at=None, reports="empty")
     _install_fetcher(monkeypatch, quotes)
 
     out = WARM.warm(
@@ -1225,7 +1261,7 @@ def test_only_a_NEW_silence_is_reported_as_a_regression(env, monkeypatch):
         encoding="utf-8",
     )
 
-    quotes = FakeQuotes(writes_at=None)
+    quotes = FakeQuotes(writes_at=None, reports="empty")
     _install_fetcher(monkeypatch, quotes)
     out = WARM.warm("eod", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
                     batch=8, do_refresh=False)
@@ -1254,7 +1290,7 @@ def test_a_value_that_falls_silent_since_the_last_run_is_a_regression(env, monke
         encoding="utf-8",
     )
 
-    quotes = FakeQuotes(writes_at=None)
+    quotes = FakeQuotes(writes_at=None, reports="empty")
     _install_fetcher(monkeypatch, quotes)
     out = WARM.warm("eod", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
                     batch=8, do_refresh=False)
@@ -1276,7 +1312,7 @@ def test_a_shortfall_does_not_stop_the_run(env, monkeypatch):
     _plant(f"RATES.BOND.{_ALIVE}.PRICE", "DAILY", _run_of("2025-10-03", 90))
     _plant(f"RATES.BOND.{_ALIVE}.YIELD", "DAILY", _run_of("2025-10-03", 90))
 
-    quotes = FakeQuotes(writes_at=None)
+    quotes = FakeQuotes(writes_at=None, reports="empty")
     _install_fetcher(monkeypatch, quotes)
     out = WARM.warm("eod", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
                     batch=1, do_refresh=False)
@@ -1320,3 +1356,684 @@ def test_the_exit_code_says_which_of_the_three_things_happened(
     with pytest.raises(SystemExit) as exc:
         WARM.main()
     assert exc.value.code == expected, label
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 8. THE SPAN THAT REACHES THE WIRE
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Everything above bounds the span the warm ASKS for. Until 2026-08-20 nothing
+# bounded the span that went OUT, because ``CitiVeloTagCache.missing_spans``
+# re-derives its own from the cache: a partially cached tag is answered with
+# ``(cov.last, want_end)``. Measured on the real MI01 bond cache, whose 698 tags
+# all end 2026-08-07, a 2-day nightly request produced a 13 days 04:01 wire span
+# for 400 of 400 sampled tags — against a 6-day cliff, so every row that came
+# back would have been 10-minute data written into a 1-minute store, permanently,
+# because ``missing_spans`` never re-asks a span it already covers.
+
+
+class SpanQuotes:
+    """A reader that records the span it was ASKED for and writes what it serves.
+
+    It carries a REAL :class:`CitiVeloTagCache` on ``.cache``, which is the whole
+    point: the cap under test works by consulting that cache, so a fake without
+    one silently exercises the fallback path and proves nothing. ``floor`` is the
+    oldest date it will serve, which is how a bond's start of life — or Citi's
+    own retention — is expressed.
+    """
+
+    offline = True
+
+    def __init__(self, *, cache, floor=None, reports=None, serve=True):
+        self.cache = cache
+        self.floor = floor
+        self.reports = reports
+        self.serve = serve
+        self.calls = []
+
+    def frame(self, tags, freq="DAILY", **kwargs):
+        start = pd.Timestamp(kwargs.get("start"))
+        end = pd.Timestamp(kwargs.get("end"))
+        self.calls.append(
+            SimpleNamespace(tags=[str(t) for t in tags], freq=freq, start=start,
+                            end=end, span=end - start,
+                            force_refresh=kwargs.get("force_refresh"))
+        )
+        days = [
+            d for d in pd.date_range(start.normalize(), end.normalize(), freq="D")
+            if d.weekday() < 5 and (self.floor is None or d.date() >= self.floor)
+        ]
+        failures = kwargs.get("failures")
+        if not days or not self.serve:
+            if failures is not None and self.reports is not None:
+                for tag in tags:
+                    failures[str(tag)] = self.reports
+            return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"))
+        index = pd.DatetimeIndex(days)
+        served = {str(t): pd.Series([1.0] * len(index), index=index) for t in tags}
+        for tag, series in served.items():
+            self.cache.write(tag, freq, series)
+        frame = pd.concat(served, axis=1)
+        frame.index.name = "Date"
+        return frame.sort_index()
+
+    def close(self):
+        pass
+
+
+def _spans_asked(quotes, freq="MI01"):
+    return [c.span for c in quotes.calls if c.freq == freq]
+
+
+class WireRecorder:
+    """A CLIENT, not a reader — which is the whole point of it.
+
+    The span that crosses the cliff is computed inside
+    ``CitiVeloTagCache.missing_spans`` and handed to the FETCHER, three layers
+    below ``frame``. A fake standing in for ``frame`` never reaches that code at
+    all, so it records the span the warm ASKED for and would report a clean pass
+    over the broken path. This sits where the wire sits, behind a real
+    ``CitiVeloQuotes`` and a real ``CitiVeloTagCache``.
+    """
+
+    def __init__(self):
+        self.spans = []
+
+    def fetch_timeseries(self, tags, freq, *, period=None, start=None, end=None,
+                         price_point="CLOSE"):
+        self.spans.append(
+            SimpleNamespace(freq=freq, start=pd.Timestamp(start), end=pd.Timestamp(end),
+                            span=pd.Timestamp(end) - pd.Timestamp(start))
+        )
+        index = pd.DatetimeIndex(
+            [d for d in pd.date_range(pd.Timestamp(start).normalize(),
+                                      pd.Timestamp(end).normalize(), freq="D")
+             if d.weekday() < 5]
+        )
+        if index.empty:
+            return {}
+        return {str(t): pd.Series([1.0] * len(index), index=index) for t in tags}
+
+    def last_failures(self):
+        return {}
+
+    def close(self):
+        pass
+
+
+def test_a_partially_cached_tag_does_not_widen_the_wire_span_past_the_cliff(
+    env, monkeypatch
+):
+    """The 13-day span, pinned at the layer that produced it.
+
+    Measured on the real cache: every MI01 bond tag ends 2026-08-07, and a 2-day
+    nightly request for 2026-08-20 came back as a **13 days 04:01** wire span for
+    400 of 400 sampled tags. ``missing_spans`` answers a partially cached request
+    with ``(cov.last, want_end)`` — a function of the CACHE, not of the window —
+    so the chunking done one layer up is re-derived away and CVTSHIST silently
+    serves 10-minute rows into a store whose contract is 1-minute. Nothing
+    re-asks a covered span, so the resolution would be lost permanently.
+
+    The assertion is on what the CLIENT received, because that is what CVTSHIST
+    sees. Asserting on what ``frame`` was asked for would pass over the defect.
+    """
+    from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
+
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    stale = _run_of("2026-08-07", 4)
+    for value in ("PRICE", "YIELD"):
+        _plant(f"RATES.BOND.{_ALIVE}.{value}", "MI01", stale)
+
+    wire = WireRecorder()
+    quotes = CitiVeloQuotes(
+        client=wire, cache=CitiVeloTagCache(base_dir=default_cache_dir())
+    )
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.warm(
+        "intraday", start=datetime.date(2026, 8, 18), end=datetime.date(2026, 8, 20),
+        values=("PRICE", "YIELD"), do_refresh=False,
+    )
+
+    assert wire.spans, "nothing reached the wire; this test is not exercising the cap"
+    worst = max(s.span for s in wire.spans)
+    assert worst <= MAX_SPAN["MI01"], (
+        f"a {worst} span went to the wire against a {MAX_SPAN['MI01']} cliff — "
+        f"CVTSHIST would have served 10-minute rows into the MI01 store and "
+        f"missing_spans would never re-ask for them"
+    )
+    assert out["stopped"] is False, out.get("reason")
+
+
+def test_a_window_already_banked_is_not_fetched_again(env, monkeypatch):
+    """Idempotence, at the layer the cap is implemented in.
+
+    Capping by re-asking for every window would hold the span under the cliff and
+    re-pay for the whole history every night — which on a backwards backfill is
+    the difference between accumulating and thrashing. The cap SKIPS what the
+    cache already answers, so a window banked end to end costs one sidecar read
+    and no ``CVTSHIST`` at all.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    start, end = datetime.date(2026, 8, 17), datetime.date(2026, 8, 20)
+    # Banked to the exact bounds the warm asks for — 00:00 on the first day
+    # through 23:59 on the last — because a tail the cache stops short of is a
+    # REAL missing span and re-requesting it is correct, not a defect.
+    banked = [pd.Timestamp(start) + pd.Timedelta(days=i) for i in range(4)]
+    banked.append(pd.Timestamp(end) + pd.Timedelta(hours=23, minutes=59))
+    for value in ("PRICE", "YIELD"):
+        _plant(f"RATES.BOND.{_ALIVE}.{value}", "MI01", banked)
+
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.warm("intraday", start=start, end=end, values=("PRICE", "YIELD"),
+                    do_refresh=False)
+
+    assert quotes.calls == [], (
+        "a window already on disk end to end was re-fetched; the cap must skip "
+        "covered tags, not re-ask for them"
+    )
+    assert out["stopped"] is False, out.get("reason")
+    assert out["done"] == 1, "a fully cached bond was not recorded warm"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 9. A MATURED BATCH CANNOT STOP THE RUN, WHATEVER THE WIRE CALLS IT
+# ══════════════════════════════════════════════════════════════════════════
+#
+# ``universe()`` sorts by ISIN and the 22 lowest all matured between 2016 and
+# 2025, so with ``DEFAULT_BATCH = 8`` batch 0 is all-dead by construction. The
+# reason string that comes back for such a chunk cannot be established offline —
+# ``parse_tshist_block`` maps a spill under two rows to ``"no block"`` for EVERY
+# requested tag, the same string a real outage produces, and the benign
+# ``"empty"`` is only reachable when some OTHER tag in the chunk returned rows,
+# which an all-dead chunk cannot supply. So the guard is not allowed to depend on
+# it. Maturity is catalog data and settles it without a wire.
+
+
+def test_a_matured_batch_does_not_stop_the_run_on_a_non_benign_reason(
+    env, monkeypatch
+):
+    """Batch 0, exactly: every bond redeemed, every tag ``no block``.
+
+    Without the maturity gate this is the 0/877 abort that lost the intraday warm
+    on every retained nightly run — and widening the benign-reason set to admit
+    ``no block`` would fail open against the outage the set exists to catch.
+    """
+    matured, = _resolutions(_MATURED)
+    monkeypatch.setattr(WARM, "universe", lambda: [matured])
+    quotes = FakeQuotes(writes_at=None, reports="no block")
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.warm(
+        "intraday", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+        do_refresh=False,
+    )
+
+    assert quotes.calls, "nothing was fetched; this is not exercising the guard"
+    assert out["stopped"] is False, (
+        f"a batch of bonds that had already redeemed stopped the run: "
+        f"{out.get('reason')!r}. 528 of 877 catalogued USTs have matured — this "
+        f"aborts every night at batch 0"
+    )
+
+
+def test_one_alive_bond_failing_is_not_an_outage_but_is_not_stamped_either(
+    env, monkeypatch
+):
+    """A per-COLUMN Excel error is per tag, and must cost that bond only.
+
+    ``block_parser``'s own module docstring says so: it writes an error NAME for
+    one tag while every other tag in the same call returns normally. The version
+    this replaces did ``if faults: break``, so with 110 batches a night one bad
+    column ended the run. It must also NOT stamp the bond — stamping it makes a
+    same-night re-run skip the one thing that did not warm.
+    """
+    alive, matured = _resolutions(_ALIVE, _MATURED)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive, matured])
+    quotes = FakeQuotes(
+        writes_at="same", reports="#N/A",
+        reports_for=lambda tag: _ALIVE in tag and tag.endswith("PRICE"),
+    )
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.warm(
+        "intraday", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+        do_refresh=False,
+    )
+
+    assert out["stopped"] is False, out.get("reason")
+    book = _book(env.manifest, "intraday")
+    assert _MATURED in book, "the healthy bond in the same batch was not recorded"
+    assert _ALIVE not in book, (
+        "the bond whose tag the wire refused was stamped done — a same-night "
+        "re-run would now skip exactly the bond that did not warm"
+    )
+
+
+def test_two_alive_bonds_failing_together_does_stop_the_run(env, monkeypatch):
+    """The positive control. A guard that never fires is not a guard.
+
+    Two independent bonds failing every tag in one call cannot be one bad column,
+    which is the whole reason the threshold is two rather than one.
+    """
+    alive, = _resolutions(_ALIVE)
+    other, = _resolutions(_ALIVE_2)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive, other])
+    quotes = FakeQuotes(writes_at=None, reports="no block")
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.warm(
+        "intraday", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+        do_refresh=False,
+    )
+
+    assert out["stopped"] is True, (
+        "every tag of two alive bonds failed at once and the run carried on"
+    )
+    assert out["done"] == 0
+    assert _book(env.manifest, "intraday") == {}
+
+
+def test_a_silent_transport_that_persists_nothing_stops_the_intraday_warm(
+    env, monkeypatch
+):
+    """Case (a) on the MI01 path — the fault that started all of this.
+
+    The transport answers, writes nothing to the cache, and reports no reason.
+    The guard this replaces asked ``landed == 0 and rows_served > 0``, and
+    ``rows_served`` is ``len(frame)`` where ``frame`` is the cache's own re-read,
+    so on the real transport it is 0 and the predicate was unreachable. The
+    evidence has to be the sidecars, sampled either side of the fetch.
+
+    The fake RETURNS AN EMPTY FRAME, and that is the load-bearing detail. A fake
+    that returns the rows it pretended to serve makes the old predicate fire —
+    ``landed == 0 and rows > 0`` — so a test written against one would pass on
+    the broken code and prove nothing. The real reader cannot do that: ``frame``
+    is built by re-reading the parquets, and a transport that wrote none has
+    none to re-read. Verified by mutation: with the guard reverted, this test
+    fails; with a rows-returning fake it does not.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache, serve=False)   # answers, persists nothing, says nothing
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.warm(
+        "intraday", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+        do_refresh=False,
+    )
+
+    assert quotes.calls, "nothing was fetched; this is not exercising the guard"
+    assert out["stopped"] is True, (
+        "a transport that fetched and persisted nothing reported success"
+    )
+    assert "sidecar" in out["reason"], out["reason"]
+    assert _book(env.manifest, "intraday") == {}
+
+
+def test_the_warm_asks_for_a_universe_refresh_and_the_fixture_stops_it_connecting(
+    env, monkeypatch
+):
+    """The fixture stub is load-bearing, so it is pinned rather than assumed.
+
+    ``warm()`` defaults ``do_refresh=True`` and ``refresh()`` constructs a real
+    ``CitiVeloQuotes`` and calls ``refresh_universe``, which reaches
+    ``quotes.client()`` — a COM attach to whatever Excel is open. Seventeen of
+    this file's ``warm()`` calls take that default. If the ``env`` fixture ever
+    stops stubbing it, this test is what says so.
+    """
+    matured, = _resolutions(_MATURED)
+    monkeypatch.setattr(WARM, "universe", lambda: [matured])
+    quotes = FakeQuotes(writes_at=None, reports="empty")
+    _install_fetcher(monkeypatch, quotes)
+
+    WARM.warm("intraday", start=_WIN_START, end=_WIN_END,
+              values=("PRICE", "YIELD"))          # do_refresh defaults to True
+
+    assert env.refreshes, (
+        "warm() no longer calls refresh(), or the fixture no longer intercepts "
+        "it — either way a test in this file can now open Excel"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 10. DEPTH: THE BACKWARDS PASS
+# ══════════════════════════════════════════════════════════════════════════
+#
+# A rolling window walks forward and only forward. The real cache is the proof:
+# all 698 MI01 bond tags share first=2026-08-04 and last=2026-08-07, one window,
+# never extended, because ``missing_spans``' backwards branch is
+# ``want_start < cov.first`` and a nightly ``want_start`` only ever advances.
+
+
+def _depth_book(manifest):
+    path = pathlib.Path(manifest)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8")).get("depth", {})
+
+
+def _weeks_asked(quotes):
+    """The Mondays the depth pass actually requested, oldest first."""
+    return sorted({c.start.date() for c in quotes.calls if c.freq == "MI01"})
+
+
+def test_the_grid_is_a_monday_to_friday_week_under_the_cliff(env, monkeypatch):
+    """Every backwards request is a stable, sub-cliff week.
+
+    Stable matters as much as sub-cliff: a grid anchored on "today" moves every
+    night, so the week banked on Tuesday is not the week Wednesday asks about and
+    neither the coverage test nor the resume cursor would mean anything twice.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=21,
+                              budget_s=60.0)
+
+    assert out["weeks"] > 0, "the pass banked nothing"
+    for call in quotes.calls:
+        assert call.start.weekday() == 0, f"a window started on {call.start:%A}"
+        assert call.span <= MAX_SPAN["MI01"], call.span
+
+
+def test_depth_walks_backwards_one_week_per_pass_until_the_target(env, monkeypatch):
+    """The capability itself: history accumulates instead of tracking today."""
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=21,
+                              budget_s=60.0)
+
+    weeks = _weeks_asked(quotes)
+    assert weeks == [
+        datetime.date(2026, 7, 27), datetime.date(2026, 8, 3),
+        datetime.date(2026, 8, 10), datetime.date(2026, 8, 17),
+    ], weeks
+    assert out["deepest"] == datetime.date(2026, 7, 27)
+    entry = _depth_book(env.manifest)[_ALIVE]
+    assert entry.get("complete") is True, entry
+    assert entry["weeks"] == 4
+
+
+def test_depth_fills_an_interior_hole_the_forward_window_cannot_see(env, monkeypatch):
+    """The 2026-08-08..08-17 stretch, in miniature.
+
+    ``missing_spans`` inspects the head and the tail of the cached range and
+    nothing in between, so a gap the nightly left inside it is invisible to the
+    fetch path for ever. The cursor walks the GRID and tests each week against
+    what the parquet holds, so the hole is filled the first time it passes over.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    # Weeks of 08-17 and 07-27 banked; the two weeks between them are the hole.
+    banked = [datetime.date(2026, 8, 17) + datetime.timedelta(days=i) for i in range(5)]
+    banked += [datetime.date(2026, 7, 27) + datetime.timedelta(days=i) for i in range(5)]
+    for value in ("PRICE", "YIELD"):
+        _plant(f"RATES.BOND.{_ALIVE}.{value}", "MI01", [pd.Timestamp(d) for d in banked])
+
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=21, budget_s=60.0)
+
+    assert _weeks_asked(quotes) == [
+        datetime.date(2026, 8, 3), datetime.date(2026, 8, 10),
+    ], "the pass did not ask for exactly the two weeks that were missing"
+
+
+def test_depth_never_chases_a_window_after_maturity_and_still_deepens_the_bond(
+    env, monkeypatch
+):
+    """Matured bonds are the majority and this is the only path that warms them.
+
+    They can hold no row after they redeemed, so the forward window finds nothing
+    for 528 of the 877 for ever — while their history BEFORE maturity is exactly
+    as real as anyone else's. Chasing weeks after the redemption is what makes
+    two thirds of the universe look permanently un-warm.
+    """
+    matured, = _resolutions(_MATURED)
+    maturity = matured.descriptor.maturity
+    monkeypatch.setattr(WARM, "universe", lambda: [matured])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=60,
+                              budget_s=60.0)
+
+    weeks = _weeks_asked(quotes)
+    assert weeks, "the matured bond was never deepened at all"
+    assert max(weeks) <= maturity, (
+        f"a window starting {max(weeks)} was requested for a bond that redeemed "
+        f"{maturity}"
+    )
+    assert out["weeks"] > 0
+    assert _depth_book(env.manifest)[_MATURED]["weeks"] > 0
+
+
+def test_a_bond_below_citis_retention_floors_after_two_empty_weeks(env, monkeypatch):
+    """Two strikes, not one, and the reason is measured.
+
+    Citi's data legitimately stops 1-5 days before a bond redeems — 1 day for 127
+    of 522 matured USTs, 5 for 18, never more — so the first backwards week is
+    often the grace tail and holds nothing while every week below it is full.
+    Flooring on one empty week strands exactly the bonds this pass recovers.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache, floor=datetime.date(2026, 8, 10),
+                        reports="empty")
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=60,
+                              budget_s=60.0)
+
+    entry = _depth_book(env.manifest)[_ALIVE]
+    assert entry.get("floor"), f"the bond never floored: {entry}"
+    assert out["floored"] == [_ALIVE]
+    weeks = _weeks_asked(quotes)
+    # 08-17 and 08-10 serve; 08-03 and 07-27 are empty and are the two strikes.
+    assert weeks == [
+        datetime.date(2026, 7, 27), datetime.date(2026, 8, 3),
+        datetime.date(2026, 8, 10), datetime.date(2026, 8, 17),
+    ], weeks
+    assert entry["floor"] == "2026-07-27"
+
+    # And it stays floored: a second night asks the wire nothing.
+    before = len(quotes.calls)
+    WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=60, budget_s=60.0)
+    assert len(quotes.calls) == before, "a floored bond was chased again"
+
+
+def test_the_budget_stops_the_pass_cleanly_and_records_where_it_got_to(
+    env, monkeypatch
+):
+    """Budget exhaustion is the DESIGNED outcome, not a partial failure.
+
+    The pass is meant to run out of time every night until the target is reached.
+    What it must never do is lose the weeks it banked or forget where it stopped.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    # A budget already spent when the first batch is considered.
+    out = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=365,
+                              budget_s=0.0)
+
+    assert out["stopped"] is True
+    assert "budget" in out["reason"], out["reason"]
+    assert out["weeks"] == 0
+    assert quotes.calls == [], "the budget was spent and the wire was still used"
+
+
+def test_depth_resumes_from_the_cursor_after_a_stop(env, monkeypatch):
+    """Resume across a simulated stop: no week is re-fetched, none is skipped.
+
+    The manifest cursor is the whole resume contract. A run that stops must cost
+    the batch in flight and nothing else, and the run after it must not re-pay
+    for the weeks already banked.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    # Stop after the first pass by making the second one exceed the budget: a
+    # tiny but non-zero budget admits exactly one batch.
+    calls = {"n": 0}
+    real_perf = WARM.time.perf_counter
+
+    def _clock():
+        calls["n"] += 1
+        return real_perf() + (0.0 if calls["n"] <= 3 else 1000.0)
+
+    monkeypatch.setattr(WARM.time, "perf_counter", _clock)
+    first = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=365,
+                                budget_s=10.0)
+    monkeypatch.undo()
+    monkeypatch.setattr(WARM, "MANIFEST", env.manifest)
+    monkeypatch.setattr(MG, "excel_memory_mb", lambda **k: 100.0)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    _install_fetcher(monkeypatch, quotes)
+
+    assert first["stopped"] is True and "budget" in first["reason"]
+    banked = set(_weeks_asked(quotes))
+    assert banked, "the first run banked nothing, so resume proves nothing"
+    cursor = _depth_book(env.manifest)[_ALIVE]["cursor"]
+    assert cursor == (min(banked) - datetime.timedelta(days=7)).isoformat()
+
+    WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=21, budget_s=60.0)
+    later = [w for w in _weeks_asked(quotes) if w not in banked]
+    assert later, "the resumed run asked for nothing new"
+    assert all(w < min(banked) for w in later), (
+        "the resumed run went forwards over weeks it had already banked"
+    )
+
+
+def test_a_second_run_over_a_finished_target_fetches_nothing(env, monkeypatch):
+    """Idempotence end to end, which is what makes this safe to run nightly."""
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=21, budget_s=60.0)
+    before = len(quotes.calls)
+    out = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=21,
+                              budget_s=60.0)
+
+    assert len(quotes.calls) == before, "a finished target was re-fetched"
+    assert out["weeks"] == 0
+
+
+def test_an_outage_during_the_depth_pass_floors_nobody(env, monkeypatch):
+    """A dead wire must never be recorded as "Citi has nothing below here".
+
+    The floor is permanent — a floored bond is not asked again — so writing one
+    on a night the wire was down would lose that bond's history for good.
+    """
+    alive, = _resolutions(_ALIVE)
+    other, = _resolutions(_ALIVE_2)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive, other])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache, serve=False, reports="no block")
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=365,
+                              budget_s=60.0)
+
+    assert out["stopped"] is True
+    assert "alive" in out["reason"], out["reason"]
+    assert out["floored"] == []
+    for entry in _depth_book(env.manifest).values():
+        assert not entry.get("floor"), entry
+
+
+def test_the_ceiling_stops_the_depth_pass_and_an_unreadable_probe_does_too(
+    env, monkeypatch
+):
+    """Same fail-closed contract as the forward warm, checked between batches.
+
+    "Could not tell" and "nothing running" are different facts, and a wedged
+    13 GB add-in is what the second one hides.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    quotes = SpanQuotes(cache=cache)
+    _install_fetcher(monkeypatch, quotes)
+
+    # The first reading is the one ``assert_safe_to_connect`` consumes at the
+    # top of the pass; the ones after it are the between-batch checks.
+    readings = iter([100.0])
+    monkeypatch.setattr(MG, "excel_memory_mb", lambda **k: next(readings, 9_000.0))
+    over = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=365,
+                               budget_s=60.0)
+    assert over["stopped"] is True and "ceiling" in over["reason"], over["reason"]
+    assert quotes.calls == [], "the wire was used after the ceiling was reached"
+
+    unreadable_readings = iter([100.0])
+    monkeypatch.setattr(
+        MG, "excel_memory_mb", lambda **k: next(unreadable_readings, None)
+    )
+    unreadable = WARM.backfill_depth(end=datetime.date(2026, 8, 20), depth_days=365,
+                                     budget_s=60.0)
+    assert unreadable["stopped"] is True, (
+        "an unreadable probe let the pass run — 'could not tell' and 'nothing "
+        "running' are different facts and this one must fail closed"
+    )
+    assert "could not read" in unreadable["reason"], unreadable["reason"]
+    assert quotes.calls == []
+
+
+def test_no_test_in_this_repo_can_write_the_production_warm_manifest():
+    """The rail that would have prevented the 2026-08-20 accident.
+
+    ``MANIFEST`` is bound at import from ``_manifest_path()``, and every warm
+    suite monkeypatches the module attribute per test. That is a convention, and
+    a convention held right up to the moment the warm grew a second entry point:
+    a test that stubbed ``warm`` and called the nightly job reached the backwards
+    depth pass, which was not stubbed, and wrote a 397-bond ``depth`` book into
+    the live manifest tonight's cron resumes from.
+
+    ``tests/conftest.py`` now sets ``ARBS_UST_WARM_MANIFEST`` at CONFTEST IMPORT,
+    which is before test modules are collected - so it catches the module that
+    imports the warm script at collection time as well as the one that imports it
+    lazily inside the call under test. A session-scoped fixture would be too late
+    for the first of those.
+
+    This test asserts the property directly rather than trusting the fixture:
+    both the freshly computed path and the value this module bound at import must
+    be somewhere other than the real cache directory.
+    """
+    from MDP.CitiVelocityExcel.cache import default_cache_dir
+
+    production = default_cache_dir() / "ust_universe_warm_manifest.json"
+    assert WARM._manifest_path() != production, (
+        "the manifest override is not in effect; a test that forgets to "
+        "monkeypatch MANIFEST would write the live resume state"
+    )
+    assert pathlib.Path(WARM.MANIFEST) != production, (
+        "this module bound MANIFEST at import, before the override was set - "
+        "the rail has to be armed at conftest import, not in a fixture"
+    )

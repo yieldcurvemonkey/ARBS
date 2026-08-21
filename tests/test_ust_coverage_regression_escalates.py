@@ -34,9 +34,27 @@ CLEAN = {"stopped": False, "reason": "", "done": 877, "of": 877,
 
 
 def _fake_warm(monkeypatch, payload):
-    """Patch the module attribute -- both jobs import `warm` inside the function."""
+    """Patch the module attributes -- both jobs import these inside the function.
+
+    BOTH entry points, not just ``warm``. The intraday job runs a second pass
+    after the forward window (``backfill_depth``), and while this file stubbed
+    only ``warm`` that pass ran FOR REAL: on 2026-08-20 it planned the whole
+    877-bond universe, fetched 794 tags from the live add-in, wrote 794 MI01
+    parquets into the developer's real cache and a 397-bond ``depth`` book into
+    the production manifest that tonight's cron resumes from. Nothing was
+    falsified and it was all restored, but this test is about a coverage
+    regression escalating to the scheduler - it has no business touching Excel.
+
+    ``tests/conftest.py`` now also redirects the manifest for the whole session,
+    so the two guards are independent: that one stops the WRITE, this one stops
+    the FETCH.
+    """
     import scripts.citivelo_ust_universe_warm as U
     monkeypatch.setattr(U, "warm", lambda *a, **k: payload)
+    monkeypatch.setattr(U, "backfill_depth", lambda **k: {
+        "weeks": 0, "passes": 0, "rows": 0, "stopped": False, "reason": "",
+        "deepest": None, "target": None,
+    })
 
 
 @pytest.mark.parametrize("job,label", [

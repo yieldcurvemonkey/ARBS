@@ -474,6 +474,51 @@ def test_force_refresh_refetches_a_warm_key_and_the_revision_wins(cache, daily_i
     assert out[TAG_10Y].iloc[0] == pytest.approx(9.99)
 
 
+
+
+def test_a_rewrite_inside_the_filesystem_time_granularity_is_still_read_back(
+    cache, daily_index
+):
+    """The parse memo must not hand back the series a write just replaced.
+
+    The key is ``(path, st_mtime_ns, st_size)`` and NEITHER varying part is
+    reliable across a rewrite of the same shape. Measured over 400 write/rewrite
+    pairs on this machine: ``st_size`` was identical 400 times out of 400 — zstd
+    on a constant-stride float64 column produces the same byte count whatever the
+    constant is — and the smallest non-zero ``st_mtime_ns`` delta was 3.7 ms,
+    which is the filesystem's granularity, not the interval between the writes.
+    ``CitiVeloTagCache.get`` writes and re-reads well inside that window.
+
+    The collision is forced here with ``os.utime`` rather than raced for, because
+    a test that has to win a 3.7 ms race is a test that passes on the broken code
+    most of the time. It was first seen as a real, unforced failure:
+    ``test_force_refresh_refetches_a_warm_key_and_the_revision_wins`` returned
+    4.20 where the fetcher had just served 9.99.
+    """
+    import os
+
+    cache.write(TAG_10Y, "DAILY", _daily(daily_index, base=4.20))
+    path = cache.path(TAG_10Y, "DAILY")
+    frozen = path.stat()
+    assert cache.read(TAG_10Y, "DAILY").iloc[0] == pytest.approx(4.20)
+
+    cache.write(TAG_10Y, "DAILY", _daily(daily_index, base=9.99))
+    # Put the clock back exactly where it was: the same mtime the pre-write parse
+    # was memoised under. The sizes already match on their own.
+    os.utime(path, ns=(frozen.st_atime_ns, frozen.st_mtime_ns))
+    after = path.stat()
+    assert after.st_mtime_ns == frozen.st_mtime_ns
+    assert after.st_size == frozen.st_size, (
+        "the two writes produced different file sizes, so this test is not "
+        "reproducing the measured collision"
+    )
+
+    assert cache.read(TAG_10Y, "DAILY").iloc[0] == pytest.approx(9.99), (
+        "the memo served the series the write had just replaced — a caller that "
+        "asked for a refresh got the stale rows and no error"
+    )
+
+
 # ------------------------------------------------------------------ #
 #              intraday and daily are different data                 #
 # ------------------------------------------------------------------ #

@@ -227,18 +227,38 @@ class _FakeQuotes:
     ``rows`` maps tag -> series. A tag absent from it comes back with no rows,
     which is exactly what Velocity returns for an MI01 request against a bond
     that matured in 2016 - the case the nightly warm misreads.
+
+    IT REPORTS A REASON FOR THE TAGS IT SERVES NOTHING FOR, and that is fidelity
+    rather than decoration. ``CitiVelocityExcelClient.fetch_timeseries`` writes
+    ``failures[tag] = excel_error_name(value) or "no block"`` for EVERY tag in a
+    chunk that came back with no rows (``com_client.py:968-971``), so on the live
+    wire "served nothing" always arrives WITH a per-tag reason and only a broken
+    reader answers in silence. A fake that stays silent models a case the live
+    stack cannot produce, and it makes the two things the warm has to tell apart
+    - Velocity having nothing, and a transport that fetched and persisted nothing
+    - byte-identical, which is precisely the conflation this file exists to pin.
+
+    ``reports=None`` restores the silence deliberately, for a test that wants the
+    broken-reader case.
     """
 
-    def __init__(self, cache: CitiVeloTagCache, rows: Mapping[str, pd.Series], *, persist: bool = True):
+    def __init__(self, cache: CitiVeloTagCache, rows: Mapping[str, pd.Series], *,
+                 persist: bool = True, reports: str | None = "empty"):
         self._cache = cache
         self._rows = dict(rows)
         self._persist = persist
+        self._reports = reports
         self.calls: List[List[str]] = []
 
     def frame(self, tags, freq="DAILY", **kwargs) -> pd.DataFrame:
         wanted = [str(t) for t in tags]
         self.calls.append(wanted)
         served: Dict[str, pd.Series] = {t: self._rows[t] for t in wanted if t in self._rows}
+        failures = kwargs.get("failures")
+        if failures is not None and self._reports is not None:
+            for tag in wanted:
+                if tag not in served:
+                    failures[tag] = self._reports
         if self._persist:
             for tag, s in served.items():
                 self._cache.write(tag, freq, s, price_point=kwargs.get("price_point", "CLOSE"))
@@ -424,3 +444,48 @@ def test_the_manifest_never_marks_a_bond_done_that_the_cache_does_not_hold(tmp_p
         f"{entry!r} claims a normal warm, but nothing was cached for this bond - "
         "the manifest and the cache now disagree about the same window."
     )
+
+
+def test_a_reader_that_serves_nothing_AND_reports_nothing_still_stops_the_warm(
+    tmp_path, monkeypatch
+):
+    """The silent case the fake above no longer produces by accident.
+
+    ``_FakeQuotes`` now reports a per-tag reason for the tags it serves nothing
+    for, because that is what the live client does - ``fetch_timeseries`` writes
+    ``failures[tag] = excel_error_name(value) or "no block"`` for EVERY tag in a
+    rowless chunk (``com_client.py:968-971``). Making the fake faithful removed
+    a case it used to cover by mistake, so that case is asked for explicitly
+    here: a reader that answers with an empty frame and populates no reasons at
+    all.
+
+    That is not a matured bond. On the live stack it cannot happen once a fetch
+    has gone out, so it means the reader did not fetch - the
+    ``fetch_windowed``-shaped fault that "warmed" 349 bonds in 134 s and left
+    zero parquets. The warm has to stop, and it has to leave the manifest empty
+    so a re-run retries the day.
+    """
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    dead = [_FakeBond("US912810DX38", datetime.date(2016, 11, 15))]
+    quotes = _FakeQuotes(cache, {}, reports=None)   # answers nothing, says nothing
+    W, _ = _install_warm_fakes(monkeypatch, tmp_path, dead, quotes)
+
+    out = W.warm(
+        "intraday",
+        start=datetime.date(2026, 8, 16),
+        end=datetime.date(2026, 8, 18),
+        values=("PRICE", "YIELD"),
+        do_refresh=False,
+    )
+
+    assert quotes.calls, "nothing was fetched; this is not exercising the guard"
+    assert out["stopped"], (
+        "a reader that fetched nothing and said nothing was treated as a bond "
+        "with no rows - which is how a dead transport gets stamped done"
+    )
+    assert out["done"] == 0
+
+    import json
+
+    book = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))["intraday"]
+    assert book == {}, "a run that landed nothing stamped a bond anyway"
