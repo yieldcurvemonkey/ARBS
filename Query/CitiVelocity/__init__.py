@@ -15,6 +15,7 @@ from Query.CitiVelocity.CitiVeloStructure import (
     CitiVeloStructureFunctionMap,
 )
 from Query.CitiVelocity.CitiVeloValue import CitiVeloValue, CitiVeloValueFunctionMap
+from Query.CitiVelocity.tag_enums import CitiVeloTag, CitiVeloTags
 
 __all__ = [
     "CitiVeloKind",
@@ -23,6 +24,8 @@ __all__ = [
     "CitiVeloQueryWrapper",
     "CitiVeloStructure",
     "CitiVeloStructureFunctionMap",
+    "CitiVeloTag",
+    "CitiVeloTags",
     "CitiVeloUnit",
     "CitiVeloValue",
     "CitiVeloValueFunctionMap",

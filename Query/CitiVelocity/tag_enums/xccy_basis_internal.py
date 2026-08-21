@@ -1,0 +1,44 @@
+# fmt: off
+# ruff: noqa: E501
+# flake8: noqa
+r"""XCCY_BASIS_INTERNAL tags, generated from the Citi Velocity catalog. DO NOT EDIT BY HAND.
+
+Regenerate with::
+
+    python scripts/gen_citivelo_tag_enums.py
+
+16 tags under ``RATES.XCCY_BASIS_INTERNAL``, arranged as one flat enum.
+
+Edits to this file are lost on the next regeneration, and
+``tests/test_citivelo_tag_enums.py`` fails the moment it disagrees with the
+catalog - so there is no window in which a hand edit merely looks like it worked.
+"""
+
+from __future__ import annotations
+
+from Query.CitiVelocity.tag_enums._base import CitiVeloTag, TagNamespace
+
+__all__ = ["XCCY_BASIS_INTERNAL"]
+
+class XCCY_BASIS_INTERNAL(CitiVeloTag):
+    """16 tags under ``RATES.XCCY_BASIS_INTERNAL``."""
+
+    __node__ = "RATES.XCCY_BASIS_INTERNAL"
+
+    CNH_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.CNH.USD.ONSHORE"
+    HKD_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.HKD.USD.ONSHORE"
+    IDR_USD_OFFSHORE = "RATES.XCCY_BASIS_INTERNAL.IDR.USD.OFFSHORE"
+    INR_USD_OFFSHORE = "RATES.XCCY_BASIS_INTERNAL.INR.USD.OFFSHORE"
+    INR_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.INR.USD.ONSHORE"
+    KRW_USD_OFFSHORE = "RATES.XCCY_BASIS_INTERNAL.KRW.USD.OFFSHORE"
+    KRW_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.KRW.USD.ONSHORE"
+    MYR_USD_OFFSHORE = "RATES.XCCY_BASIS_INTERNAL.MYR.USD.OFFSHORE"
+    MYR_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.MYR.USD.ONSHORE"
+    PHP_USD_OFFSHORE = "RATES.XCCY_BASIS_INTERNAL.PHP.USD.OFFSHORE"
+    PHP_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.PHP.USD.ONSHORE"
+    SGD_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.SGD.USD.ONSHORE"
+    THB_USD_OFFSHORE = "RATES.XCCY_BASIS_INTERNAL.THB.USD.OFFSHORE"
+    THB_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.THB.USD.ONSHORE"
+    TWD_USD_OFFSHORE = "RATES.XCCY_BASIS_INTERNAL.TWD.USD.OFFSHORE"
+    TWD_USD_ONSHORE = "RATES.XCCY_BASIS_INTERNAL.TWD.USD.ONSHORE"
+
