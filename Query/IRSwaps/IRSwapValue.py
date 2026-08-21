@@ -174,6 +174,48 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
         return sum(kwargs["risk_weights"][i] * curve.carry_and_roll_bps_running(s, kwargs["horizon"]) for i, s in enumerate(kwargs["package"]))
 
     def _convexity_adjustment(self, **kwargs: Any) -> float:
+        r"""``pack_rate - matched_swap_rate``, in basis points.
+
+        Two things about this function were wrong for as long as it existed, and
+        both are the same mistake: a quantity was read in the wrong unit or the
+        wrong convention because nothing external graded it. It is now pinned to
+        Citi's published SOFR screen (Rates Vol Lab, 12-Jun-2023, Figure 58,
+        close 6/9/2023) in ``tests/test_convexity_rv_shared_ca_path.py``, the
+        same thirteen rows that grade ``RVUtils.ConvexityRV``'s own kernel.
+
+        **The matched swap is quarterly/quarterly.**
+        Citi specifies it verbatim -- *"both fixed and floating legs of this swap
+        have a quarterly payment frequency"* -- while the ``usd_irs`` spec these
+        curves carry quotes **annual** fixed. Reading the par rate off the
+        package (``curve.fair_rate(swap_obj)``) therefore took the spec default.
+        Measured against Q/Q on three dates spanning 2023-2025: ``+4.585``,
+        ``+5.816``, ``+5.884`` bp. Since ``CA = pack_rate - swap_rate``, every
+        adjustment this function returned was low by that much -- larger than the
+        Whites/Reds adjustment itself, which runs 1.3-6.8 bp.
+
+        The swap leg is now built here, at the frequency asked for, rather than
+        read off whatever the query happened to construct. Pass
+        ``matched_frequency=None`` to fall back to the spec default; that is the
+        negative control the test suite requires to fail.
+
+        **The futures leg is in percent and always was.**
+        The previous code ran both legs through
+
+        .. code-block:: python
+
+            def _as_percent(x):
+                return x * 100.0 if abs(x) < 1.0 else x
+
+        which is correct for ``curve.fair_rate`` -- a decimal by this wrapper's
+        own contract -- and wrong for ``rl.STIRFuture.fixed_rate``, which
+        rateslib already carries in percent. Any SR3 priced above 99.00 was
+        multiplied by a hundred: 99.05 implies 0.95 % and was read as 95 %, an
+        error of 9,405 bp. That is the whole ZIRP window, 2020-03 to 2022-06,
+        for Whites, Reds and Greens, and the deferred strip into 2021.
+
+        One heuristic, two quantities, two units. Each leg now converts
+        explicitly, so neither depends on the magnitude of the number.
+        """
         assert len(kwargs["package"]) == 1, "convexity not supported for packages!"
         assert "sfr" in kwargs, "must pass in SFR object"
 
@@ -184,31 +226,21 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
         assert all(type(p) == rl.STIRFuture for p in kwargs["sfr"]), "convexity only supported for rateslib backend"
         assert all(type(p) == rl.IRS for p in kwargs["package"]), "convexity only supported for rateslib backend"
 
-        import QuantLib as ql
-        from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
-
-        # assert ql.IMM.isIMMdate(datetime_to_ql_date(kwargs["curve"].effective_date(kwargs["package"][0]))), "must pass in valid imm swap"
-        # assert ql.IMM.isIMMdate(datetime_to_ql_date(kwargs["curve"].maturity_date(kwargs["package"][0]))), "must pass in valid imm swap"
-
         sfrs: List[rl.STIRFuture] = kwargs["sfr"]
         pack_tick: float = float(kwargs.get("pack_tick", 0.0025))  # ¼ tick
         do_round: bool = bool(kwargs.get("round_pack_to_tick", True))
 
-        def _as_percent(x: float) -> float:
-            x = float(x)
-            return x * 100.0 if abs(x) < 1.0 else x
-
-        def _safe_fixed_rate_percent(sfr: rl.STIRFuture) -> float:
+        def _fixed_rate_percent(sfr: rl.STIRFuture) -> float:
+            """``rl.STIRFuture.fixed_rate`` is PERCENT. No magnitude heuristic."""
             fr = getattr(sfr, "fixed_rate", None)
             if fr is None:
                 raise ValueError("STIRFuture missing fixed_rate")
             try:
-                val = float(getattr(fr, "real", fr))
+                return float(getattr(fr, "real", fr))
             except Exception:
-                val = float(fr.iloc[-1])
-            return _as_percent(val)
+                return float(fr.iloc[-1])
 
-        leg_rates_pct = [_safe_fixed_rate_percent(s) for s in sfrs]
+        leg_rates_pct = [_fixed_rate_percent(s) for s in sfrs]
         leg_prices = [100.0 - r for r in leg_rates_pct]
         avg_price = float(np.mean(leg_prices))
 
@@ -223,7 +255,29 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
 
         curve = kwargs["curve"]
         swap_obj = kwargs["package"][0]
-        swap_yield_pct = _as_percent(float(curve.fair_rate(swap_obj)))
+
+        # ``matched_frequency`` absent means Citi's convention, which is the only
+        # one that ties out. It is a keyword rather than a constant so the
+        # spec-default variant stays reachable as a negative control -- and,
+        # because it travels in the query's ``value_kwargs``, it is part of the
+        # timeseries cache fingerprint, so a change of convention orphans the
+        # rows computed under the old one instead of silently serving them.
+        matched_frequency = kwargs.get("matched_frequency", "Q")
+        matched_leg2_frequency = kwargs.get("matched_leg2_frequency", "Q")
+
+        if matched_frequency is None and matched_leg2_frequency is None:
+            # ``fair_rate`` returns a DECIMAL by this wrapper's contract.
+            swap_yield_pct = float(curve.fair_rate(swap_obj)) * 100.0
+        else:
+            from RVUtils.ConvexityRV.curve_ops import matched_forward_swap_rate
+
+            swap_yield_pct = matched_forward_swap_rate(
+                curve,
+                curve.effective_date(swap_obj),
+                curve.maturity_date(swap_obj),
+                frequency=matched_frequency,
+                leg2_frequency=matched_leg2_frequency,
+            )
 
         return (implied_fut_yield_pct - swap_yield_pct) * 100.0
 

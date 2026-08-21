@@ -653,7 +653,28 @@ def get_barchart_timeseries(
     interval: int,
     tickers: Optional[List[str]] = None,
     use_globex: Optional[bool] = False,
+    fill: bool = False,
 ):
+    r"""Barchart price history for STIR/UST futures legs and leg expressions.
+
+    ``fill`` controls whether missing cells are propagated. It used to be
+    unconditional ``.bfill().ffill()`` with no way to turn it off, and both
+    halves of that are hazardous in different ways:
+
+    * ``bfill`` carries a price **backwards in time**. A contract that did not
+      trade on a date received the next available price, so a panel built for a
+      backtest contained tomorrow's information at today's index -- look-ahead,
+      inside the price series itself, before any strategy code ran.
+    * ``ffill`` manufactures a print on a date the contract genuinely had none.
+      For a convexity adjustment that turns real absence into a flat line, which
+      is precisely the "the CA series looks interpolated" complaint: the series
+      was dense because it had been filled, not because the data was there.
+
+    The default is therefore ``False`` -- absence is returned as ``NaN`` so the
+    caller can distinguish it from a price. The only caller in this repo,
+    ``TB.IRSwapsTB.sfr_cvx_adj``, wants ``False``; pass ``fill=True`` to opt back
+    into the old behaviour deliberately.
+    """
     import os
     import re
     import time
@@ -857,7 +878,12 @@ def get_barchart_timeseries(
     )
 
     df.columns = [from_barchart_symbol(x) for x in df.columns]
-    df = df.sort_index().bfill().ffill()
+    df = df.sort_index()
+    if fill:
+        # `bfill` first, deliberately preserved as the historical behaviour for
+        # anything that opts in -- but see the `fill` docstring: it carries a
+        # price backwards in time.
+        df = df.bfill().ffill()
 
     # Ensure numeric dtypes for leg columns so math doesn’t yield NaNs due to object dtype
     for c in df.columns:
