@@ -98,6 +98,19 @@ every year: the tape's deepest contiguous front strip anywhere in the local
 slice is **17**. That is why the API raises for those ranks instead of quietly
 serving a shallower pack.
 
+That 17 is a **request** ceiling, not a market one, and the distinction matters
+because it decides whether Golds intraday is impossible or merely unfetched.
+The deepest-rank histogram over those 1,667 dates spikes at 12 (457 dates), 13
+(289) and 17 (106), with 14/15/16 at 2/2/1 -- and 12/13/17 are exactly the
+instrument counts of the three curves the nightly intraday job builds (MIX23
+``SFRCM1..12``, ``Q12STIRT`` ``..13``, ``Q16STIRT`` ``..17``). A liquidity
+ceiling would be ragged and drift with volume; three spikes sitting on three
+config lengths is us. Asked directly at 2026-08-19 14:00 CT, the vendor priced
+ranks 12..20 at the requested minute (95.940 monotone down to 95.755), with
+18-20 coming back freshly stamped because nothing had ever cached them. The fix
+is a depth-20 intraday warm, mirroring the depth-20 settle warm that repaired
+the daily panel. Until it runs, raising is still the correct behaviour.
+
 PREFLIGHT, DON'T PROBE-BY-FETCHING
 ===================================
 ``cache_only()`` turns a miss into an exception, which is safe but not cheap in
