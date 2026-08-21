@@ -220,6 +220,76 @@ def warm_one_instant(
         return 0, f"{type(exc).__name__}: {exc}"
 
 
+def warm_one_day_bulk(
+    mdp,
+    day: dt.date,
+    symbols: Sequence[str],
+) -> Tuple[int, Optional[str]]:
+    """Fetch a WHOLE SESSION for *symbols* in one request each, and cache it.
+
+    Why this exists, measured
+    -------------------------
+    ``fetch_pricers_flat`` at one instant issues one HTTP request per symbol and
+    caches **one minute**. Measured on a cold 2026-08-18: a single instant's
+    fetch of three symbols moved exactly **2 of 541** instants to full depth. So
+    the per-instant loop costs ~3.0 s per instant, and a 160-session backfill
+    would be roughly 70,000 requests and ~58 hours.
+
+    But the vendor endpoint is not per-minute. ``queryminutes.ashx`` returns up
+    to ``_BARCHART_MAX_RECORD`` (5,000) one-minute bars ending at the cursor, so
+    a whole session already arrives in the response that a single-minute request
+    throws away. ``STIRFutureMDP`` even has the bulk path --
+    ``_fetch_barchart_timeseries(..., full_day_intraday=True)`` followed by a
+    per-minute cache write -- but it only runs in the branch where every symbol
+    was ALREADY a cache hit and only the in-memory session frame is missing.
+    That is exactly backwards for a backfill, where nothing is cached.
+
+    So this drives that path directly: one request per symbol per session, then
+    every returned minute written under the key the read path looks for.
+
+    On the key shape
+    ----------------
+    Writing cache keys by hand is the one thing that can make this job report
+    thousands of successful writes and recover nothing, so the keys come from
+    ``ca_intraday.tape_keys`` -- the same function ``tape_depth`` reads through
+    -- and BOTH spellings are written, mirroring what the MDP itself does for
+    its request-key candidates. The acceptance check then re-measures depth
+    through the read path, so a wrong key shape shows up as "no instant reached
+    the target" and a non-zero exit rather than as success.
+    """
+    from RVUtils.ConvexityRV import ca_intraday as CI
+
+    tz = _tape_tz()
+    anchor = dt.datetime.combine(day, dt.time(12, 0), tzinfo=tz)
+    try:
+        df = mdp._fetch_barchart_timeseries(          # noqa: SLF001 - the bulk path
+            list(symbols), anchor, show_tqdm=False,
+            interval=1, full_day_intraday=True,
+        )
+    except Exception as exc:                          # noqa: BLE001
+        return 0, f"{type(exc).__name__}: {exc}"
+    if df is None or df.empty:
+        return 0, "vendor returned no intraday bars for this session"
+
+    written = 0
+    src = CI.INTRADAY_FUTURES_SOURCE
+    for sym in df.columns:
+        series = df[sym].dropna()
+        for ts, px in series.items():
+            stamp = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=tz)
+            args = {"symbol": sym, "price": float(px),
+                    "timestamp": stamp.isoformat(), "schema": 1}
+            for key in CI.tape_keys(stamp, sym, source=src):
+                mdp._threadsafe_cache_put(key, args)   # noqa: SLF001
+                written += 1
+    # Synchronous flush: the acceptance re-measure reads the cache immediately
+    # after, and a background flush would race it into a false "no gain".
+    mdp._flush_pending_cache_writes(background=False)  # noqa: SLF001
+    return written, None
+
+
 def plan_day(probe, day: dt.date, depth: int, from_rank: int,
              **kw) -> Dict[str, object]:
     """What one date needs, measured locally with no network at all."""
@@ -252,6 +322,7 @@ def run_warm(
     max_instants: int = DEFAULT_MAX_INSTANTS,
     dry_run: bool = False,
     step_minutes: int = 1,
+    bulk: bool = True,
 ) -> Dict[str, object]:
     """Warm the minute tape to *depth* across the range. Returns a summary."""
     from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
@@ -264,7 +335,8 @@ def run_warm(
     t0 = time.monotonic()
     summary: Dict[str, object] = {
         "start": str(start), "end": str(end), "depth": depth,
-        "from_rank": from_rank, "dry_run": dry_run,
+        "from_rank": from_rank, "dry_run": dry_run, "bulk": bulk,
+        "day_fetches": 0,
         "dates_considered": len(days), "dates_touched": 0,
         "instants_seen": 0, "instants_already_deep": 0,
         "instants_warmed": 0, "instants_skipped_live": 0,
@@ -301,7 +373,25 @@ def run_warm(
             "at_target": n_at_depth_before, "of": len(stamps),
             "deepest": max(p["before"].values()) if p["before"] else 0}
 
-        for ts in todo:
+        # One request per symbol for the WHOLE session, instead of one per
+        # minute. The per-instant loop is kept for --no-bulk, and as the
+        # FALLBACK when a bulk fetch fails: a session the vendor will not serve
+        # in one go is still worth trying minute by minute before it is
+        # recorded as a hole.
+        per_instant = list(todo)
+        if bulk:
+            _, err = warm_one_day_bulk(mdp, day, p["missing_symbols"])
+            summary["day_fetches"] += 1
+            if err:
+                summary["failures"].setdefault(str(day), {})["bulk"] = err
+                log.warning("%s: bulk fetch failed (%s); falling back to "
+                            "per-instant", day, err)
+            else:
+                summary["instants_warmed"] += len(todo)
+                per_instant = []
+                time.sleep(sleep_s)
+
+        for ts in per_instant:
             if time.monotonic() - t0 > budget_s:
                 summary["stopped_early"] = f"budget {budget_s:.0f}s reached in {day}"
                 break
@@ -402,6 +492,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--sleep-s", type=float, default=DEFAULT_SLEEP_S)
     ap.add_argument("--budget-s", type=float, default=DEFAULT_BUDGET_S)
     ap.add_argument("--max-instants", type=int, default=DEFAULT_MAX_INSTANTS)
+    ap.add_argument("--no-bulk", action="store_true",
+                    help="fetch minute by minute instead of a session at a "
+                         "time; ~500x more requests, kept for comparison and "
+                         "as the automatic fallback when a bulk fetch fails")
     ap.add_argument("--dry-run", action="store_true",
                     help="measure and plan with NO network at all")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -422,6 +516,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return _report(run_warm(
         start, end, depth=a.depth, from_rank=a.from_rank, sleep_s=a.sleep_s,
         budget_s=a.budget_s, max_instants=a.max_instants, dry_run=a.dry_run,
+        bulk=not a.no_bulk,
         step_minutes=a.step_minutes))
 
 

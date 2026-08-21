@@ -258,3 +258,108 @@ def test_the_step_only_thins_the_grid_it_does_not_move_it(step):
     got = W.instants_present(lambda k: True, DAY, lad[0], step_minutes=step)
     assert got[0].hour == 7 and got[0].minute == 0
     assert all((t - got[0]).total_seconds() % (step * 60) == 0 for t in got)
+
+
+# ===========================================================================
+# Bulk mode
+# ===========================================================================
+class _FakeMdp:
+    """Records what a bulk warm would write, without a network or a cache."""
+
+    def __init__(self, frame=None, raises=None):
+        self._frame, self._raises = frame, raises
+        self.written, self.flushed, self.calls = {}, 0, []
+
+    def _fetch_barchart_timeseries(self, tickers, ts, **kw):
+        self.calls.append((tuple(tickers), ts, kw))
+        if self._raises:
+            raise self._raises
+        return self._frame
+
+    def _threadsafe_cache_put(self, key, value):
+        self.written[key] = value
+
+    def _flush_pending_cache_writes(self, *, background=True):
+        self.flushed += 1
+        assert background is False, (
+            "a background flush races the acceptance re-measure that runs "
+            "immediately after, and would read as 'no depth gained'"
+        )
+
+
+def _minute_frame(day, symbols, n=3):
+    import pandas as pd
+
+    idx = pd.date_range(
+        dt.datetime.combine(day, dt.time(9, 0), tzinfo=CT), periods=n, freq="1min")
+    return pd.DataFrame({s: [95.0 + i / 100 for i in range(n)] for s in symbols},
+                        index=idx)
+
+
+def test_bulk_asks_for_the_whole_session_once_per_symbol_set():
+    """The entire economic argument for bulk mode.
+
+    Measured on a cold 2026-08-18: ONE instant's fetch of three symbols moved
+    2 of 541 instants to full depth, so the per-instant loop is ~3.0s an instant
+    and a 160-session backfill is ~70,000 requests and ~58 hours. The same
+    session in bulk took ONE fetch and 18.4s, 541/541. If this ever reverts to a
+    request per minute, that is a 500x regression that no other test would see.
+    """
+    syms = W._strip_symbols(DAY, 20)[17:20]
+    mdp = _FakeMdp(_minute_frame(DAY, syms))
+    n, err = W.warm_one_day_bulk(mdp, DAY, syms)
+
+    assert err is None and n > 0
+    assert len(mdp.calls) == 1, "bulk mode issued more than one fetch for a session"
+    tickers, ts, kw = mdp.calls[0]
+    assert tickers == tuple(syms)
+    assert kw["full_day_intraday"] is True, (
+        "without full_day_intraday the vendor returns a window around the "
+        "instant, not the session, and bulk mode buys nothing")
+    assert kw["interval"] == 1
+    assert ts.date() == DAY and ts.tzinfo is not None
+
+
+def test_bulk_writes_keys_the_READ_path_can_find():
+    """The one failure that would report thousands of writes and recover nothing.
+
+    Bulk mode composes cache keys itself, so it must use the same grammar
+    `tape_depth` reads through -- and both spellings, since the local slice
+    carries a UTC-stamped tape and a Chicago-stamped one written by different
+    jobs. Asserted by reading the written keys back with the real probe.
+    """
+    syms = W._strip_symbols(DAY, 20)[17:20]
+    mdp = _FakeMdp(_minute_frame(DAY, syms))
+    W.warm_one_day_bulk(mdp, DAY, syms)
+
+    probe = _probe_from(mdp.written)
+    stamp = dt.datetime.combine(DAY, dt.time(9, 1), tzinfo=CT)
+    assert CI.tape_present(probe, stamp, syms) == set(syms), (
+        "the read path cannot find what bulk mode wrote")
+    # both spellings, so a reader on either clock resolves it
+    for s in syms:
+        assert all(k in mdp.written for k in CI.tape_keys(stamp, s))
+
+
+def test_bulk_flushes_synchronously_before_the_acceptance_remeasure():
+    syms = W._strip_symbols(DAY, 20)[17:20]
+    mdp = _FakeMdp(_minute_frame(DAY, syms))
+    W.warm_one_day_bulk(mdp, DAY, syms)
+    assert mdp.flushed == 1
+
+
+def test_an_empty_session_is_reported_not_counted_as_written():
+    """A vendor that serves nothing must not read as a successful warm."""
+    import pandas as pd
+
+    for frame in (None, pd.DataFrame()):
+        mdp = _FakeMdp(frame)
+        n, err = W.warm_one_day_bulk(mdp, DAY, ["SR3Z30"])
+        assert n == 0 and err and "no intraday bars" in err
+
+
+def test_a_bulk_failure_is_returned_not_raised():
+    """One bad session must not abort an unattended 160-session backfill."""
+    mdp = _FakeMdp(raises=RuntimeError("429 from the vendor"))
+    n, err = W.warm_one_day_bulk(mdp, DAY, ["SR3Z30"])
+    assert n == 0 and "RuntimeError" in err and "429" in err
