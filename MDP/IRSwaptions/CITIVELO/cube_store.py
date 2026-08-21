@@ -61,10 +61,12 @@ _logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_STORE_PROVIDER",
+    "STORE_GAP_NEIGHBOURHOOD_DAYS",
     "StoredCube",
     "store_asset",
     "load_stored_cubes",
     "stored_coverage",
+    "stored_gap_dates",
     "explain_missing_smile",
     "clear_stored_cube_cache",
 ]
@@ -72,6 +74,16 @@ __all__ = [
 #: The provider segment of the store asset name. ``asset_for(currency, provider=)``
 #: mints ``USD-SWAPTIONVOL-CITIVELOEXCEL``; the warm writes that and nothing else.
 DEFAULT_STORE_PROVIDER = "CITIVELOEXCEL"
+
+#: How far either side of a date the store has to be warm before an absent
+#: partition is read as a COVERAGE GAP rather than an unwarmed date.
+#:
+#: Seven days is the longest run of consecutive non-session days a US rates
+#: calendar produces (a Thursday holiday plus the Friday plus a weekend still
+#: leaves a warm neighbour inside a week), and it matches
+#: ``provider._MAX_SKEW_DONOR_DAYS`` so the two windows do not have to be
+#: reasoned about separately.
+STORE_GAP_NEIGHBOURHOOD_DAYS = 7
 
 #: The first date Citi served strike offsets, measured from the store itself
 #: rather than asserted. Used only in messages - the code never branches on a
@@ -239,6 +251,61 @@ def stored_coverage(
         "first": days[0] if days else None,
         "last": days[-1] if days else None,
     }
+
+
+def stored_gap_dates(
+    currency: str,
+    dates: Iterable[datetime.date],
+    *,
+    provider: str = DEFAULT_STORE_PROVIDER,
+    store: Any = None,
+    neighbourhood_days: int = STORE_GAP_NEIGHBOURHOOD_DAYS,
+) -> frozenset[datetime.date]:
+    """Which of ``dates`` the store is warm AROUND but holds no partition for.
+
+    A ``pd.bdate_range`` contains market holidays. Citi published no cube on
+    those days, so the store legitimately has no partition - and the fallback
+    below it is ``CitiVelocityExcelClient.connect()``, once per date. Measured
+    2026-08-21 on a 2022-01-02..2026-08-20 USD pull: 1,155 of 1,209 business days
+    were served from the store and the other 54 each drove Excel, 51 of them for
+    a non-session day whose fetch then came back an amputated cube.
+
+    "Warm around" rather than "inside the store's first..last" on purpose. The
+    store's span is eleven years, so a bounds test would swallow a partially
+    warmed history whole: a caller who has warmed 2015 and 2026 would silently
+    lose every date between, with no fetch and no error. Requiring a partition
+    within ``neighbourhood_days`` on BOTH sides means a holiday qualifies (its
+    neighbours are days away) while a date past the end of the warm, or inside a
+    month-wide hole, does not - those keep the existing live fallback.
+
+    Never raises: a cold store, an unknown currency or an unreadable directory
+    return an empty set, which restores the previous behaviour exactly.
+    """
+    try:
+        active = store if store is not None else _default_store()
+        asset = store_asset(currency, provider=provider)
+        available = set(active.available_dates(asset))
+    except Exception as exc:  # noqa: BLE001 - a gap probe must never take a request down
+        _logger.debug("swaption cube store gap probe unavailable (%s)", exc)
+        return frozenset()
+
+    if not available:
+        return frozenset()
+
+    span = max(0, int(neighbourhood_days))
+    if span == 0:
+        return frozenset()
+
+    gaps: set[datetime.date] = set()
+    for day in dates:
+        if day in available:
+            continue
+        lags = range(1, span + 1)
+        warm_before = any((day - datetime.timedelta(days=k)) in available for k in lags)
+        warm_after = any((day + datetime.timedelta(days=k)) in available for k in lags)
+        if warm_before and warm_after:
+            gaps.add(day)
+    return frozenset(gaps)
 
 
 def clear_stored_cube_cache() -> None:
