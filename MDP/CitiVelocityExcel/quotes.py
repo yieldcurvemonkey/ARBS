@@ -20,7 +20,7 @@ from __future__ import annotations
 import datetime
 import logging
 import threading
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import pandas as pd
 
@@ -118,6 +118,14 @@ class CitiVeloQuotes:
         self._max_staleness = max_staleness
         self._client_kwargs = dict(client_kwargs or {})
         self._lock = threading.RLock()
+        #: Set only by :meth:`direct_reader`. Distinguishes "there happens to be
+        #: no cache" from "this reader exists in order to bypass one", which is
+        #: what a caller downstream has to be able to assert before it tells a
+        #: user their number is live.
+        self._direct = False
+        #: Set only by :meth:`direct_reader`: borrow the parent's client rather
+        #: than connecting a second one. See :meth:`client`.
+        self._client_provider: Optional[Callable[[], CitiVelocityExcelClient]] = None
 
     # -- lifecycle ------------------------------------------------------
 
@@ -128,6 +136,54 @@ class CitiVeloQuotes:
     @property
     def cache(self) -> Optional[CitiVeloTagCache]:
         return self._cache
+
+    @property
+    def is_direct(self) -> bool:
+        """Whether this reader was built by :meth:`direct_reader`.
+
+        Public because "is this really a bypass?" is a question a caller must be
+        able to ANSWER rather than assume. ``cache is None`` is not the same
+        question: a reader constructed with ``cache=False`` by some unrelated
+        code path also has no cache, and a component that inferred direct-ness
+        from that would be guessing.
+        """
+        return self._direct
+
+    def direct_reader(self) -> "CitiVeloQuotes":
+        """A sibling reader that goes STRAIGHT to the add-in. No cache, either way.
+
+        This is the one true bypass on this path, and it is a CONSTRUCTION-time
+        property rather than a per-call flag because :attr:`_cache` is fixed in
+        ``__init__``. What the returned reader does differently:
+
+        * **Reads nothing.** ``_cache is None``, so
+          :meth:`series` short-circuits to ``client.fetch_timeseries`` and no
+          parquet is opened. The parse memo on the tag cache is therefore also
+          out of the picture - there is no cache instance to hold one.
+        * **Writes nothing.** Nothing is persisted: no tag parquet, no sidecar,
+          no directory is even created.
+        * **Raises rather than degrading.** With no cache there is nothing to
+          fall back to, so an unavailable add-in surfaces as a
+          :class:`~MDP.CitiVelocityExcel.errors.CitiVelocityError` from
+          :meth:`client` instead of an eleven-day-old number.
+
+        The client is BORROWED, not copied: the returned reader defers to this
+        one's :meth:`client` at fetch time and never closes it. Copying
+        ``self._client`` instead would let the sibling lazily connect and own a
+        second COM session while the parent later connects its own - two Excel
+        clients for one logical reader.
+        """
+        sibling = CitiVeloQuotes(
+            cache=False,
+            catalog=self._catalog,
+            offline=self._offline,
+            max_staleness=self._max_staleness,
+            client_kwargs=self._client_kwargs,
+        )
+        sibling._direct = True
+        sibling._client_provider = self.client
+        sibling._owns_client = False
+        return sibling
 
     @property
     def offline(self) -> bool:
@@ -156,6 +212,10 @@ class CitiVeloQuotes:
                 f"CitiVeloQuotes is offline and the request is not fully cached (cache root: {root}). "
                 "Pass offline=False with a signed-in Excel, or narrow the request to cached tags."
             )
+        if self._client_provider is not None:
+            # A direct sibling borrows the parent's client so one logical reader
+            # never opens two COM sessions. The parent owns the lifetime.
+            return self._client_provider()
         with self._lock:
             if self._client is None:
                 self._client = CitiVelocityExcelClient.connect(**self._client_kwargs)
@@ -209,6 +269,7 @@ class CitiVeloQuotes:
         force_refresh: bool = False,
         failures: Optional[MutableMapping[str, str]] = None,
         max_staleness: Optional[datetime.timedelta] = None,
+        strict: bool = False,
     ) -> Dict[str, pd.Series]:
         """One ascending series per tag that returned data.
 
@@ -228,6 +289,18 @@ class CitiVeloQuotes:
         and a caller handed someone else's ``CitiVeloQuotes`` (the swaption cube
         provider hands its own to the fixings resolver) would otherwise inherit
         ``None`` and re-request an unbounded tail on every single call.
+
+        ``strict=True`` turns "this tag is simply absent from the result" into a
+        raise naming the tag and, when the wire gave one, the reason. Absence is
+        the normal contract here and callers that warm speculative sibling tags
+        rely on it, so it stays the default - but a caller who asked for exactly
+        the tags backing a number the user will read cannot afford to receive a
+        short dict and not notice.
+
+        Raises
+        ------
+        CitiVelocityError
+            When ``strict=True`` and any requested tag returned no rows.
         """
         freq_token = normalise_frequency(freq)
         point_token = normalise_price_point(price_point)
@@ -235,7 +308,16 @@ class CitiVeloQuotes:
         if not wanted:
             return {}
 
+        # Reasons are collected locally as well as into the caller's mapping, so
+        # a strict failure can name WHY without forcing every caller to pass one.
+        reasons: MutableMapping[str, str] = {}
+
         if self._cache is None:
+            # THE BYPASS. No cache is read and none is written - not even the
+            # directory is created. This is also the branch a direct-mode reader
+            # takes (see :meth:`direct_reader`), and the raise-don't-degrade
+            # property it relies on comes from :meth:`client`: with nothing on
+            # disk to fall back to, an unavailable add-in cannot be papered over.
             client = self.client()
             got = dict(
                 client.fetch_timeseries(
@@ -247,12 +329,17 @@ class CitiVeloQuotes:
                     price_point=point_token,
                 )
             )
+            reasons.update(client.last_failures())
             if failures is not None:
-                failures.update(client.last_failures())
+                failures.update(reasons)
+            if strict:
+                self._assert_all_served(
+                    got, wanted, reasons, freq=freq_token, start=start, end=end, direct=True
+                )
             return got
 
-        fetcher = None if self._offline else self._fetcher(period=period, failures=failures)
-        return self._cache.get(
+        fetcher = None if self._offline else self._fetcher(period=period, failures=reasons)
+        out = self._cache.get(
             wanted,
             freq_token,
             start=start,
@@ -261,6 +348,46 @@ class CitiVeloQuotes:
             fetcher=fetcher,
             force_refresh=force_refresh,
             max_staleness=self._max_staleness if max_staleness is None else max_staleness,
+        )
+        if failures is not None:
+            failures.update(reasons)
+        if strict:
+            self._assert_all_served(
+                out, wanted, reasons, freq=freq_token, start=start, end=end, direct=False
+            )
+        return out
+
+    @staticmethod
+    def _assert_all_served(
+        served: Mapping[str, pd.Series],
+        wanted: Sequence[str],
+        reasons: Mapping[str, str],
+        *,
+        freq: str,
+        start: Optional[DateLike],
+        end: Optional[DateLike],
+        direct: bool,
+    ) -> None:
+        """Raise naming every requested tag that came back with no rows."""
+        missing = [
+            t
+            for t in wanted
+            if t not in served or served[t] is None or len(served[t]) == 0
+        ]
+        if not missing:
+            return
+        detail = ", ".join(f"{t} ({reasons.get(t, 'no reason reported')})" for t in missing)
+        where = "the Citi Velocity add-in" if direct else "the tag cache or the add-in"
+        remedy = (
+            "Check the add-in is signed in and the tag is valid "
+            "(client.validate_with_controls([...])), or widen the window. "
+            "This request was DIRECT, so there is deliberately no cached value to fall back on."
+            if direct
+            else "Check the tag is valid, or widen the window."
+        )
+        raise CitiVelocityError(
+            f"{len(missing)} of {len(wanted)} requested tag(s) returned no rows from {where} "
+            f"over {start}..{end} (freq={freq}): {detail}. {remedy}"
         )
 
     def frame(
