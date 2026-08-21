@@ -115,8 +115,46 @@ hedge that removes the drawdown rather than the return. The factor attribution
 (§7) is the input to that judgement, and it is the only thing that says whether
 the −$20 m drawdown is convexity being paid for or duration being taken.
 
-## 7. Factor attribution
+## 7. Factor attribution — it is duration, not convexity
 
-*(pending — regressing daily P&L on the shared level / slope / curvature /
-convexity basis with Newey-West t-stats. The mtm-share statistic cannot answer
-the direction question; an earlier block established that by getting it wrong.)*
+Daily P&L on the shared basis, Newey-West t-stats, 1,409 observations,
+2020-06 → 2026-08. Basis: PC1 87.76 % of variance, PC2 11.26 %, PC3 0.75 %, with
+PC1's loadings **all positive and humped** — 0.295 (2Y), 0.342 (5Y), 0.258 (50Y)
+— i.e. a level factor, matching the 88.34 % the previous block measured on a
+neighbouring window.
+
+| factor | share of P&L | t (HAC) | incremental R² |
+|---|---:|---:|---:|
+| **level** | **−132.8 %** | **−4.85** | **0.1226** |
+| convexity | −156.8 % | −0.67 | 0.0012 |
+| curvature | +2.0 % | 0.14 | 0.0001 |
+| slope | +0.1 % | 0.37 | 0.0004 |
+| unexplained | +387.5 % | — | — |
+
+Total R² 0.1244, of which **level supplies 0.1226**. The only factor that is
+statistically distinguishable from nothing is the one the trade is supposed not
+to have: a DV01-neutral package is a claim about level exposure, and this book
+carries level at **t = −4.85** and *loses* money to it.
+
+**One caveat, stated because it cuts the other way.** `DESIGN.md` records that
+daily convexity is unidentified — a squared daily move is noise-sized against
+daily P&L, and the codebase measures convexity t-stats of 2.1–5.4 at trade level
+against 0.9–2.1 daily. So the convexity row here (t = −0.67) is **not** evidence
+that convexity is absent; it is the expected reading at this frequency. What the
+daily regression *can* establish is the level exposure, and that is unambiguous.
+
+The two findings compose without needing the trade-level number: §2 already
+shows the gross Sharpe fails its own search, and §7 shows the significant
+exposure is unwanted duration. A trade-level convexity term, whatever it turns
+out to be, does not rescue a book whose best gross number is below the null.
+
+### The classifier needed checking before it could be believed
+
+`classify_pcs` first labelled PC1 **"slope"**. It was handed
+`list(rates.columns)` — twelve tenors, because `build_rate_panel` returns the
+`extra_tenors` 1Y alongside — for an eleven-element loading vector, and reported
+a phantom sign flip. The loadings are all positive; PC1 is level. Fixed to pass
+`fm.tenors`, the tenors actually fitted. Worth recording because the label is the
+thing the whole attribution is read through, and "a long-end-heavy grid can
+rotate them" is a real hazard this repo already warns about — which is exactly
+why a wrong label here was plausible enough to nearly accept.

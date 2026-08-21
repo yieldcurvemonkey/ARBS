@@ -37,10 +37,19 @@ rates = FA.build_rate_panel(cfg)
 print(f"  {rates.shape}")
 
 fm = FA.fit_factor_model(rates, cfg)
-lab = FA.classify_pcs(fm.loadings, list(rates.columns))
+# `classify_pcs` must be given the tenors the model actually FIT, not every
+# column of the panel. `build_rate_panel` also returns `extra_tenors` (1Y), so
+# passing `rates.columns` hands the classifier 12 labels for 11 loadings and it
+# reports a phantom sign flip -- which is how PC1 came back labelled "slope"
+# when its loadings are 0.258-0.342, all positive, on 87.76 % of the variance.
+lab = FA.classify_pcs(fm.loadings, list(fm.tenors))
 print("\nPC labels (tested on the loadings, not assumed):")
 print(lab.to_string())
-print(f"explained: {np.round(fm.explained * 100, 2).tolist()}")
+ev = fm.explained_variance
+print(f"explained variance: {(ev / ev.sum() * 100).round(2).to_dict()}")
+print()
+print("PC1 loadings by tenor (the label is a claim about THESE):")
+print(fm.loadings.iloc[:, 0].round(4).to_string())
 
 par = FA.parallel_move(fm)
 X = pd.DataFrame({
@@ -60,17 +69,22 @@ for tag in ("base", "zero_cost"):
     eq.index = pd.to_datetime(eq.index)
     y = eq.diff().dropna()
     res = FA.attribute(y, X, name=f"w4_{tag}", level="daily", unit="usd")
-    shares = getattr(res, "shares", None)
-    tstats = getattr(res, "tstats", None)
+    shares, tstats = res.shares, res.tstats
+    inc = res.incremental_r2
     print(f"\n=== W4 {tag} — daily attribution ===")
-    print(f"  R2 {getattr(res, 'r2', float('nan')):.4f}   n {getattr(res, 'n', len(y))}")
+    print(f"  R2 {res.r2:.4f}  adj {res.r2_adj:.4f}   n {res.n_obs}   total {res.total_pnl:,.0f}")
     if shares is not None:
         print("  share of realised P&L by factor:")
         print(pd.DataFrame({"share_%": (pd.Series(shares) * 100).round(1),
-                            "t": pd.Series(tstats).round(2)}).to_string())
-    rows.append({"tag": tag, "r2": getattr(res, "r2", None),
-                 "shares": {k: float(v) for k, v in dict(shares or {}).items()},
-                 "t": {k: float(v) for k, v in dict(tstats or {}).items()}})
+                            "t": pd.Series(tstats).round(2),
+                            "incr_R2": pd.Series(inc).round(4)}).to_string())
+    # `shares or {}` on a Series raises: a Series has no truth value. Convert
+    # explicitly rather than relying on falsiness.
+    rows.append({"tag": tag, "r2": float(res.r2), "r2_adj": float(res.r2_adj),
+                 "n_obs": int(res.n_obs), "total_pnl": float(res.total_pnl),
+                 "shares": {str(k): float(v) for k, v in shares.items()},
+                 "t": {str(k): float(v) for k, v in tstats.items()},
+                 "incremental_r2": {str(k): float(v) for k, v in inc.items()}})
 
 (DATA / "rac_w4_attribution.json").write_text(json.dumps(rows, indent=1, default=str))
 print(f"\nwrote {DATA / 'rac_w4_attribution.json'}")
