@@ -101,13 +101,20 @@ def fingerprint(catalog_dir: pathlib.Path = CATALOG_DIR) -> str:
 
     Names are hashed alongside the bytes so that swapping two artefacts' contents
     changes the fingerprint. Hashing bytes alone would not notice.
+
+    Line endings are normalised first. This repo has ``core.autocrlf=true`` and no
+    ``.gitattributes``, so the same committed JSON lands as CRLF on one checkout
+    and LF on another; hashing raw bytes would make the fingerprint a property of
+    *how you cloned*, and the drift test would fail on a machine where nothing is
+    actually stale. That failure would be indistinguishable from a real one, which
+    is what makes it worth a line of code.
     """
     h = hashlib.sha256()
     for name in SOURCE_ARTEFACTS:
         path = catalog_dir / name
         h.update(name.encode("utf-8"))
         h.update(b"\0")
-        h.update(path.read_bytes())
+        h.update(path.read_bytes().replace(b"\r\n", b"\n"))
     return h.hexdigest()
 
 

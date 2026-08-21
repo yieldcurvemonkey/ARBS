@@ -17,7 +17,7 @@ from typing import Dict, Tuple
 __all__ = ["CATALOG_FINGERPRINT", "COUNTS", "FAMILIES", "GENERATED_FROM", "TOTAL", "THRESHOLD"]
 
 #: SHA-256 over ``GENERATED_FROM``, in that order, names included.
-CATALOG_FINGERPRINT = "de9c1d6b50a0b58298cacd8572f9aa9d3cf2eb76e98e107b190f865d554e19f7"
+CATALOG_FINGERPRINT = "f5305c4de0347e80f90419de2ee382f373762c588f7332d6be6076ecaf4bced8"
 
 #: The catalog artefacts hashed into the fingerprint.
 GENERATED_FROM: Tuple[str, ...] = ('dag_rates_deep.json', 'shapes2.json')
