@@ -134,8 +134,32 @@ against, before, Blues 195 (2022) / 51 (2023) and Golds 187 (2021) / 52 (2022) /
 51 (2023). **2020–2026 is complete for every colour Citi prints**, with Golds 2021
 the only soft spot.
 
-Still open: 2018 Golds (41/167) and 2019 Golds (77/253), outside the 2021–2026
-backtest window, deferred to a second pass.
+### The 2018-19 tail is not recoverable, and that is now measured
+
+A second pass ran over 2018-05-04 .. 2019-12-31: **302 dates, 313 cells, 0 dates
+gained depth, 0 errors other than the vendor returning nothing.** Every one of
+those dates already sat at depth 19 and needed exactly one contract -- the 20th --
+and every request came back `BARCHART_STIRF-RL returned no data`.
+
+The job did not report success. Its own acceptance check -- depth is re-measured
+after the run with the same reader the panel uses, and keys written is explicitly
+not the criterion -- fired and exited with *"fetched dates but MEASURED DEPTH DID
+NOT MOVE"*. That is the check earning its keep: 302 successful-looking calls
+produced 313 cells of nothing, and a job counting writes would have called it a
+win.
+
+This bounds the earlier finding rather than contradicting it. Two deliberate
+probes had shown the vendor still serves pre-2024 deferred settles (`SR3Z26`
+resolved for both 2023-06-26 and 2022-08-09), and the 2021-2023 warm then
+succeeded on 456 of 486 dates. What the 2018-19 pass adds is where that stops.
+The distinguishing feature is not the as-of date but the **contract**: the deep
+end of a 2018-19 strip reaches quarterly contracts that have since expired,
+whereas the deep end of a 2021-2023 strip reaches 2026-2028 contracts that are
+still listed.
+
+So 2018 Golds stays at 41/167 and 2019 Golds at 77/253. Both are outside the
+2021-2026 backtest window. **No further attempt is warranted on this path** --
+the cost is an hour per pass and the measured yield is zero.
 
 ---
 
