@@ -1,0 +1,2 @@
+days,fast_end_bp,qdb_end_bp,end_gap_bp,max_abs_gap_bp,daily_change_corr,gap_trend_bp_per_yr,column,sign,hold,n_packages,check_0,check_1,check_2,check_3,check_4
+85,-0.23705280174619772,-0.22114386514592965,0.01590893660026807,1.0354709939227829,0.81370527447223,-0.5061738562102361,agg_own__coupon_long__w025,-1.0,21,20,True,True,True,True,True

@@ -1,0 +1,4 @@
+width_y,bonds_per_bucket_med,bonds_per_bucket_mean,bonds_per_bucket_p90,bonds_per_bucket_max,occupied_buckets_med
+0.25,1.0,1.0046040058573875,1.0,2,32.0
+0.5,2.0,1.7292107230588487,2.0,3,19.0
+1.0,4.0,3.280902974791278,4.0,5,10.0
