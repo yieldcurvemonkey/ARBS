@@ -310,17 +310,26 @@ def plan_day(probe, day: dt.date, depth: int, from_rank: int,
     # either, and writing 18..20 on top of a hole at 13 moves contiguous depth
     # by nothing.
     #
-    # So the start rank is MEASURED: begin one past whatever the tape actually
-    # reaches, and never later than `from_rank`. On a date already at 17 this
-    # is exactly the old behaviour; on a depth-12 date it widens to 13..20 on
-    # its own. In bulk mode the extra ranks cost one request each, once.
-    deepest = max(before.values(), default=0)
-    start_rank = max(1, min(from_rank, deepest + 1))
+    # So the start rank is MEASURED: begin one past what the tape reaches, and
+    # never later than `from_rank`. On a date already at 17 this is exactly the
+    # old behaviour; on a depth-12 date it widens to 13..20 on its own. In bulk
+    # mode the extra ranks cost one request each, once.
+    #
+    # It must key off the SHALLOWEST instant that needs work, not the deepest.
+    # Using the deepest skipped a rank and left a hole that capped every other
+    # instant on the date: on 2026-03-12 one instant reached 13, so the start
+    # rank became 14, ranks 14..20 were written, and rank 13 stayed missing at
+    # the other 540 -- contiguous depth 12 with nineteen of twenty contracts
+    # present. The run reported the date as "gained" (one instant did), which
+    # is why this was only visible end to end, in a CA that still refused.
+    shallowest = min((before[ts] for ts in todo), default=0)
+    start_rank = max(1, min(from_rank, shallowest + 1))
     return {
         "date": day,
         "ladder": ladder,
         "start_rank": start_rank,
-        "deepest_before": deepest,
+        "deepest_before": max(before.values(), default=0),
+        "shallowest_todo": shallowest,
         "missing_symbols": ladder[start_rank - 1:depth],
         "stamps": stamps,
         "before": before,

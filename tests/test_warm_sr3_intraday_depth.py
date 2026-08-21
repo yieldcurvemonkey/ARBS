@@ -66,6 +66,20 @@ def test_the_start_rank_is_measured_not_assumed():
     lad = W._strip_symbols(DAY, 20)
     minutes = [9 * 60]
 
+    # A RAGGED date: one instant reaches 13, the rest reach 12. Keying off the
+    # deepest would start at 14 and leave rank 13 missing at every other
+    # instant -- nineteen of twenty contracts present and contiguous depth 12.
+    # Measured on 2026-03-12, and invisible in the run summary because the one
+    # deep instant made the date report as "gained".
+    deep_min = [9 * 60]
+    shallow_min = [9 * 60 + 1, 9 * 60 + 2]
+    probe = _probe_from(_keys_for(DAY, lad[:13], deep_min)
+                        + _keys_for(DAY, lad[:12], shallow_min))
+    p = W.plan_day(probe, DAY, depth=20, from_rank=18)
+    assert p["deepest_before"] == 13 and p["shallowest_todo"] == 12
+    assert p["start_rank"] == 13, "keyed off the deepest instant; rank 13 skipped"
+    assert p["missing_symbols"][0] == lad[12]
+
     # a date the nightly job left at depth 12 -> must widen to 13..20
     probe = _probe_from(_keys_for(DAY, lad[:12], minutes))
     p = W.plan_day(probe, DAY, depth=20, from_rank=18)
