@@ -287,7 +287,12 @@ def test_ignore_cache_does_not_bypass_the_curve_cache(rl_curve, cube, snapshot, 
     seen: list[bool] = []
     mdp = IRSwaptionMDP(source="CITIVELO-RL", curve_source="citivelo_excel_rl")
 
-    def _capture(*, curve_name, dates, ignore_cache):  # noqa: ARG001
+    # **_kw, not a fixed signature. _fetch_curve_map gained request_kwargs and
+    # n_jobs after this double was written, and a keyword-only stub rejects any
+    # argument added later -- which is a TypeError in the TEST reported as a
+    # failure of the code under test. What this asserts is ignore_cache; the rest
+    # of the signature is not its business.
+    def _capture(*, curve_name, dates, ignore_cache, **_kw):  # noqa: ARG001
         seen.append(bool(ignore_cache))
         return {snapshot.as_of: rl_curve}
 
@@ -325,7 +330,7 @@ def test_force_refresh_still_refreshes_the_curve(rl_curve, cube, snapshot):
     mdp = IRSwaptionMDP(
         source="CITIVELO-RL", curve_source="citivelo_excel_rl", force_refresh=True
     )
-    mdp._fetch_curve_map = lambda *, curve_name, dates, ignore_cache: (  # noqa: ARG005
+    mdp._fetch_curve_map = lambda *, curve_name, dates, ignore_cache, **_kw: (  # noqa: ARG005
         seen.append(bool(ignore_cache)) or {snapshot.as_of: rl_curve}
     )
     mdp.get_pricer(

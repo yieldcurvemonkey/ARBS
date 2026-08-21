@@ -108,11 +108,13 @@ def audit_ticker(
 
     if m.empty:
         return {"ticker": ticker, "table": pd.DataFrame(), "gaps": [], "empty": True,
-                "lo": None, "hi": None, "dup_sha": pd.DataFrame()}
+                "lo": None, "hi": None, "dup_sha": pd.DataFrame(), "rechecked": None}
 
     m = m.copy()
     m["requested_date"] = pd.to_datetime(m["requested_date"])
     m["as_of"] = pd.to_datetime(m["as_of"])
+    if "fetched_at" in m.columns:
+        m["fetched_at"] = pd.to_datetime(m["fetched_at"], errors="coerce")
 
     lo = m["requested_date"].min().date()
     hi = m["requested_date"].max().date()
@@ -174,8 +176,22 @@ def audit_ticker(
         if len(rep):
             dup = sha[sha["content_sha1"].isin(rep.index)].sort_values(["content_sha1", "requested_date"])
 
+    # WHEN was the absence last CONFIRMED, as opposed to merely inherited?
+    #
+    # A ``no_file`` row is a claim about the endpoint, and the run that first made it
+    # had a documented way of being wrong -- 2,515 WAF refusals were once written into
+    # this store as "iShares publishes nothing for these dates". ``repair.py`` re-asks
+    # and rewrites ``fetched_at``, so a missing day carrying a RECENT stamp has been
+    # checked against the live endpoint rather than taken on trust. Surfacing it is what
+    # stops the same 130 days being re-investigated every time someone reads the audit.
+    rechecked = None
+    if "fetched_at" in m.columns and missing:
+        stamps = m.loc[m["requested_date"].dt.date.isin(missing), "fetched_at"].dropna()
+        if len(stamps):
+            rechecked = stamps.max().date()
+
     return {"ticker": ticker, "table": table, "gaps": gaps, "empty": False,
-            "lo": lo, "hi": hi, "missing": missing, "dup_sha": dup,
+            "lo": lo, "hi": hi, "missing": missing, "dup_sha": dup, "rechecked": rechecked,
             "n_missing": len(missing), "n_never": len(set(grid) - attempted),
             "n_nofile": len(grid_set & nofile), "n_stale": len(grid_set & stale)}
 
@@ -249,6 +265,7 @@ def main(argv=None) -> int:
             "no_file": int(tot["no_file"]), "stale": int(tot["stale"]),
             "gap_runs": len(r["gaps"]),
             "pct": round(100.0 * tot["stored"] / max(1, tot["bdays"]), 2),
+            "rechecked": r.get("rechecked") or "-",
         })
 
     if summary:
