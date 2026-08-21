@@ -361,10 +361,18 @@ def test_the_preflight_probe_table(warmer, monkeypatch, probe_mb, expect_block, 
     ``None`` only when the probe could not be read at all - and what might be
     running behind an unreadable probe is a 13 GB add-in. Collapsing the two is
     what makes a gate fail open.
+
+    This tests the CLASSIFICATION, with autostart pinned off. Two of these rows -
+    ``0.0`` and the two over-ceiling ones - are exactly the states the nightly now
+    tries to REPAIR, and with autostart on this test would drive the real
+    supervisor: it did, once, and restarted the developer's Excel at 05:46 on
+    2026-08-21. The repair itself is covered with stubs in
+    ``test_warm_excel_autostart.py``; conftest carries the suite-wide rail.
     """
     import MDP.CitiVelocityExcel.memory_guard as G
 
     monkeypatch.setattr(G, "excel_memory_mb", lambda *a, **k: probe_mb)
+    monkeypatch.setattr(warmer, "_CV_EXCEL_AUTOSTART", False)
 
     reason = warmer._excel_preflight_real()
     if not expect_block:

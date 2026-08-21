@@ -942,6 +942,46 @@ _CV_SWAP_SPREAD_TAGS = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD"
 #: Stop below this. See utils/warm_jobs.py and the 2026-08-07 wedge.
 _CV_MEMORY_CEILING_MB = 3800.0
 
+#: Whether the nightly may START Excel and wait for the add-in to sign itself in.
+#:
+#: The pre-flight used to treat "no Excel" and "Excel over the ceiling" as human
+#: problems, and on a machine nobody is sitting at they are terminal ones. Measured
+#: 2026-08-20: six of seventeen jobs failed with ``ExcelNotRunningError`` because the
+#: last process that had been using Excel closed it. Three consecutive nights, three
+#: different causes -- a batch-0 abort, a 12,501 MB ceiling refusal, then no Excel at
+#: all -- and only the middle one had anything to do with this repo's code.
+#:
+#: ``supervisor`` already knows how to fix both, and its launch path is measured
+#: rather than assumed: ``launch_excel`` uses ShellExecute, i.e. exactly what
+#: double-clicking the anchor workbook does, and on 2026-08-09 with everything else
+#: held equal the ShellExecute instance signed in while a ``Popen`` one accepted the
+#: click and did nothing. That is the distinction the old pre-flight message got
+#: wrong: a COM-spawned Excel never registers the ``CV*`` UDFs, but a
+#: ShellExecute'd one is an ordinary user session and does. Measured again
+#: 2026-08-20 across three fresh launches during a multi-hour backfill: signed in
+#: every time, 2.8 min, one Login press.
+#:
+#: Set to 0 to restore the old refuse-and-wait-for-a-human behaviour.
+_CV_EXCEL_AUTOSTART = os.environ.get("ARBS_WARM_EXCEL_AUTOSTART", "1").strip().lower() not in {
+    "0", "false", "f", "no", "n", "off",
+}
+
+#: How long to wait for the add-in to authenticate. Saved credentials resume in
+#: about half a minute once the login pane is open, but the pane's handler is inert
+#: until roughly four minutes after launch, so the wait has to outlast that. Measured
+#: sign-ins have taken 2.8 min; the connect path's own docstring records ~13 for a
+#: cold one. 15 minutes sits above both and well inside a nightly envelope that runs
+#: 1 h 26 m to 2 h 52 m. It is a WALL CLOCK, not a retry count: the failure mode this
+#: has to avoid is the one that wedged 2026-08-20's run for two hours, a COM retry
+#: loop with no deadline at all.
+_CV_SIGNIN_TIMEOUT_S = float(os.environ.get("ARBS_WARM_EXCEL_SIGNIN_TIMEOUT", "900"))
+
+#: One repair per process, ever. A leaking add-in must not be able to turn this into
+#: a restart loop that spends the whole night rescuing and relaunching an Excel that
+#: grows past the ceiling again each time. If one attempt does not produce a usable
+#: session, the run says so and the Velocity jobs are SKIPPED exactly as before.
+_EXCEL_REPAIR_ATTEMPTED = False
+
 #: The bonds warmed daily. On-the-run and first three off-the-runs across the
 #: curve, expressed as ISINs at run time via the alias table, plus whatever the
 #: caller adds. Kept small deliberately: the universe is 2,162 bonds and a full
@@ -1058,6 +1098,76 @@ def _warn_unguarded_fallthrough(what):
         )
 
 
+def _repair_excel(reason: str, *, over_ceiling: bool):
+    """Try ONCE to give this run a signed-in Excel. ``None`` on success, else why not.
+
+    Two situations, two different repairs, and the difference matters because one of
+    them can destroy the user's work:
+
+    * **Nothing running.** Launch and wait. Nothing to lose, so nothing to rescue.
+    * **Over the ceiling.** ``restart_excel`` RESCUES FIRST -- a dirty workbook with a
+      path is saved in place, one without is saved into the recovery directory and the
+      path logged -- and if a rescue fails it aborts the restart and leaves Excel alone.
+      ``force=True`` overrides that and is never passed here. ``EXCEL.EXE`` is the
+      user's application, and a warm that discards someone's unsaved ``Book5`` to save
+      itself twenty minutes has made a bad trade on their behalf.
+
+    Never raises. The caller's contract is a reason string or ``None``, and a repair
+    that throws would convert a SKIPPED Velocity block into a FAILED run -- the exact
+    misreporting the SKIPPED/FAILED split exists to prevent.
+    """
+    global _EXCEL_REPAIR_ATTEMPTED
+
+    if not _CV_EXCEL_AUTOSTART:
+        return f"{reason} (autostart is off: ARBS_WARM_EXCEL_AUTOSTART=0)"
+    if _EXCEL_REPAIR_ATTEMPTED:
+        return f"{reason}; a repair was already attempted this run and did not stick"
+    _EXCEL_REPAIR_ATTEMPTED = True
+
+    try:
+        from MDP.CitiVelocityExcel import supervisor
+        from MDP.CitiVelocityExcel.memory_guard import excel_memory_mb
+    except Exception as exc:  # noqa: BLE001 - the eleven non-Velocity jobs must still run
+        return f"{reason}; the supervisor will not import ({exc})"
+
+    t0 = time.perf_counter()
+    try:
+        if over_ceiling:
+            log.warning("Excel pre-flight: %s -- restarting it (rescuing first, force=False)",
+                        reason)
+            client = supervisor.restart_excel(ready_timeout=_CV_SIGNIN_TIMEOUT_S, logger=log)
+        else:
+            log.warning("Excel pre-flight: %s -- starting it and waiting for sign-in", reason)
+            supervisor.launch_excel(logger=log)
+            client = supervisor.wait_for_addin(
+                timeout=_CV_SIGNIN_TIMEOUT_S, press_login=True, logger=log
+            )
+    except Exception as exc:  # noqa: BLE001 - a failed repair is a SKIP, not a crash
+        return (f"{reason}; tried to fix it and could not after "
+                f"{time.perf_counter() - t0:.0f}s ({type(exc).__name__}: {exc})")
+
+    if client is None:
+        return f"{reason}; the repair returned no client after {time.perf_counter() - t0:.0f}s"
+
+    # Re-probe rather than trust the repair. ``wait_for_addin`` proves the add-in
+    # ANSWERS; it says nothing about how big the process is, and a restart that
+    # relands above the ceiling must still block -- otherwise this has replaced a
+    # refusal with a connection to exactly the state the ceiling exists to refuse.
+    try:
+        mb = excel_memory_mb()
+    except Exception as exc:  # noqa: BLE001
+        return f"repaired Excel but could not re-probe its memory ({exc})"
+    if mb is None or mb <= 0.0:
+        return "repaired Excel but the memory probe still cannot see a running instance"
+    if mb >= _CV_MEMORY_CEILING_MB:
+        return (f"repaired Excel but it came back at {mb:.0f} MB, still at or above the "
+                f"{_CV_MEMORY_CEILING_MB:.0f} MB ceiling")
+
+    log.info("Excel pre-flight: repaired in %.1f min, now at %.0f MB and signed in",
+             (time.perf_counter() - t0) / 60.0, mb)
+    return None
+
+
 def _excel_preflight():
     """Ask ONCE whether the Excel jobs can run. ``None`` means go.
 
@@ -1122,16 +1232,24 @@ def _excel_preflight():
             "then no Velocity job can be allowed to connect"
         )
     if mb <= 0.0:
-        return (
-            "no Excel is running, so no Velocity job can work. The bridge attaches "
-            "to a human-authenticated Excel and never spawns one, because a spawned "
-            "instance never registers the CV* UDFs"
+        # NOT "a human must open Excel" any more. The bridge still never spawns an
+        # instance over COM -- one of those does not register the CV* UDFs -- but
+        # ``supervisor.launch_excel`` does not spawn over COM. It ShellExecutes the
+        # anchor workbook, which is an ordinary user session, and that instance signs
+        # itself in from saved credentials.
+        return _repair_excel(
+            "no Excel is running, so no Velocity job can work",
+            over_ceiling=False,
         )
     if mb >= _CV_MEMORY_CEILING_MB:
-        return (
+        # "Only a human restart shrinks it" was true of the memory and false of the
+        # human: ``supervisor.restart_excel`` performs exactly that restart, rescuing
+        # unsaved work before it quits and refusing to proceed if a rescue fails.
+        return _repair_excel(
             f"Excel is at {mb:.0f} MB, at or above the {_CV_MEMORY_CEILING_MB:.0f} MB "
-            "ceiling. Only a human restart shrinks it - the add-in's memory only ever "
-            "grows, and it wedged at 5,249 MB on 2026-08-07"
+            "ceiling (the add-in's memory only ever grows, and it wedged at 5,249 MB "
+            "on 2026-08-07)",
+            over_ceiling=True,
         )
     log.info("Excel pre-flight: %.0f MB, under the %.0f MB ceiling - Velocity jobs may run",
              mb, _CV_MEMORY_CEILING_MB)

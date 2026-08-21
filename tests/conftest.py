@@ -104,6 +104,27 @@ os.environ.setdefault(
     str(pathlib.Path(_UST_WARM_MANIFEST_DIR) / "manifest.json"),
 )
 
+# ---------------------------------------------------------------------------
+# The nightly warm may START and RESTART Excel. The test suite may not.
+#
+# This rail exists because it was needed, not as a precaution. Giving
+# ``_excel_preflight`` a repair path made an EXISTING test reach the real
+# supervisor: ``test_the_preflight_probe_table`` stubs the memory probe to 0.0 MB
+# and to 6,526 MB and then calls the genuine pre-flight, which under autostart
+# routes those to ``launch_excel`` and ``restart_excel``. Measured 2026-08-21 at
+# 05:46:37 -- a plain test run restarted the developer's Excel, taking it from
+# 5,237 MB to a fresh 572 MB instance.
+#
+# Nothing was lost (``quit_excel`` rescues dirty workbooks first and the recovery
+# directory came back empty, so there were none), but a test suite that can
+# terminate the user's application is a suite with a side effect nobody agreed to.
+# The probe-table test is fixed to be explicit about it too; this is the rail that
+# stops the NEXT such test being written by accident.
+#
+# ``setdefault``: an operator who exports the variable deliberately keeps it, which
+# is what makes a live end-to-end check of the repair still possible on purpose.
+os.environ.setdefault("ARBS_WARM_EXCEL_AUTOSTART", "0")
+
 
 @pytest.fixture(autouse=True)
 def _reset_pandas_copy_on_write():
