@@ -71,6 +71,13 @@ CONFIG = R.RacConfig(
 MIN_HOLD, MAX_HOLD = 21, 252
 print(json.dumps(CONFIG.to_dict(), indent=1, default=str))
 
+# Loaded here rather than in section 3 because the tie-out below recomputes
+# from it rather than restating numbers.
+panel = pd.read_parquet(DATA / "rac_screen_panel.parquet")
+panel["date"] = pd.to_datetime(panel["date"])
+print(f"screen panel {panel.shape}, {panel['pair'].nunique()} pairs, "
+      f"{panel['date'].min().date()} .. {panel['date'].max().date()}")
+
 # %% [markdown]
 # ## 2. Does the machine give the right answer to a question we already know?
 #
@@ -82,29 +89,50 @@ print(json.dumps(CONFIG.to_dict(), indent=1, default=str))
 # The verdict is a **split**: rank transfers, level does not.
 
 # %%
-TIEOUT = {
-    "spearman_level": 0.9857,
-    "spearman_carry": 0.9445,
-    "spearman_be_daily": 0.9920,
-    "spearman_be_over_rv": 0.9884,
-    "offset_level_bp": -0.807,
-    "offset_carry_bp": +1.101,
-    "offset_ratio": -0.190,
-    "citi_exit_threshold": 0.8,
-    "citi_steepener_threshold": 1.0,
-    "our_max_ratio": 0.747,
-}
-print("Citi 2019-12-04, 15 pairs, graded out of sample:")
-for k, v in TIEOUT.items():
-    print(f"  {k:26} {v:+.4f}" if isinstance(v, float) else f"  {k:26} {v}")
+# RECOMPUTED from the panel against the answer key held in the test suite, not
+# restated. The published table lives in tests/test_convexity_rv_rac_screen.py
+# so there is exactly one copy of it.
+from scipy.stats import spearmanr
 
-assert TIEOUT["spearman_be_over_rv"] > 0.95, "the decision statistic's RANK must transfer"
-assert TIEOUT["our_max_ratio"] < TIEOUT["citi_steepener_threshold"], (
-    "no pair on our curve reaches Citi's 1.0 steepener threshold, which is why "
-    "the rule is keyed on rank and percentile rather than on her absolute levels"
+_ns: dict = {}
+exec(compile((REPO / "tests" / "test_convexity_rv_rac_screen.py").read_text(
+    encoding="utf-8").split("@pytest.fixture")[0], "<key>", "exec"), _ns)
+PUB = {"level_bp": _ns["PUB_LEVEL"], "carry_1y_bp": _ns["PUB_CARRY"],
+       "be_daily_analytic": _ns["PUB_BE"], "be_over_rv": _ns["PUB_RATIO"]}
+CITI_DATE = pd.Timestamp("2019-12-04")
+
+import RVUtils.ConvexityRV.strat3_strikeless_vol as S3
+
+_day = (panel[panel["date"] == CITI_DATE]
+        .set_index("pair").reindex([f"{s}/{l}" for s, l in S3.PAIRS_15]))
+assert _day["level_bp"].notna().all(), f"the panel does not carry {CITI_DATE.date()}"
+
+rows = []
+for col, pub in PUB.items():
+    if col not in _day.columns:
+        continue
+    ours = _day[col].to_numpy(dtype=float)
+    p = np.asarray(pub, dtype=float)
+    m = np.isfinite(ours) & np.isfinite(p)
+    rows.append({"column": col, "n": int(m.sum()),
+                 "spearman": float(spearmanr(ours[m], p[m]).statistic),
+                 "mean_offset": float(np.mean(ours[m] - p[m]))})
+TIE = pd.DataFrame(rows).set_index("column")
+print(f"Citi {CITI_DATE.date()}, 15 pairs, recomputed from the panel:")
+print(TIE.round(4).to_string())
+
+_ratio = TIE.at["be_over_rv", "spearman"] if "be_over_rv" in TIE.index else np.nan
+assert _ratio > 0.95, f"the decision statistic's RANK no longer transfers: {_ratio:.4f}"
+
+_our_max = float(np.nanmax(_day["be_over_rv"].to_numpy(dtype=float)))
+CITI_STEEPENER_THRESHOLD = 1.0
+print(f"\nour max be_over_rv on that date: {_our_max:.4f}")
+assert _our_max < CITI_STEEPENER_THRESHOLD, (
+    f"our max ratio is {_our_max:.4f}; it now reaches Citi's 1.0 steepener "
+    "threshold, so the rank-and-percentile rule may no longer be necessary"
 )
-print("\nOK: rank transfers (spearman 0.988); level does not (offset -0.190),")
-print("and Citi's 1.0 steepener threshold would fire ZERO times on our curve.")
+print("OK: rank transfers; level does not, and Citi's 1.0 steepener threshold")
+print("would fire ZERO times on our curve.")
 
 # %% [markdown]
 # ## 3. Why the traded statistic is not the published one
@@ -125,10 +153,6 @@ print("and Citi's 1.0 steepener threshold would fire ZERO times on our curve.")
 #                        {\sigma_{\text{realised}}\ (\mathrm{bp/day}) \times \sqrt{252}}$$
 
 # %%
-panel = pd.read_parquet(DATA / "rac_screen_panel.parquet")
-panel["date"] = pd.to_datetime(panel["date"])
-print(f"screen panel {panel.shape}, {panel['pair'].nunique()} pairs, "
-      f"{panel['date'].min().date()} .. {panel['date'].max().date()}")
 
 sat = R.saturation_table(R.add_rac(panel))
 print("\nsaturation of the PUBLISHED ratio, by year:")
@@ -299,18 +323,41 @@ print("\nCosts make it worse. They are NOT what makes it dead — see section 9.
 # level.
 
 # %%
-ATTR = {
-    "level":     {"share_pct": -132.8, "t": -4.85, "incr_r2": 0.1226},
-    "convexity": {"share_pct": -156.8, "t": -0.67, "incr_r2": 0.0012},
-    "curvature": {"share_pct": 2.0,    "t": 0.14,  "incr_r2": 0.0001},
-    "slope":     {"share_pct": 0.1,    "t": 0.37,  "incr_r2": 0.0004},
-}
-A = pd.DataFrame(ATTR).T
-print(A.to_string())
-print("\ntotal R2 0.1244, of which level supplies 0.1226")
+# LOADED, not typed. An earlier revision of this cell hardcoded the numbers into
+# a dict and then asserted on that dict -- `assert abs(ATTR["level"]["t"]) > 3.0`
+# against a literal `-4.85` cannot fail whatever the data says. Worse, the
+# artifact it claimed to quote did not exist on disk at the time, because the
+# script that writes it had crashed on `shares or {}` (a Series has no truth
+# value) after printing. A gatekeeper pass caught both.
+_attr_f = DATA / "rac_w4_attribution.json"
+assert _attr_f.exists(), (
+    f"{_attr_f.name} is missing. Run "
+    "notebooks/backtests/convexity_rv/_rac_w4_attribution.py; this cell must "
+    "read a committed artifact rather than restate numbers from prose."
+)
+_attr = {r["tag"]: r for r in json.loads(_attr_f.read_text())}
+_base = _attr["base"]
 
-assert abs(ATTR["level"]["t"]) > 3.0, "level should be the significant factor"
-assert abs(ATTR["convexity"]["t"]) < 2.0
+A = pd.DataFrame({
+    "share_pct": {k: 100.0 * v for k, v in _base["shares"].items()},
+    "t": _base["t"],
+    "incr_r2": _base["incremental_r2"],
+}).reindex(["level", "slope", "curvature", "convexity", "unexplained"]).dropna(how="all")
+print(A.round(4).to_string())
+print(f"\ntotal R2 {_base['r2']:.4f} (adj {_base['r2_adj']:.4f}), n={_base['n_obs']:,}")
+print(f"of which level supplies {_base['incremental_r2']['level']:.4f}")
+
+_t = _base["t"]
+_ir2 = _base["incremental_r2"]
+assert abs(_t["level"]) > 3.0, (
+    f"level t is {_t['level']:+.2f}; the claim that the significant exposure is "
+    "duration no longer holds and section 12 needs re-deriving"
+)
+assert abs(_t["convexity"]) < 2.0, f"convexity t is {_t['convexity']:+.2f}"
+assert _ir2["level"] > 10 * _ir2["convexity"], (
+    f"level incremental R2 {_ir2['level']:.4f} is no longer an order of "
+    f"magnitude above convexity's {_ir2['convexity']:.4f}"
+)
 print("\nThe only factor distinguishable from nothing is the one a DV01-neutral")
 print("package is supposed not to have, and the book LOSES to it.")
 print("\nCAVEAT that cuts the other way: DESIGN.md records that DAILY convexity is")
@@ -329,25 +376,57 @@ span = float(PERF[PERF["arm"] == "base"]["span_years"].iloc[0])
 n_eff = span * 252.0 / mean_hold
 print(f"mean hold {mean_hold:.0f} bdays -> n_eff ~ {n_eff:.1f} independent holds")
 
+# TWO CLOCKS, AND THEY MUST BOTH BE SHOWN.
+# `expected_max_sharpe_under_null(N, n_obs=k)` defaults to sr_std = 1/sqrt(k),
+# the standard error of a PER-OBSERVATION Sharpe. `ann_sharpe` is ANNUALISED.
+# Comparing them directly is a clock mismatch, and here it is the flattering
+# direction: an annualised Sharpe has standard error 1/sqrt(span_years) under
+# the null, and with holds this long that is the LARGER number, so the
+# per-observation null understates what the search has to clear.
+#
+# Both are reported. A verdict that depended on the choice would not be one.
+sr_std_perhold = 1.0 / np.sqrt(n_eff)              # per-hold clock
+sr_std_ann = 1.0 / np.sqrt(span)                   # annualised clock
+print(f"null SE, per-hold clock   {sr_std_perhold:.3f}  (1/sqrt(n_eff={n_eff:.1f}))")
+print(f"null SE, annualised clock {sr_std_ann:.3f}  (1/sqrt(span={span:.2f}y))")
+
 rows = []
 for N in (1, 6, 12, 24, 48):
-    rows.append({"trials": N,
-                 "E[max SR | null]": expected_max_sharpe_under_null(N, n_obs=int(n_eff))})
+    rows.append({
+        "trials": N,
+        "E[max SR | null] per-hold": expected_max_sharpe_under_null(
+            N, sr_std=sr_std_perhold),
+        "E[max SR | null] annualised": expected_max_sharpe_under_null(
+            N, sr_std=sr_std_ann)})
 NULL = pd.DataFrame(rows)
 print("\n" + NULL.round(3).to_string(index=False))
 
 gross_sr = float(PERF[PERF["arm"] == "zero_cost"]["ann_sharpe"].iloc[0])
 net_sr = float(PERF[PERF["arm"] == "base"]["ann_sharpe"].iloc[0])
-null_12 = float(NULL[NULL["trials"] == 12]["E[max SR | null]"].iloc[0])
-print(f"\ngross Sharpe {gross_sr:.3f}   net {net_sr:.3f}")
-print(f"E[max SR | null] at 12 trials: {null_12:.3f}")
+null_12 = float(NULL[NULL["trials"] == 12]["E[max SR | null] per-hold"].iloc[0])
+null_12_ann = float(NULL[NULL["trials"] == 12]["E[max SR | null] annualised"].iloc[0])
+print(f"\ngross Sharpe (annualised) {gross_sr:.3f}   net {net_sr:.3f}")
+print(f"E[max SR | null] at 12 trials: per-hold {null_12:.3f}, "
+      f"annualised {null_12_ann:.3f}")
 
 assert gross_sr < null_12, (
-    "the gross Sharpe now clears the 12-trial null; the verdict in this "
-    "notebook needs re-deriving"
+    "the gross Sharpe now clears the 12-trial per-hold null; the verdict in "
+    "this notebook needs re-deriving"
+)
+assert gross_sr < null_12_ann, (
+    "the gross Sharpe now clears the 12-trial ANNUALISED null -- the clock "
+    "that matches how ann_sharpe is measured; re-derive the verdict"
+)
+assert null_12_ann > null_12, (
+    "the annualised null is no longer the harder bar, so the prose above "
+    "about which way the mismatch cut is wrong for this book"
 )
 print("\nVERDICT: the GROSS Sharpe is below the null expectation for a 12-cell")
 print("search, and the exit-rule x minimum-hold sweep alone was 12 cells.")
+print(f"It is below on BOTH clocks -- {gross_sr:.3f} against {null_12:.3f} per-hold")
+print(f"and {null_12_ann:.3f} annualised -- so the verdict does not rest on the")
+print("choice of clock, which is the only reason reporting one of them would be")
+print("acceptable.")
 print("No cost assumption rescues this, because the failure is in the gross number.")
 
 # %% [markdown]

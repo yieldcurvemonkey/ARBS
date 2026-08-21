@@ -387,13 +387,59 @@ def test_the_futures_source_is_pinned_and_a_settle_source_is_refused(tb):
         tb.sfr_cvx_adj_intraday(["WHITES"], [PINNED], futures_source="BARCHART_STIRF-RL")
 
 
-def test_golds_fails_loud_with_the_depth_it_needed_and_the_depth_that_exists(tb, warm):
+@pytest.fixture
+def shallow_tape(monkeypatch):
+    """A tape that stops at contiguous depth 17, whatever is actually cached.
+
+    The refusal used to be pinned against the ambient diskcache, which was a
+    fact about this machine rather than about the code -- and the moment
+    ``scripts/warm_sr3_intraday_depth.py`` ran on the pinned instant, the test
+    went red for a reason that had nothing to do with a defect.
+
+    The shallowness is injected at the *probe*, not at ``tape_depth``, so every
+    downstream path stays real: the depth measurement, the per-symbol scan that
+    decides which contract is the first one missing, and the served-key
+    recording all run against it exactly as they would against a genuinely
+    shallow date.
+    """
+    real = CI.mdp_key_probe
+
+    def capped(futures_mdp):
+        inner = real(futures_mdp)
+        deep = {s for s in _strip(PINNED_DAY, 24)[17:]}      # ranks 18..24
+        return lambda key: (False if any(f"-{s}-" in key for s in deep)
+                            else inner(key))
+
+    monkeypatch.setattr(CI, "mdp_key_probe", capped)
+    return 17
+
+
+def _strip(day, depth):
+    from RVUtils.ConvexityRV.packs import quarterly_imm_sequence
+    from RVUtils.ConvexityRV.strat2_sofr_convexity import futures_symbol
+
+    return [futures_symbol(y, m) for y, m in quarterly_imm_sequence(day, depth)]
+
+
+PINNED_DAY = PINNED.date()
+
+
+def test_golds_fails_loud_with_the_depth_it_needed_and_the_depth_that_exists(
+        tb, warm, shallow_tape):
     """Never a shallower pack served under the deeper pack's name.
 
-    The intraday tape reaches contiguous depth 20 on ZERO dates in every year
-    2018-2026 and its maximum anywhere is 17, so GOLDS (rank 17, needs depth 20)
-    is structurally unreachable. The failure has to name both numbers or the
+    GOLDS is rank 17 and spans contracts 17..20, so it needs a contiguous strip
+    of 20. On a tape that stops at 17 the request must fail, and the failure has
+    to name BOTH numbers -- the depth needed and the depth that exists -- or the
     reader cannot tell "not today" from "not ever".
+
+    This pins the refusal, not an impossibility. The 17 that the local tape used
+    to stop at was a REQUEST ceiling, not a market one: the deepest-rank
+    histogram spikes on 12/13/17, the instrument counts of the three curves the
+    nightly intraday job builds, and asked directly the vendor prices ranks
+    18-20 at the requested minute. ``scripts/warm_sr3_intraday_depth.py`` now
+    fetches them, which is why the shallow state here is injected rather than
+    assumed -- see ``test_golds_prices_once_the_tape_reaches_twenty``.
     """
     with pytest.raises(CI.IntradayRankUnavailable) as ei:
         tb.sfr_cvx_adj_intraday(["GOLDS"], [PINNED])
@@ -407,6 +453,52 @@ def test_golds_fails_loud_with_the_depth_it_needed_and_the_depth_that_exists(tb,
     reason = tb.sfr_cvx_adj_intraday_failures["GOLDS"][pd.Timestamp(
         CI.tape_instant(PINNED)).isoformat()]
     assert "17" in reason and "20" in reason
+
+
+def test_the_shallow_tape_fixture_is_actually_shallowing_something(tb, warm,
+                                                                  shallow_tape):
+    """The fixture has to bite, or the test above passes for the wrong reason.
+
+    If the injection silently did nothing on a machine whose tape is already
+    deep, the refusal test would still pass -- by measuring the cache, which is
+    precisely the coupling this fixture exists to remove.
+    """
+    from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
+
+    mdp = STIRFutureMDP(source=CI.INTRADAY_FUTURES_SOURCE)
+    mdp._ensure_pricer_cache()
+    capped = CI.mdp_key_probe(mdp)
+    ladder = _strip(PINNED_DAY, 20)
+    assert CI.tape_depth(capped, PINNED, ladder) <= 17
+    assert not CI.tape_present(capped, PINNED, ladder[17:20])
+
+
+def test_golds_prices_once_the_tape_reaches_twenty(tb, warm):
+    """The capability the warm added, pinned separately from the refusal.
+
+    Skipped rather than failed where the deep warm has not run: this asserts
+    what the code does with a deep tape, and a machine without one has nothing
+    to say about that. What it must never do is quietly serve a shallower pack,
+    and the test above is what holds that line.
+    """
+    from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
+
+    mdp = STIRFutureMDP(source=CI.INTRADAY_FUTURES_SOURCE)
+    mdp._ensure_pricer_cache()
+    probe = CI.mdp_key_probe(mdp)
+    if CI.tape_depth(probe, PINNED, _strip(PINNED_DAY, 20)) < 20:
+        pytest.skip("intraday tape is not at depth 20 here; run "
+                    "scripts/warm_sr3_intraday_depth.py --date 2026-08-19")
+
+    out = tb.sfr_cvx_adj_intraday(["BLUES", "GOLDS"], [PINNED])
+    got = dict(zip(out["label"], out["cvx_adj_bp"]))
+    assert set(got) == {"BLUES", "GOLDS"}
+    assert int(out[out["label"] == "GOLDS"]["strip_depth"].iloc[0]) == 20
+
+    # A convexity adjustment is a variance quantity, so a deeper colour must
+    # carry more. If GOLDS came back below BLUES the strip was misaligned, which
+    # is the failure a freshly-warmed rank could plausibly introduce.
+    assert got["GOLDS"] > got["BLUES"] > 0
 
 
 def test_blues_is_reachable_intraday_and_the_depth_is_recorded(tb, warm):

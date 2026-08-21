@@ -118,57 +118,62 @@ class TestIRClearingHouseBasisSwapsMDP:
         assert mdp._gs_client_id == "test"
         assert mdp._gs_secret_key == "test"
 
-    def test_get_pricer_uses_start_date_alias_and_passes_credentials(self, monkeypatch: pytest.MonkeyPatch):
+    def test_get_pricer_reads_the_cache_and_signs_basis_as_a_minus_b(self, tmp_path, monkeypatch):
+        """get_pricer must return clearing_house_a MINUS clearing_house_b.
+
+        The test this replaces asserted the opposite. It pinned a defect: the
+        production call passed pair['asset_id_b'] (CME) in as the fetcher's
+        asset_id_a, so basis_bps was CME-LCH while the request keys, the
+        meta_data and the docstring all said LCH-CME. Measured ground truth is
+        USD SOFR 10y on 2026-08-10 = -2.00 bp LCH-CME (LCH 0.04288489, CME
+        0.04308489).
+        """
+        from Caching.DiskCacheMixin import DiskCacheMixin
         from MDP.IRClearingHouseBasisSwaps.IRClearingHouseBasisSwapsMDP import IRClearingHouseBasisSwapsMDP
+        from MDP.IRClearingHouseBasisSwaps.ccp_basis_cache import CCPBasisCache
 
-        captured = {}
-        expected = pd.DataFrame({"basis_bps": [1.25]}, index=pd.Index([pd.Timestamp("2026-01-02")], name="date"))
+        monkeypatch.setattr(DiskCacheMixin, "CACHE_ROOT", tmp_path)
+        cache = CCPBasisCache(cache_name="TEST_CCP_BASIS_LEGACY")
+        day = datetime.date(2026, 1, 2)
+        cache.put_leg("USD", "SOFR", "10y", "LCH", day, 0.04288489)
+        cache.put_leg("USD", "SOFR", "10y", "CME", day, 0.04308489)
+        for ch in ("LCH", "CME"):
+            cache.mark_warm("USD", "SOFR", "10y", ch, day, day)
 
-        def _fake_find_asset_pair(coverage, ccy, index, tenor, clearing_house_a="LCH", clearing_house_b="CME"):
-            captured["find_asset_pair"] = {
-                "coverage": coverage,
-                "ccy": ccy,
-                "index": index,
-                "tenor": tenor,
-                "clearing_house_a": clearing_house_a,
-                "clearing_house_b": clearing_house_b,
-            }
-            return {"asset_id_a": "asset_a", "asset_id_b": "asset_b"}
-
-        def _fake_fetch(asset_id_a, asset_id_b, start, end, gs_client_id, gs_secret_key):
-            captured["fetch"] = {
-                "asset_id_a": asset_id_a,
-                "asset_id_b": asset_id_b,
-                "start": start,
-                "end": end,
-                "gs_client_id": gs_client_id,
-                "gs_secret_key": gs_secret_key,
-            }
-            return expected
-
-        monkeypatch.setattr("MDP.IRClearingHouseBasisSwaps.gs_quant_fetcher.find_asset_pair", _fake_find_asset_pair)
-        monkeypatch.setattr("MDP.IRClearingHouseBasisSwaps.gs_quant_fetcher.fetch_clearing_house_basis", _fake_fetch)
-
-        mdp = IRClearingHouseBasisSwapsMDP(coverage_path="dummy.xlsx", gs_client_id="cid", gs_secret_key="secret")
-        coverage = pd.DataFrame({"name": [], "assetId": []})
-        monkeypatch.setattr(mdp, "_load_coverage", lambda: coverage)
+        mdp = IRClearingHouseBasisSwapsMDP(gs_client_id="cid", gs_secret_key="secret", cache=cache)
+        assert mdp._gs_client_id == "cid" and mdp._gs_secret_key == "secret"
 
         pricer = mdp.get_pricer(
             {
-                "tenor": "10Y",
+                "tenor": "10y",
                 "index": "SOFR",
-                "start_date": datetime.date(2026, 1, 1),
-                "end_date": datetime.date(2026, 2, 20),
+                "start_date": day,
+                "end_date": day,
             }
         )
+        row = pricer.basis_data.iloc[0]
+        assert row["rate_a"] == pytest.approx(0.04288489)  # LCH == clearing_house_a
+        assert row["rate_b"] == pytest.approx(0.04308489)  # CME == clearing_house_b
+        assert row["basis_bps"] == pytest.approx(-2.0, abs=1e-4)
+        assert row["basis_bps"] == pytest.approx((row["rate_a"] - row["rate_b"]) * 1e4)
+        assert pricer.meta_data["sign_convention"] == "LCH minus CME"
 
-        assert captured["find_asset_pair"]["coverage"] is coverage
-        assert captured["fetch"] == {
-            "asset_id_a": "asset_b",  # production swaps a/b so fetch computes CME-LCH spread
-            "asset_id_b": "asset_a",
-            "start": datetime.date(2026, 1, 1),
-            "end": datetime.date(2026, 2, 20),
-            "gs_client_id": "cid",
-            "gs_secret_key": "secret",
-        }
-        assert pricer.basis_data is expected
+    def test_get_pricer_is_offline_by_default(self, tmp_path, monkeypatch):
+        """Every call used to hit the network. A cold window must now raise."""
+        import requests
+
+        from Caching.DiskCacheMixin import DiskCacheMixin
+        from MDP.IRClearingHouseBasisSwaps.IRClearingHouseBasisSwapsMDP import IRClearingHouseBasisSwapsMDP
+        from MDP.IRClearingHouseBasisSwaps.ccp_basis_cache import CCPBasisCacheMiss
+
+        def _blocked(self, method, url, *a, **kw):
+            raise AssertionError(f"network attempted: {method} {url}")
+
+        monkeypatch.setattr(requests.Session, "request", _blocked)
+        monkeypatch.setattr(DiskCacheMixin, "CACHE_ROOT", tmp_path)
+
+        mdp = IRClearingHouseBasisSwapsMDP()
+        with pytest.raises(CCPBasisCacheMiss):
+            mdp.get_pricer(
+                {"tenor": "10y", "start_date": datetime.date(2026, 1, 1), "end_date": datetime.date(2026, 1, 2)}
+            )

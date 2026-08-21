@@ -8,7 +8,10 @@ _DEFAULT_GS_CLIENT_ID = "2eb2f48872304c1d94fa1642fa691afe"
 _DEFAULT_GS_SECRET_KEY = "91cb9c89110495d1f62d0ab0c4014555c992c2509de8f5ae2b8bf1a2d3c86bd4"
 
 _NAME_PATTERN = re.compile(
-    r"^(?P<ccy>\w+)\s+Swap\s+(?P<index>\S+)\s+\S+\s+ATM\s+\S+\s+to\s+(?P<tenor>\S+)\s+(?P<clearing_house>\w+)\s+Cleared$"
+    # "USD Swap SOFR 1y ATM 0b to 10y LCH Cleared"
+    #                    ^freq   ^start  ^tenor
+    r"^(?P<ccy>\w+)\s+Swap\s+(?P<index>\S+)\s+(?P<freq>\S+)\s+ATM\s+(?P<start>\S+)"
+    r"\s+to\s+(?P<tenor>\S+)\s+(?P<clearing_house>\w+)\s+Cleared$"
 )
 
 
@@ -24,39 +27,49 @@ def find_asset_pair(
     ccy: str, index: str, tenor: str,
     clearing_house_a: str = "LCH", clearing_house_b: str = "CME",
 ) -> Dict[str, str]:
-    if "x" not in tenor.lower():
-        fwd_tenor = "0b"
-    else:
-        fwd_tenor = tenor.split("x")[0]
-        tenor = tenor.split("x")[1]
+    """Resolve one asset id per clearing house.  ``asset_id_a`` is ``clearing_house_a``.
 
-    asset_id_a = None
-    asset_id_b = None
-    for _, row in coverage.iterrows():
-        parsed = parse_coverage_name(row["name"])
+    Matching is EXACT on the forward-start token and the maturity token, and
+    ambiguity raises.  The predecessor tested both tokens as substrings of the
+    asset name and let the last matching row win, which resolved
+    ``tenor="5y"`` to the 15y asset on both legs and ``tenor="1y"`` to
+    LCH-30y against CME-12y -- a curve spread served as a CCP basis.  Only 10y
+    and 30y happened to be correct, and 10y is the tenor that had been spot
+    checked.  See tests/test_convexity_rv_ccp_basis.py.
+    """
+    from MDP.IRClearingHouseBasisSwaps.ccp_basis_cache import find_asset_pair as _exact
+
+    if "ccy" not in getattr(coverage, "columns", []):
+        coverage = _parse_frame(coverage)
+    return _exact(
+        coverage,
+        ccy=ccy,
+        index=index,
+        tenor=tenor,
+        clearing_house_a=clearing_house_a,
+        clearing_house_b=clearing_house_b,
+    )
+
+
+def _parse_frame(coverage: pd.DataFrame) -> pd.DataFrame:
+    """Parse a raw ``assetId``/``name`` coverage frame into labelled columns."""
+    recs = []
+    for asset_id, name in zip(coverage["assetId"], coverage["name"]):
+        parsed = parse_coverage_name(str(name))
         if parsed is None:
             continue
-        if parsed["ccy"].upper() != ccy.upper():
-            continue
-        if parsed["index"].upper() != index.upper():
-            continue
-        # if parsed["tenor"].lower() != tenor.lower():
-        #     continue
-        if fwd_tenor.lower() not in str(row["name"]).lower():
-            continue
-        if str(tenor).lower() not in str(row["name"]).lower():
-            continue
-
-        if parsed["clearing_house"].upper() == clearing_house_a.upper():
-            asset_id_a = row["assetId"]
-        elif parsed["clearing_house"].upper() == clearing_house_b.upper():
-            asset_id_b = row["assetId"]
-    if asset_id_a is None or asset_id_b is None:
-        raise ValueError(
-            f"Could not find asset pair for {ccy} {index} {tenor} "
-            f"{clearing_house_a}/{clearing_house_b}"
+        recs.append(
+            {
+                "assetId": asset_id,
+                "name": name,
+                "ccy": parsed["ccy"].upper(),
+                "index": parsed["index"].upper(),
+                "start": parsed["start"],
+                "tenor": parsed["tenor"],
+                "clearing_house": parsed["clearing_house"].upper(),
+            }
         )
-    return {"asset_id_a": asset_id_a, "asset_id_b": asset_id_b}
+    return pd.DataFrame.from_records(recs)
 
 
 def _resolve_gs_credentials(gs_client_id: Optional[str], gs_secret_key: Optional[str]) -> Tuple[str, str]:
