@@ -258,3 +258,7 @@ tape_v3_repair_ledger.jsonl
 # basis-vs-vol local data mirror + run outputs
 notebooks/backtests/basis_vs_vol/_data/
 notebooks/backtests/basis_vs_vol/_results/
+MDP/ETFHoldings/etf_holdings_cache/
+notebooks/backtests/etf_rebalance/_data/
+_scratch/
+_*.log
