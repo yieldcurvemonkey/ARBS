@@ -50,17 +50,45 @@ def test_the_ladder_is_the_front_twenty_quarterlies():
     assert all(s.startswith("SR3") for s in lad)
 
 
-def test_only_the_missing_ranks_are_requested():
-    """Ranks 1..17 come free from the nightly curve builds.
+def test_the_start_rank_is_measured_not_assumed():
+    """The defect the first full backfill exposed.
 
-    Re-fetching them would multiply the vendor cost by six and buy nothing, so
-    the plan's request list must start at `from_rank`, not at 1. This is the
-    whole economic argument for the job being runnable at all.
+    `from_rank=18` encodes "1..17 come free from the nightly curve builds",
+    which is the economic argument for the job being runnable at all -- but it
+    is FALSE on most dates. Measured over 158 sessions: 68 gained depth, and 84
+    of the 90 that did not sat at deepest 12 with a full 541 stamps, because
+    the nightly job built only the MIX23 SFRCM1..12 curve there. Writing 18..20
+    on top of a hole at 13 moves contiguous depth by exactly nothing.
+
+    So the start rank is one past what the tape actually reaches, capped by
+    `from_rank`.
     """
+    lad = W._strip_symbols(DAY, 20)
+    minutes = [9 * 60]
+
+    # a date the nightly job left at depth 12 -> must widen to 13..20
+    probe = _probe_from(_keys_for(DAY, lad[:12], minutes))
+    p = W.plan_day(probe, DAY, depth=20, from_rank=18)
+    assert p["deepest_before"] == 12
+    assert p["start_rank"] == 13
+    assert p["missing_symbols"] == lad[12:20]
+
+    # a date already at 17 -> the saving is preserved exactly
+    probe = _probe_from(_keys_for(DAY, lad[:17], minutes))
+    p = W.plan_day(probe, DAY, depth=20, from_rank=18)
+    assert p["start_rank"] == 18
+    assert p["missing_symbols"] == lad[17:20]
+
+    # a date deeper than from_rank must NOT walk backwards past it
+    probe = _probe_from(_keys_for(DAY, lad[:19], minutes))
+    p = W.plan_day(probe, DAY, depth=20, from_rank=18)
+    assert p["start_rank"] == 18
+
+    # a completely cold date -> fetch the whole ladder rather than skip it
     probe = _probe_from([])
     p = W.plan_day(probe, DAY, depth=20, from_rank=18)
-    assert len(p["missing_symbols"]) == 3
-    assert p["missing_symbols"] == p["ladder"][17:20]
+    assert p["start_rank"] == 1
+    assert p["missing_symbols"] == lad[0:20]
 
 
 def test_instants_are_taken_from_the_tape_not_from_a_grid():

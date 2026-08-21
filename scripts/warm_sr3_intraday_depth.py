@@ -300,10 +300,28 @@ def plan_day(probe, day: dt.date, depth: int, from_rank: int,
     stamps = instants_present(probe, day, anchor, **kw)
     before = {ts: CI.tape_depth(probe, ts, ladder) for ts in stamps}
     todo = [ts for ts, d in before.items() if d < depth]
+
+    # `from_rank` is a CEILING on the saving, not a promise about the date.
+    # Its premise -- "1..17 are already cached wherever the nightly job ran" --
+    # is false on most dates, and the first full backfill is what proved it:
+    # 68 of 158 dates gained depth and 84 of the 90 that did not sat at deepest
+    # 12 with a full 541 stamps. Those are dates where the nightly job built
+    # only the MIX23 SFRCM1..12 curve, so ranks 13..17 were never fetched
+    # either, and writing 18..20 on top of a hole at 13 moves contiguous depth
+    # by nothing.
+    #
+    # So the start rank is MEASURED: begin one past whatever the tape actually
+    # reaches, and never later than `from_rank`. On a date already at 17 this
+    # is exactly the old behaviour; on a depth-12 date it widens to 13..20 on
+    # its own. In bulk mode the extra ranks cost one request each, once.
+    deepest = max(before.values(), default=0)
+    start_rank = max(1, min(from_rank, deepest + 1))
     return {
         "date": day,
         "ladder": ladder,
-        "missing_symbols": ladder[from_rank - 1:depth],
+        "start_rank": start_rank,
+        "deepest_before": deepest,
+        "missing_symbols": ladder[start_rank - 1:depth],
         "stamps": stamps,
         "before": before,
         "todo": todo,
