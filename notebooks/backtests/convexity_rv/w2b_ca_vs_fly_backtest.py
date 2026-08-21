@@ -702,14 +702,15 @@ n_neg = int((LOG["beta"] < 0).sum())
 print(f"\nof {len(LOG)} epochs the trailing regression was expressible as a fly on "
       f"{n_ok}; {len(LOG) - n_ok} were skipped and recorded:")
 why = LOG.loc[~LOG["hedge_ok"], "hedge_reason"]
-print(f"   wing weight not expressible as a fly   "
-      f"{int(why.str.startswith('wing weight').sum())}")
-print(f"   |beta| below {CFG.hedge_min_abs_beta}                     "
-      f"{int(why.str.startswith('|beta|').sum())}")
-assert int(why.str.startswith('wing weight').sum()) + \
-       int(why.str.startswith('|beta|').sum()) == len(why), "an unclassified skip reason"
-print(f"\nbeta sign: {n_pos} positive, {n_neg} negative — it flips essentially "
-      "every other epoch")
+n_wing = int(why.str.startswith("wing weight").sum())
+n_beta = int(why.str.startswith("|beta|").sum())
+print(f"   wing weight not expressible as a fly   {n_wing:>3}")
+print(f"   |beta| below {CFG.hedge_min_abs_beta}                      {n_beta:>3}")
+assert n_wing + n_beta == len(why), "an unclassified skip reason"
+sgn = np.sign(LOG["beta"].to_numpy())
+n_flip = int((sgn[1:] != sgn[:-1]).sum())
+print(f"\nbeta sign: {n_pos} positive, {n_neg} negative, reversing at {n_flip} of "
+      f"{len(sgn) - 1} epoch-to-epoch\nhandovers ({n_flip / (len(sgn) - 1):.0%})")
 print(f"beta range {LOG['beta'].min():+.1f} .. {LOG['beta'].max():+.1f}")
 print(f"trailing-regression R2: min {LOG['hedge_r2'].min():.3f}  "
       f"median {LOG['hedge_r2'].median():.3f}  max {LOG['hedge_r2'].max():.3f}")
@@ -720,9 +721,10 @@ assert n_pos > 5 and n_neg > 5, "beta is supposed to be sign-unstable here"
 print("\nVERDICT: the 2s5s10s fly removes 0.6% of the variance and $88k of the")
 print("money. It is not a hedge on this book. The mechanism is visible in the")
 print("betas: Citi fitted Blues at beta ~20.6 with a stable sign and reported")
-print("90% correlation in levels; the packs this screen selects give a beta that")
-print("changes sign 22 times in 45 epochs and a wing weight that cannot be")
-print("expressed as a fly at all on 17 of them.")
+print("90% correlation in levels; the packs this screen selects give a beta")
+print(f"spanning {LOG['beta'].min():+.0f} to {LOG['beta'].max():+.0f}, reversing "
+      f"sign at {n_flip} of {len(sgn) - 1} handovers, and a wing weight")
+print(f"that cannot be expressed as a fly at all on {n_wing} epochs.")
 
 # %% [markdown]
 # ### 8.1 What the P&L is actually exposed to
@@ -804,15 +806,16 @@ print("an underpowered test, not evidence that the book is not short gamma.")
 # %%
 mean_hold = float(holds.mean())
 n_eff = SPAN * 252.0 / mean_hold
+N_OBS = int(round(n_eff))           # rounded, not truncated, to match the write-up
 print(f"span {SPAN:.2f}y   mean hold {mean_hold:.1f} bdays   "
-      f"-> n_eff ~ {n_eff:.1f} independent holds")
+      f"-> n_eff ~ {n_eff:.1f} -> {N_OBS} independent holds")
 print(f"(sanity check: the book planned {len(SPECS)} epochs, so n_eff and the "
       "epoch count agree to within 20%)")
 
 NULL = pd.DataFrame([{"trials": N,
                       "E[max SR | null]": expected_max_sharpe_under_null(
-                          N, n_obs=int(n_eff))}
-                     for N in (1, 2, 6, 12, 48, 1569)])
+                          N, n_obs=N_OBS)}
+                     for N in (1, 2, 6, 12, 24, 48, 1569)])
 print("\n" + NULL.round(3).to_string(index=False))
 
 null_6 = float(NULL.loc[NULL["trials"] == 6, "E[max SR | null]"].iloc[0])
@@ -830,7 +833,8 @@ print("\nSix trials is this notebook alone — two hedge modes x three cost")
 print("levels. The honest count is far larger: the same family was grid-searched")
 print("at 1,890 cells / 1,569 scored (strat2_gridsearch_verdict.json), whose own")
 print("winner was reported at Sharpe 1.329 against E[max SR|no skill] 0.692.")
-print("At 1,569 trials a zero-edge strategy is EXPECTED to produce 0.464 here.")
+print(f"At 1,569 trials a zero-edge strategy is EXPECTED to produce "
+      f"{null_grid:.3f} here.")
 print(f"This one produces {GROSS_SR:.3f} gross, before costs.")
 
 # %%
@@ -843,7 +847,7 @@ n_eff_traded = span_traded * 252.0 / mean_hold
 sr_traded = float(sub_u.diff().dropna().mean() / sub_u.diff().dropna().std() * np.sqrt(252))
 sr_traded_h = float(H.loc[t0:].diff().dropna().mean()
                     / H.loc[t0:].diff().dropna().std() * np.sqrt(252))
-null_6_traded = expected_max_sharpe_under_null(6, n_obs=int(n_eff_traded))
+null_6_traded = expected_max_sharpe_under_null(6, n_obs=int(round(n_eff_traded)))
 print(f"traded window {t0.date()} .. {sub_u.index[-1].date()}  "
       f"({span_traded:.2f}y, {len(sub_u)} marks)")
 print(f"  Sharpe unhedged {sr_traded:.4f}   hedged {sr_traded_h:.4f}")
@@ -942,8 +946,8 @@ print(EPX.nsmallest(5, "realised")[
 #
 # * **The result is negative and the failure is in the gross number.** Gross
 #   Sharpe 0.130 over 5.62 years; a zero-edge strategy searched over six arms is
-#   expected to produce 0.179, and over the 1,569 scored cells this family was
-#   actually searched at, 0.464. Costs then take the book to +$233k at 0.5bp and
+#   expected to produce 0.177, and over the 1,569 scored cells this family was
+#   actually searched at, 0.460. Costs then take the book to +$233k at 0.5bp and
 #   −$2.0mn at 1bp, with a break-even of 0.55bp round trip on the CA DV01 —
 #   under a cost convention that charges **one fee per epoch** and lets the four
 #   futures legs and the fly ride free.
@@ -966,8 +970,9 @@ print(EPX.nsmallest(5, "realised")[
 #   date as the roll's reference.
 #
 # * **The fly is not a hedge on this book.** It removes 0.6% of the variance
-#   (R² 0.008 against the unhedged P&L) and $88k of the money; β flips sign 22
-#   times in 45 epochs and 17 epochs could not be expressed as a fly at all.
+#   (R² 0.008 against the unhedged P&L) and $88k of the money; β spans −67 to
+#   +81 and reverses sign at 14 of 44 epoch handovers, and 17 of 45 epochs could
+#   not be expressed as a fly at all.
 #   The reason is in §8.1: level, slope, curvature and a squared-level term
 #   explain 2.4% of the daily P&L in total. There is no curve exposure there for
 #   a curve trade to remove. This agrees with Block 1's independent measurement
@@ -984,6 +989,11 @@ print(EPX.nsmallest(5, "realised")[
 # * **What would have to change.** Not the cost assumption and not the hedge
 #   tenors. §8.1 says the P&L has almost no linear curve exposure, so a
 #   different fly will not help; and §9 says the gross number is already below
-#   its own null, so no variance reduction rescues it. A live version would need
-#   a selection rule that reaches the deep packs the repair has now made
+#   its own null, so no variance reduction rescues it. If a hedge is wanted at
+#   all, the factor attribution points at **PC1, not curvature** —
+#   `factor_neutral_sizing.curve_weights(..., neutralize=("PC1",))` computes it,
+#   and a 2s5s10s fly is not it. Beyond that a live version would need a
+#   selection rule that actually reaches the deep packs the repair has now made
 #   available, and far fewer, larger, longer holds so that `n_eff` rises.
+#
+# Full write-up: `docs/convexityrv/results/w2b-ca-vs-swap-fly.md`.

@@ -315,16 +315,20 @@ def simulate(stir: pd.Series, long_be: pd.Series, cfg: W3.W3Config, *,
     cst = 0.5 * cost * turn
     net = pnl - cst
 
+    # Episode holds are counted on the JOINT index, not on either leg's own
+    # index. On a 27%-90% covered join those differ by a factor of several, and
+    # an earlier draft of this cell counted them on the STIR leg's index and
+    # reported holds of 469-587 observations for episodes whose true hold is 62.
+    loc = {d: i for i, d in enumerate(st.index)}
     eps, cur, s0 = [], 0, None
     for t, v in st.items():
         if v != cur:
             if cur != 0:
-                eps.append((s0, t, cur))
+                eps.append((s0, t, cur, loc[t] - loc[s0]))
             cur, s0 = v, t
     if cur != 0:
-        eps.append((s0, st.index[-1], cur))
-    loc = {d: i for i, d in enumerate(st.index)}
-    lens = [loc[b] - loc[a] for a, b, _ in eps]
+        eps.append((s0, st.index[-1], cur, loc[st.index[-1]] - loc[s0]))
+    lens = [e[3] for e in eps]
 
     return {
         "n_obs": int(len(sp)), "days_on": int((st != 0).sum()),
@@ -543,6 +547,45 @@ print(f"measured half-lives are {_hl.min():.2f} and {_hl.max():.2f}. The clock i
 print("even where reversion exists.")
 
 # %% [markdown]
+# ### 6.1 The holding period is bimodal, and it is not measured in days
+#
+# The median hold hides the shape. Most episodes are one-to-three-observation
+# flickers; a small number run for months. And because the joint index is sparse,
+# an episode's **calendar** span and its **observation** count are different
+# quantities — a position can sit open across two calendar years while being
+# sixty-odd marks. That is not a stylistic point: it means the rule holds risk
+# through long stretches in which neither leg is priced at all.
+
+# %%
+ALL_EPS = []
+for c, p in CELLS:
+    for _a, _b, _side, _h in simulate(STIR[c], LONG[p],
+                                      W3.W3Config(colour=c, pair=p),
+                                      exec_lag=1)["episodes_list"]:
+        ALL_EPS.append({"colour": c, "pair": p, "side": _side,
+                        "entry": _a, "exit": _b, "obs_held": _h,
+                        "calendar_days": int((_b - _a).days)})
+ALL_EPS = pd.DataFrame(ALL_EPS)
+
+print("hold, in OBSERVATIONS of the joint index:")
+print(ALL_EPS["obs_held"].describe(percentiles=[.25, .5, .75, .9, .95, .99]).round(2).to_string())
+print(f"\nepisodes held <= 3 observations : {(ALL_EPS['obs_held'] <= 3).mean():.1%}")
+print(f"longest episode                 : {ALL_EPS['obs_held'].max()} observations")
+_worst = ALL_EPS.loc[ALL_EPS["calendar_days"].idxmax()]
+print(f"widest calendar span            : {_worst['calendar_days']} days "
+      f"({_worst['entry'].date()} -> {_worst['exit'].date()}) but only "
+      f"{_worst['obs_held']} observations "
+      f"[{_worst['colour']} {_worst['pair']}]")
+
+assert float((ALL_EPS["obs_held"] <= 3).mean()) > 0.5, (
+    "the book is no longer dominated by very short episodes")
+assert int(_worst["calendar_days"]) > 365 and int(_worst["obs_held"]) < 200, (
+    "calendar span and observation count no longer diverge; the sparse-index "
+    "caveat in 6.1 needs re-deriving")
+print("\nSo 'median hold 2' and 'one position open for two years' are both true,")
+print("of the same book. Neither clock matches a 1.2-day half-life.")
+
+# %% [markdown]
 # ## 7. The bounded panel simulation
 #
 # ### Why this is not a `QueryDrivenBacktest`
@@ -674,7 +717,7 @@ print("not what kills it -- a 0.24bp charge on one leg already does.")
 # between two legs, because it has no legs** — is generated and the identical
 # rule is run on it, 400 times.
 #
-# For four of the sixteen cells the calibration returns a signal variance of
+# For **eight** of the sixteen cells the calibration returns a signal variance of
 # **exactly zero**: the measured `ρ₁(Δ)` is past −0.5, so under this model the
 # entire daily change is bounce. Those placebos are literally iid noise around a
 # constant. That is what the data says; it is not a choice.
@@ -854,22 +897,27 @@ fig.show()
 # ## 11. The book, cell by cell
 #
 # Every episode the default config would have taken at the implementable lag,
-# and the per-cell result behind the totals.
+# and the per-cell result behind the totals. Holds are counted on the joint
+# index, per section 6.1.
+#
+# The book is two-sided, as `entry_state` is designed to be — but it is heavily
+# skewed toward **long STIR vol**, i.e. the spread spent much more of the sample
+# below its trailing mean than above it. That asymmetry is itself what a
+# non-stationary spread looks like: it wandered to one side and the 252-day
+# trailing mean followed it down rather than pulling it back.
 
 # %%
-LOG = []
-for c, p in CELLS:
-    _r5 = simulate(STIR[c], LONG[p], W3.W3Config(colour=c, pair=p), exec_lag=1)
-    for _a, _b, _side in _r5["episodes_list"]:
-        LOG.append({"colour": c, "pair": p,
-                    "side": "short STIR vol" if _side == 1 else "long STIR vol",
-                    "entry": _a.date(), "exit": _b.date(),
-                    "obs_held": int(np.searchsorted(STIR[c].index, _b)
-                                    - np.searchsorted(STIR[c].index, _a))})
-LOG = pd.DataFrame(LOG).sort_values(["entry", "colour"])
+LOG = ALL_EPS.assign(
+    side=lambda d: np.where(d["side"] == 1, "short STIR vol", "long STIR vol"),
+    entry=lambda d: d["entry"].dt.date, exit=lambda d: d["exit"].dt.date,
+).sort_values(["entry", "colour"])
 print(f"{len(LOG)} episodes across {len(CELLS)} cells")
 print(LOG.head(20).to_string(index=False))
 print("...")
+
+_by_side = LOG["side"].value_counts()
+print(f"\nshort STIR vol {int(_by_side.get('short STIR vol', 0))}   "
+      f"long STIR vol {int(_by_side.get('long STIR vol', 0))}")
 print("\nepisodes by cell and side:")
 print(LOG.groupby(["colour", "pair", "side"]).size().unstack(fill_value=0).to_string())
 
@@ -877,6 +925,7 @@ assert (LOG["side"] == "short STIR vol").sum() > 0
 assert (LOG["side"] == "long STIR vol").sum() > 0, (
     "the book is one-sided; a one-sided spread trade is a directional position "
     "on one of its legs, which is the degeneracy this package has unpicked before")
+assert LOG["obs_held"].max() == ALL_EPS["obs_held"].max()
 
 # %%
 print("per-cell result at exec_lag=1, sorted worst net first:")
@@ -896,7 +945,7 @@ assert SIM1["t_gross"].abs().max() < 2.0, (
 # * **The result is negative and it is decided in section 5, not section 7.**
 #   Over sixteen (colour, pair) combinations from 2021 to 2026 the two legs'
 #   *changes* have a maximum |correlation| of **0.112**, a median of **0.030**,
-#   and six of sixteen are negative. **Fourteen of sixteen spreads fail to reject
+#   and seven of sixteen are negative. **Fourteen of sixteen spreads fail to reject
 #   a unit root at 5%.** A z-score entry assumes the spread reverts; on fourteen
 #   of sixteen cells that assumption is rejected. That is the whole finding, and
 #   it is why the diagnostics run before the trade — so a backtest is not spent
