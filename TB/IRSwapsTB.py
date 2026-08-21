@@ -472,6 +472,120 @@ def _apply_calendar_weight_adjustment(
     return pd.Series(adjusted, index=raw_series.index, name=raw_series.name)
 
 
+# ===========================================================================
+# Convexity-adjustment label vocabulary -- SHARED by the daily and intraday paths
+# ===========================================================================
+# These used to be closures inside ``IRSwapsTB.sfr_cvx_adj``. They are at module
+# level because ``sfr_cvx_adj_intraday`` has to resolve ``"WHITES"`` to exactly
+# the same four contracts on exactly the same roll rule; a second copy of the
+# rule inside the intraday method would be a divergence waiting to happen, and
+# an invisible one -- both copies would return four plausible IMM codes.
+#
+# Behaviour-identical to the closures they replace: the daily path now delegates
+# to them and was re-run against identical stubbed settles before and after
+# (max |diff| 0.0 over 13 dates x 3 labels).
+_CVX_IMM_PAT = re.compile(r"^[FGHJKMNQUVXZ]\d{2}$")
+_CVX_CM_PAT = re.compile(r"^SFR(\d{1,2})$")
+_CVX_BUNDLE_PAT = re.compile(r"^BUNDLE(\d+)$")
+
+#: Pack colour -> inclusive rank span, 1-indexed from the front IMM contract.
+#: A pack is four consecutive quarterlies, so colour ``(a, b)`` needs contiguous
+#: strip depth ``b``.
+CVX_PACK_MAP: Dict[str, Tuple[int, int]] = {
+    "WHITES": (1, 4),
+    "REDS": (5, 8),
+    "GREENS": (9, 12),
+    "BLUES": (13, 16),
+    "GOLDS": (17, 20),
+    "SILVERS": (21, 24),
+}
+
+
+def _cvx_is_imm(x: str) -> bool:
+    return bool(_CVX_IMM_PAT.match(x))
+
+
+def _cvx_cm_rank(x: str) -> Optional[int]:
+    m = _CVX_CM_PAT.match(x)
+    return int(m.group(1)) if m else None
+
+
+def _cvx_pack_span(x: str) -> Optional[Tuple[int, int]]:
+    X = x.upper()
+    if X in CVX_PACK_MAP:
+        return CVX_PACK_MAP[X]
+    m = _CVX_BUNDLE_PAT.match(X)
+    if m:
+        b = int(m.group(1))
+        start_rank = 1 + 4 * (b - 1)
+        return (start_rank, start_rank + 16 - 1)
+    return None
+
+
+def _cvx_span_ranks(label: str) -> Optional[List[int]]:
+    sp = _cvx_pack_span(label)
+    if not sp:
+        return None
+    a, b = sp
+    return list(range(a, b + 1))
+
+
+def _cvx_ranks_for_label(label: str) -> Optional[List[int]]:
+    r = _cvx_cm_rank(label)
+    if r:
+        return [r]
+    sp = _cvx_span_ranks(label)
+    if sp:
+        return sp
+    return None  # IMM handled separately
+
+
+def _cvx_structure_tag(label: str) -> str:
+    if _cvx_is_imm(label) or _cvx_cm_rank(label):
+        return "OUTRIGHT"
+    if label.upper() in CVX_PACK_MAP:
+        return "PACKS"
+    if _CVX_BUNDLE_PAT.match(label.upper()):
+        return "BUNDLES"
+    return "OUTRIGHT"
+
+
+def _cvx_col_name(curve: str, label: str) -> str:
+    return f"{curve} {label} {_cvx_structure_tag(label)} CVX_ADJ"
+
+
+def _cvx_front_imm_code(d: datetime.date, *, use_globex: bool = False) -> str:
+    """The front quarterly SR3 IMM code on *d*.
+
+    Rolls on the IMM date itself (``_imm_cutoff`` in
+    ``MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/tos.py``), which is what makes the
+    rank-to-contract map date-dependent. Pure computation - no network.
+    """
+    from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
+        get_short_end_curve_tickers,
+    )
+
+    leg_prefix = "/SR3" if use_globex else "SFR"
+    sym = next(
+        s
+        for s in get_short_end_curve_tickers(as_of=d, first_n_sr1=0, first_n_sr3=1, use_globex=use_globex)
+        if ("/SR3" in s if use_globex else "SFR" in s)
+    )
+    return sym.replace(leg_prefix, "")
+
+
+def _cvx_imm_code_from_date_rank(d: datetime.date, n: int, *, use_globex: bool = False) -> str:
+    """The IMM code of the *n*-th quarterly contract from the front on *d*."""
+    import rateslib as rl
+
+    front = _cvx_front_imm_code(d, use_globex=use_globex)
+    imm_dt = rl.get_imm(code=front)
+    for _ in range(max(0, n - 1)):
+        imm_dt = rl.next_imm(imm_dt)
+    letter = {3: "H", 6: "M", 9: "U", 12: "Z"}[imm_dt.month]
+    return f"{letter}{imm_dt.year % 100:02d}"
+
+
 class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
@@ -1326,78 +1440,26 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             key = pd.Timestamp(dts).date().isoformat()
             self.sfr_cvx_adj_failures.setdefault(label, {})[key] = reason
 
-        _IMM_PAT = re.compile(r"^[FGHJKMNQUVXZ]\d{2}$")
-        _CM_PAT = re.compile(r"^SFR(\d{1,2})$")
-        _BUNDLE_PAT = re.compile(r"^BUNDLE(\d+)$")
-
-        PACK_MAP = {
-            "WHITES": (1, 4),
-            "REDS": (5, 8),
-            "GREENS": (9, 12),
-            "BLUES": (13, 16),
-            "GOLDS": (17, 20),
-            "SILVERS": (21, 24),
-        }
-
-        def _is_imm(x: str) -> bool:
-            return bool(_IMM_PAT.match(x))
-
-        def _cm_rank(x: str) -> Optional[int]:
-            m = _CM_PAT.match(x)
-            return int(m.group(1)) if m else None
-
-        def _pack_span(x: str) -> Optional[tuple[int, int]]:
-            X = x.upper()
-            if X in PACK_MAP:
-                return PACK_MAP[X]
-            m = _BUNDLE_PAT.match(X)
-            if m:
-                b = int(m.group(1))
-                start_rank = 1 + 4 * (b - 1)
-                return (start_rank, start_rank + 16 - 1)
-            return None
-
-        def _structure_tag(label: str) -> str:
-            if _is_imm(label) or _cm_rank(label):
-                return "OUTRIGHT"
-            if label.upper() in PACK_MAP:
-                return "PACKS"
-            if _BUNDLE_PAT.match(label.upper()):
-                return "BUNDLES"
-            return "OUTRIGHT"
+        # Thin delegates onto the module-level vocabulary shared with
+        # :meth:`sfr_cvx_adj_intraday`. Kept as local names so the body below is
+        # untouched; the rules themselves live in one place now.
+        PACK_MAP = CVX_PACK_MAP
+        _BUNDLE_PAT = _CVX_BUNDLE_PAT
+        _is_imm = _cvx_is_imm
+        _cm_rank = _cvx_cm_rank
+        _pack_span = _cvx_pack_span
+        _structure_tag = _cvx_structure_tag
+        _span_ranks = _cvx_span_ranks
+        _ranks_for_label = _cvx_ranks_for_label
 
         def _col_name(label: str) -> str:
-            return f"{curve} {label} {_structure_tag(label)} CVX_ADJ"
+            return _cvx_col_name(curve, label)
 
         def _front_imm_code(d: datetime.date) -> str:
-            sym = next(
-                s for s in get_short_end_curve_tickers(as_of=d, first_n_sr1=0, first_n_sr3=1, use_globex=use_globex) if ("/SR3" in s if use_globex else "SFR" in s)
-            )
-            return sym.replace(leg_prefix, "")
+            return _cvx_front_imm_code(d, use_globex=use_globex)
 
         def _imm_code_from_date_rank(d: datetime.date, n: int) -> str:
-            front = _front_imm_code(d)
-            imm_dt = rl.get_imm(code=front)
-            for _ in range(max(0, n - 1)):
-                imm_dt = rl.next_imm(imm_dt)
-            letter = {3: "H", 6: "M", 9: "U", 12: "Z"}[imm_dt.month]
-            return f"{letter}{imm_dt.year % 100:02d}"
-
-        def _span_ranks(label: str) -> Optional[list[int]]:
-            sp = _pack_span(label)
-            if not sp:
-                return None
-            a, b = sp
-            return list(range(a, b + 1))
-
-        def _ranks_for_label(label: str) -> Optional[list[int]]:
-            r = _cm_rank(label)
-            if r:
-                return [r]
-            sp = _span_ranks(label)
-            if sp:
-                return sp
-            return None  # IMM handled separately
+            return _cvx_imm_code_from_date_rank(d, n, use_globex=use_globex)
 
         if not items:
             return pd.DataFrame()
@@ -1701,3 +1763,421 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             return pd.DataFrame()
 
         return pd.concat(out_frames, axis=1).sort_index(kind="mergesort")
+
+    #: Where :meth:`sfr_cvx_adj_intraday` records the ``(label, instant)`` pairs
+    #: it could not price, as ``{label: {iso_instant: reason}}``. Cleared at the
+    #: top of every call.
+    #:
+    #: Same contract as :attr:`sfr_cvx_adj_failures` and for a sharper version
+    #: of the same reason. On the minute tape there are **three** distinct ways
+    #: a point can be absent and they look identical downstream -- a gap:
+    #:
+    #: * the minute was never written (the tape is 2 stamps/day for most of
+    #:   2021-2025, so most requested instants simply do not exist);
+    #: * the minute exists but the contiguous strip is too shallow for the rank
+    #:   asked for (GOLDS needs depth 20; the tape's measured maximum is 17);
+    #: * the swap curve or the pricing failed.
+    #:
+    #: They lead to three different fixes -- pick another instant, pick another
+    #: pack, fix the code -- so the reason string always names which one.
+    sfr_cvx_adj_intraday_failures: Dict[str, Dict[str, str]] = {}
+
+    #: Outbound HTTP refused during the last :meth:`sfr_cvx_adj_intraday` call.
+    #: Zero is the design target and the thing to assert in a harvest.
+    sfr_cvx_adj_intraday_network_blocked: int = 0
+
+    def sfr_cvx_adj_intraday(
+        self,
+        items: List[str],
+        timestamps: Sequence[Any],
+        *,
+        futures_source: str = "BARCHART_TOS_LIVE_STIRF-RL",
+        swap_source: str = "CITIVELO_EXCEL",
+        curve: str = "USD-SOFR-1D",
+        snapshot_policy: Any = None,
+        snapshot_minutes: float = 5.0,
+        matched_frequency: Optional[str] = "Q",
+        matched_leg2_frequency: Optional[str] = "Q",
+        use_globex: bool = False,
+        strict_ranks: bool = True,
+        block_network: bool = True,
+        live_guard_minutes: float = 20.0,
+        swaps_mdp: Any = None,
+        futures_mdp: Any = None,
+    ) -> pd.DataFrame:
+        r"""The convexity adjustment at one-minute **instants** instead of settles.
+
+        Same quantity as :meth:`sfr_cvx_adj` -- ``pack_rate - matched_swap_rate``
+        in bp, same labels, same quarterly/quarterly matched swap, same
+        ``IRSwapValue.CVX_ADJ`` call -- marked at a minute rather than at 17:00
+        New York. It is a **separate method rather than a ``timestamps=``
+        parameter** on the daily one, because every material thing about it
+        differs: a different futures source, a different curve mode, a different
+        network profile, a different failure vocabulary, and above all an output
+        that must never be concatenated with the daily one.
+
+        Returns a **long** frame, one row per ``(instant, label)``, sorted. The
+        wide daily shape is not available here on purpose: it has nowhere to put
+        the per-row provenance, and provenance is the whole difference between
+        an intraday CA and a plausible number.
+
+        =========================  ===============================================
+        column                     what it pins
+        =========================  ===============================================
+        ``timestamp``              the instant, tz-aware in the tape's own zone
+        ``timestamp_utc``          the same instant, unambiguously
+        ``label`` / ``column``     the pack, and the daily path's column name
+        ``cvx_adj_bp``             the number
+        ``price_source``           :data:`~RVUtils.ConvexityRV.ca_intraday.PRICE_SOURCE_INTRADAY`
+        ``futures_source``         the pinned SR3 source token
+        ``futures_stamp``          the diskcache key that ACTUALLY resolved
+        ``futures_key_family``     ``"utc"`` / ``"local"`` / ``"mixed"``
+        ``contracts``              the four legs, resolved on this date's roll
+        ``strip_depth``            contiguous front depth measured at this instant,
+                                   probed only as deep as ``depth_probed_to``
+        ``depth_probed_to``        the deepest rank any requested label needed, so
+                                   ``strip_depth == depth_probed_to`` means "at
+                                   least this deep", not "exactly this deep"
+        ``curve_stamp``            the minute the swap curve was served from
+        ``snapshot_lag_seconds``   requested minus served, signed
+        ``curve_asset``            which CurveStore asset answered
+        =========================  ===============================================
+
+        **Nothing is written.** Not the mapping cache, not ``data/ts``. The daily
+        path writes both; this one cannot safely, because
+        ``_ts_symbol_for_query`` is ``IRS::{source}::{curve}::{fingerprint}`` and
+        ``market_request`` is not part of ``_query_fingerprint`` -- so an
+        intraday row and a settle row for the same instrument hash to the *same*
+        ``data/ts`` symbol and would be read back as one series. See
+        ``tests/test_convexity_rv_intraday_ca.py``.
+
+        **The futures source is pinned and the instant is verified, not assumed.**
+        ``futures_source`` is asserted to be an intraday feed (a settle source
+        would answer a ``datetime`` with the 17:00 mark and say nothing), and
+        before any fetch the exact diskcache key for every leg is probed. Only
+        instants where every leg is already local are priced. This is not only a
+        network guard: ``RLSTIRFuturePricer`` exposes a reference **date** and
+        never the minute, so if the served instant is not pinned here it cannot
+        be recovered at all.
+
+        **Per-rank failure is loud.** A pack whose rank needs more contiguous
+        depth than the tape carries at that instant is recorded with the measured
+        depth, and -- under ``strict_ranks=True``, the default -- a label that
+        prices at *no* requested instant raises
+        :class:`~RVUtils.ConvexityRV.ca_intraday.IntradayRankUnavailable` naming
+        the depth it needed and the depth that exists. Measured over the whole
+        12,772,278-key local slice, the intraday tape reaches contiguous depth 20
+        on **zero** dates and its maximum in any year is **17**, so ``GOLDS``
+        (needs 20) and ``SILVERS`` (needs 24) are structurally unreachable and
+        must fail rather than quietly return a shallower pack.
+
+        Parameters worth choosing deliberately
+        --------------------------------------
+        ``snapshot_minutes``
+            Backward-only tolerance for the swap curve, default 5 min, ``on_miss
+            = "raise"``. The default policy is ``nearest`` in *either* direction
+            with no bound, which can serve a curve stamped after the instant
+            being marked.
+        ``block_network``
+            Wraps the whole call in ``listed_cache_guard.cache_only()``. Leave it
+            on. Note it also blocks the official-fixings fetch inside the Citi
+            curve build, which then falls back to Citi's published series with a
+            warning; for a forward-starting pack (every leg starts at a future
+            IMM date) no historical fixing enters either leg, and that is
+            verified in ``tests/test_convexity_rv_intraday_ca.py``.
+        ``live_guard_minutes``
+            Refuses an instant within this many minutes of now.
+            ``STIRFutureMDP._should_use_live_quotes`` treats anything inside 15
+            minutes as LIVE, which sets ``read_cache=False`` and answers from the
+            Schwab quote API -- network, and a third price source inside a series
+            that claims to be Barchart minute bars.
+        """
+        import rateslib as rl
+
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotPolicy
+        from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import build_rl_stirf
+        from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
+        from RVUtils.ConvexityRV import ca_intraday as CI
+        from RVUtils.ConvexityRV.listed_cache_guard import cache_only, network_calls_blocked
+
+        CI.assert_intraday_source(futures_source)
+
+        self.sfr_cvx_adj_intraday_failures = {}
+        self.sfr_cvx_adj_intraday_network_blocked = 0
+
+        def _note(label: str, inst: Any, reason: str) -> None:
+            key = pd.Timestamp(inst).isoformat()
+            self.sfr_cvx_adj_intraday_failures.setdefault(label, {})[key] = reason
+
+        if not items:
+            return pd.DataFrame()
+
+        labels: List[str] = list(dict.fromkeys(str(x).strip().upper() for x in items))
+        instants = sorted({
+            CI.assert_offline_instant(t, guard_minutes=live_guard_minutes)
+            for t in timestamps
+        })
+        if not instants:
+            return pd.DataFrame()
+
+        leg_prefix = "/SR3" if use_globex else "SFR"
+        cvx_value_kwargs: Dict[str, Any] = {
+            "matched_frequency": matched_frequency,
+            "matched_leg2_frequency": matched_leg2_frequency,
+        }
+
+        futures_mdp = futures_mdp or STIRFutureMDP(source=futures_source)
+        probe = CI.mdp_key_probe(futures_mdp)
+
+        if swaps_mdp is None:
+            _src = str(getattr(self.mdp, "source", "")).upper()
+            swaps_mdp = self.mdp if "CITIVELO" in _src else IRSwapsMDP(source=swap_source)
+        if "CITIVELO" not in str(getattr(swaps_mdp, "source", "")).upper():
+            raise ValueError(
+                f"swap curve source {getattr(swaps_mdp, 'source', None)!r} has no minute "
+                "store; an intraday CA needs a curve marked at the same instant as the "
+                "futures leg. Use a CITIVELO_EXCEL IRSwapsMDP."
+            )
+        policy = snapshot_policy or SnapshotPolicy.strict(
+            minutes=float(snapshot_minutes), on_miss="raise")
+
+        # Rank plan. Resolved once, from the SHARED vocabulary the daily path
+        # uses, so "WHITES" cannot mean two different things in two methods.
+        plan: Dict[str, Optional[List[int]]] = {}
+        for label in labels:
+            if _cvx_is_imm(label):
+                plan[label] = None
+                continue
+            ranks = _cvx_ranks_for_label(label)
+            if not ranks:
+                raise ValueError(
+                    f"{label!r} is not an IMM code, a constant-maturity rank (SFR<n>), "
+                    f"a pack colour {sorted(CVX_PACK_MAP)} or BUNDLE<n>."
+                )
+            plan[label] = ranks
+        max_rank = max([max(r) for r in plan.values() if r] + [1])
+
+        rows: List[Dict[str, Any]] = []
+        q_cache: Dict[str, IRSwapQuery] = {}
+        depth_seen: Dict[str, int] = {}
+        n_blocked_0 = network_calls_blocked()
+
+        with cache_only(block=block_network):
+            for inst in tqdm(instants, desc="SFR CVX intraday...",
+                             disable=not self._show_tqdm, leave=False):
+                d = pd.Timestamp(inst).date()
+
+                # Contract ladder for THIS date's roll, then the contiguous depth
+                # actually present at THIS instant. Depth is measured per instant,
+                # never per day: the tape thins out through the session and a
+                # best-of-day depth would licence a rank the instant cannot quote.
+                codes_by_rank: Dict[int, str] = {}
+                ordered: List[str] = []
+                for r in range(1, max_rank + 1):
+                    c = _cvx_imm_code_from_date_rank(d, r, use_globex=use_globex)
+                    codes_by_rank[r] = c
+                    ordered.append(f"SR3{c}")
+                depth = CI.tape_depth(probe, inst, ordered, source=futures_source)
+
+                active: List[Tuple[str, List[str], Optional[List[int]]]] = []
+                need_syms: set = set()
+                for label in labels:
+                    if _cvx_is_imm(label):
+                        sym = f"SR3{label}"
+                        if not CI.tape_present(probe, inst, [sym], source=futures_source):
+                            _note(label, inst, f"no minute bar for {sym} at this instant")
+                            continue
+                        active.append((label, [label], None))
+                        need_syms.add(sym)
+                        continue
+                    ranks = plan[label] or []
+                    need = max(ranks)
+                    depth_seen[label] = max(depth_seen.get(label, 0), depth)
+                    if depth < need:
+                        _note(label, inst,
+                              f"contiguous strip depth {depth} at this instant < {need} "
+                              f"needed for {label} (ranks {ranks[0]}..{ranks[-1]})")
+                        continue
+                    codes = [codes_by_rank[r] for r in ranks]
+                    active.append((label, codes, ranks))
+                    need_syms.update(f"SR3{c}" for c in codes)
+
+                if not active:
+                    continue
+
+                # --- futures leg: pin the served key BEFORE fetching anything ---
+                served: Dict[str, str] = {}
+                missing: List[str] = []
+                for s in sorted(need_syms):
+                    k = CI.served_tape_key(probe, inst, s, source=futures_source)
+                    if k is None:
+                        missing.append(s)
+                    else:
+                        served[s] = k
+                if missing:
+                    for label, _codes, _r in active:
+                        _note(label, inst, f"no minute bar for {','.join(missing)}")
+                    continue
+
+                stamps = {CI.key_stamp(k, s, source=futures_source) for s, k in served.items()}
+                if len(stamps) != 1:
+                    for label, _codes, _r in active:
+                        _note(label, inst,
+                              f"legs resolved to {len(stamps)} different instants "
+                              f"{sorted(str(x) for x in stamps)}")
+                    continue
+                stamp_utc = next(iter(stamps))
+
+                # Which spelling actually answered, per symbol. Recorded rather
+                # than assumed: on 2026-08-17 the four BLUES legs came from the
+                # Chicago-stamped family and the WHITES/REDS/GREENS legs from the
+                # UTC-stamped one, at the same instant.
+                fam_by_sym = {
+                    s: ("utc" if k == CI.tape_keys(inst, s, source=futures_source)[0]
+                        else "local")
+                    for s, k in served.items()
+                }
+
+                # --- swap leg ---
+                try:
+                    ch = swaps_mdp._get_curve(
+                        curve_name=curve, timestamp=inst,
+                        kwargs={"snapshot_policy": policy},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    for label, _codes, _r in active:
+                        _note(label, inst, f"curve: {type(exc).__name__}: {exc}")
+                    continue
+
+                meta = dict(getattr(ch, "meta", lambda: {})() or {})
+                if meta.get("mode") != "intraday" or not meta.get("from_curve_store"):
+                    # A curve that came from anywhere but the minute store is not
+                    # an intraday curve, whatever it is. Refuse it by name rather
+                    # than publish a CA whose swap leg is the day's close.
+                    for label, _codes, _r in active:
+                        _note(label, inst,
+                              f"curve was served mode={meta.get('mode')!r} "
+                              f"from_curve_store={meta.get('from_curve_store')!r}; "
+                              "not a minute-store intraday curve")
+                    continue
+
+                try:
+                    snap = futures_mdp.get_data({"symbols": sorted(need_syms), "timestamp": inst})
+                except Exception as exc:  # noqa: BLE001
+                    for label, _codes, _r in active:
+                        _note(label, inst, f"futures: {type(exc).__name__}: {exc}")
+                    continue
+
+                prices: Dict[str, float] = {}
+                for s in sorted(need_syms):
+                    v = snap.get(s)
+                    if v:
+                        try:
+                            prices[s] = float(v[0].price())
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                for label, codes, ranks in active:
+                    try:
+                        syms = [f"SR3{c}" for c in codes]
+                        absent = [s for s in syms if s not in prices]
+                        if absent:
+                            _note(label, inst, f"no price returned for {','.join(absent)}")
+                            continue
+
+                        q_key = f"{d.isoformat()}|{codes[0]}->{codes[-1]}"
+                        q = q_cache.get(q_key)
+                        if q is None:
+                            eff_dt = rl.get_imm(code=codes[0])
+                            mat_dt = rl.next_imm(rl.get_imm(code=codes[-1]))
+                            q = IRSwapQuery(
+                                curve=curve,
+                                effective_date=eff_dt.date(),
+                                maturity_date=mat_dt.date(),
+                                structure=IRSwapStructure.OUTRIGHT,
+                                structure_kwargs={"bpv": 1},
+                                value=IRSwapValue.CVX_ADJ,
+                                value_kwargs=dict(cvx_value_kwargs),
+                            )
+                            q_cache[q_key] = q
+
+                        pkg, rws = q.resolve_package(pricer_or_curve=ch, is_for_timeseries=True)
+                        vmap = q.build_value_map(pricer_or_curve=ch, package=pkg, risk_weights=rws)
+
+                        rl_sfrs = []
+                        for c, s in zip(codes, syms):
+                            _, rl_sfr = build_rl_stirf(
+                                ticker=f"{leg_prefix}{c}", curve_id=ch.id(),
+                                price=float(prices[s]), use_globex=use_globex,
+                            )
+                            rl_sfrs.append(rl_sfr)
+
+                        cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, sfr=rl_sfrs,
+                                               **cvx_value_kwargs))
+                    except Exception as exc:  # noqa: BLE001
+                        _note(label, inst, f"{type(exc).__name__}: {exc}")
+                        continue
+
+                    rows.append({
+                        "timestamp": pd.Timestamp(inst),
+                        "timestamp_utc": stamp_utc,
+                        "label": label,
+                        "column": _cvx_col_name(curve, label),
+                        "cvx_adj_bp": cvx,
+                        CI.PRICE_SOURCE_COL: CI.PRICE_SOURCE_INTRADAY,
+                        "futures_source": futures_source,
+                        "futures_stamp": served[syms[0]].split(f"-{syms[0]}-")[0],
+                        "futures_key_family": (
+                            next(iter({fam_by_sym[s] for s in syms}))
+                            if len({fam_by_sym[s] for s in syms}) == 1 else "mixed"
+                        ),
+                        "contracts": ",".join(f"{leg_prefix}{c}" for c in codes),
+                        "ranks": "" if not ranks else f"{ranks[0]}..{ranks[-1]}",
+                        "strip_depth": int(depth),
+                        "depth_probed_to": int(max_rank),
+                        "curve": curve,
+                        "curve_stamp": meta.get("timestamp"),
+                        "curve_requested": meta.get("requested"),
+                        "snapshot_lag_seconds": meta.get("snapshot_lag_seconds"),
+                        "curve_asset": meta.get("asset"),
+                        "curve_mode": meta.get("mode"),
+                    })
+
+        self.sfr_cvx_adj_intraday_network_blocked = network_calls_blocked() - n_blocked_0
+
+        out = pd.DataFrame(rows)
+        if strict_ranks:
+            priced = set(out["label"]) if len(out) else set()
+            dead = [l for l in labels if l not in priced]
+            if dead:
+                bits = []
+                depth_limited = False
+                for l in dead:
+                    ranks = plan.get(l)
+                    need = max(ranks) if ranks else None
+                    reasons = list(dict.fromkeys(
+                        self.sfr_cvx_adj_intraday_failures.get(l, {}).values()))
+                    why = "; ".join(reasons[:2]) or "no reason recorded"
+                    if any("contiguous strip depth" in r for r in reasons):
+                        depth_limited = True
+                    bits.append(
+                        f"{l} (needs contiguous depth {need}, deepest measured "
+                        f"{depth_seen.get(l, 0)} over {len(instants)} instant(s)) "
+                        f"-- {why}"
+                        if need else f"{l} -- {why}"
+                    )
+                tail = (
+                    " Measured over the whole local slice the tape reaches contiguous "
+                    "depth 20 on zero dates and never exceeds 17, so GOLDS (needs 20) "
+                    "and SILVERS (needs 24) are structurally unreachable intraday."
+                    if depth_limited else ""
+                )
+                raise CI.IntradayRankUnavailable(
+                    "the intraday SR3 tape priced no instant for: " + " | ".join(bits)
+                    + "." + tail
+                    + " Pass strict_ranks=False to get the reachable labels and read "
+                    "sfr_cvx_adj_intraday_failures for the rest."
+                )
+        if not len(out):
+            return out
+        return out.sort_values(["timestamp", "label"], kind="mergesort").reset_index(drop=True)
