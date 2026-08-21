@@ -723,3 +723,89 @@ def test_direct_raises_when_the_addin_fails_mid_reprice(
     msg = str(excinfo.value)
     assert "stopped responding" in msg, msg
     assert "NaN" in msg or "hole" in msg, f"the refusal must say why it refused:\n{msg}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# The two guarantees the verifier found sold in the docs and tested nowhere.
+# Both were proven live by mutation: the code is correct today and nothing
+# stopped a future edit from regressing it.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def test_direct_writes_nothing_to_the_DEFAULT_cache_root_either(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The other write-policy tests watch the PARENT reader's root, and only that.
+
+    A direct read that banked into ``cache.default_cache_dir()`` -- in production
+    %LOCALAPPDATA%/ARBS/ARBS/Cache/citivelo_excel, nowhere near the fixture's tmp_path --
+    passed all of them. Verified by mutation: banking the fetched series into a freshly
+    constructed ``CitiVeloTagCache()`` inside the bypass branch left the whole file green
+    while writing two real files into the default root.
+
+    The documented promise is absolute: "Nothing is written, anywhere. No tag parquet, no
+    sidecar, not even a directory." So the default root is redirected somewhere empty and
+    asserted to STAY empty, which is the only way to test "anywhere".
+    """
+    import MDP.CitiVelocityExcel.cache as C
+
+    default_root = tmp_path / "pretend_localappdata"
+    monkeypatch.setattr(C, "default_cache_dir", lambda: default_root)
+    monkeypatch.setenv("CITIVELO_EXCEL_CACHE_DIR", str(default_root))
+
+    _client, cache, mdp = _stack(tmp_path)
+    parent_before = _cache_files(pathlib.Path(cache.base_dir))
+
+    TimeseriesBuilder().get_timeseries(
+        START, END, [_q()], mdps={"CITIVELO": mdp}, direct="live"
+    )
+
+    assert _cache_files(pathlib.Path(cache.base_dir)) == parent_before
+    assert _cache_files(default_root) == {}, (
+        f"a direct read wrote into the DEFAULT cache root: "
+        f"{sorted(_cache_files(default_root))}"
+    )
+    assert not default_root.exists(), "direct mode created the default cache root"
+
+
+def test_direct_switches_off_the_pricers_absence_memo(tmp_path: pathlib.Path):
+    """A tag the add-in refused must be RE-ASKED under direct, not remembered as absent.
+
+    ``CitiVeloPricer`` keeps a ``_missing`` set so a tag that came back unserved is not
+    re-requested for the rest of the run. That is a silent fallback under a direct read:
+    a transient add-in failure becomes a permanent "no such tag" for the session, and the
+    caller sees a gap it cannot distinguish from real absence. ``prefetch`` therefore
+    skips the memo when ``direct`` is set.
+
+    The commit message and the ``get_timeseries`` docstring both sell this as a named
+    guarantee, and nothing tested it -- removing the ``if not self.direct:`` guard left
+    all 35 tests green while measurably changing behaviour (2 wire calls became 1).
+    """
+    from MDP.CitiVelocityExcel.pricer import CitiVeloPricer
+
+    missing_tag = "RATES.OIS.USD_SOFR.PAR.999Y"
+    asked: List[List[str]] = []
+
+    class _RefusingClient(StubCitiClient):
+        def fetch_timeseries(self, tags, freq, **kw):  # type: ignore[override]
+            asked.append(sorted(str(t) for t in tags))
+            return {}
+
+    quotes = CitiVeloQuotes(client=_RefusingClient(), cache=False)
+
+    direct_pricer = CitiVeloPricer(quotes=quotes, as_of=END, direct=True)
+    direct_pricer.prefetch([missing_tag])
+    direct_pricer.prefetch([missing_tag])
+    assert len(asked) == 2, (
+        "under direct the memo must be OFF, so the second ask reaches the wire again; "
+        f"saw {len(asked)} call(s)"
+    )
+
+    asked.clear()
+    cached_pricer = CitiVeloPricer(quotes=quotes, as_of=END, direct=False)
+    cached_pricer.prefetch([missing_tag])
+    cached_pricer.prefetch([missing_tag])
+    assert len(asked) == 1, (
+        "the CONTROL: without direct the memo IS honoured, which is what makes the "
+        f"assertion above meaningful; saw {len(asked)} call(s)"
+    )

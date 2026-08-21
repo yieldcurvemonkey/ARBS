@@ -1260,6 +1260,39 @@ def warm(
 # The projection is deliberately falsifiable: :func:`backfill_depth` logs the
 # bond-weeks it actually banked and the passes it completed on every run, so
 # after a week of nightlies this paragraph should be replaced with a measurement.
+#
+# MEASURED, first production run, 2026-08-21 06:58-07:37
+# -------------------------------------------------------
+#   1,664 bond-weeks over 5 passes, 1,152,769 rows, 2,319 s
+#   Excel 305 -> 3,503 MB;  STOPPED on the ceiling, not the clock
+#
+# The projection was close on shape and wrong on which constraint binds. It had
+# time and memory tying at ~5.4 passes; in fact the run stopped on MEMORY at 64%
+# of a 3,600 s budget, so the clock never mattered. Per-pass yield held up well
+# (403/400/398/399 bond-weeks, then a 64 stub when the ceiling arrived), so the
+# ~400 bond-weeks-per-pass figure is confirmed; what was optimistic is the number
+# of passes a single Excel survives.
+#
+# Cost per unit of depth, which is the number to plan with: 3,198 MB of Excel
+# growth over 1,664 bond-weeks is ~0.96 MB per bond-week, roughly 1.6x the
+# assumed 0.6. A year for the 403 alive bonds needs 403 x 52 = 20,956 bond-weeks,
+# so at 1,664 a run that is
+#
+#                           ~13 RUNS, not ~10
+#
+# and the difference is entirely the memory estimate. Note "runs", not "nights":
+# since the ceiling binds first, a nightly that restarts Excel mid-job could take
+# more than one ceiling's worth per night. It does not today -- the depth pass
+# stops rather than restarting -- and whether it should is a real question, not an
+# oversight: a restart costs ~2.8 min of sign-in and discards the add-in's warm
+# series cache, so two half-full passes are not obviously better than one full one.
+#
+# One outage strike fired and cleared (2026-06-15..19, strike 1 of 2), which is
+# the guard behaving: a bad week costs that week, not the run.
+#
+# Resolution held everywhere. All 806 tags on disk have a minimum inter-row gap of
+# exactly 60 s, so nothing in this run crossed the 6-day MI01 span cliff and
+# silently banked 10-minute data.
 
 
 #: How deep the backwards backfill aims to get, in days before the run date.

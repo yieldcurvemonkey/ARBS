@@ -23,17 +23,28 @@ remove 90 % of the gross anyway.
 ## 2. Why it is dead
 
 45 epochs with a mean hold of 26 business days over 5.62 years is about **54
-independent observations**. `expected_max_sharpe_under_null` at `n_obs = 54`:
+independent observations**.
 
-| trials | E[max Sharpe \| null] |
-|---:|---:|
-| 6 | **0.177** |
-| 12 | 0.227 |
-| 24 | 0.269 |
-| 48 | 0.308 |
+`expected_max_sharpe_under_null(N, n_obs=k)` defaults its standard error to
+`1/sqrt(k)`, which is the SE of a **per-observation** Sharpe. The Sharpes
+quoted here are **annualised**, and an annualised Sharpe has null SE
+`1/sqrt(span_years)`. Those are different clocks, and with holds this long the
+annualised one is the **larger** number — so quoting only the per-hold null
+understates the bar the search has to clear. Both are therefore reported, and
+the notebook asserts against both:
 
-The best gross Sharpe in the table is **0.130**. It does not clear the six-trial
-null, and this work explored more than six configurations before arriving here.
+| trials | E[max SR \| null], per-hold (SE 0.136) | E[max SR \| null], annualised (SE 0.422) |
+|---:|---:|---:|
+| 6 | **0.177** | **0.548** |
+| 12 | 0.227 | 0.702 |
+| 24 | 0.270 | 0.835 |
+| 48 | 0.308 | 0.953 |
+| 1,569 | 0.461 | 1.426 |
+
+The best gross Sharpe in the table is **0.130**. It clears neither null at any
+trial count, and this work explored more than six configurations before
+arriving here. The verdict does not rest on which clock is used, which is the
+only condition under which reporting one of them would have been acceptable.
 
 ## 3. The hedge does not help — again
 
@@ -110,7 +121,38 @@ levels against (leveraged money + asset managers). Dealers are currently long
 at its minimum, **−1,530,754**. On Citi's thesis that is the configuration that
 widens the adjustment, and it is the screener's most important single reading.
 
-## 7. Data provenance, stated because two things share one name
+## 7. The Citi tie-out, and the discrepancy it was hiding
+
+`w2b_ca_screener` grades our CA against the 13 published rows of Citi's Figure 58
+for 2023-06-09. It used to do so with `assert pearson > 0.90`, which graded
+**nothing**: Citi's published CA is almost linear in pack rank — rank alone
+explains 99.4 % of its variance — so a correlation against it is very nearly a
+statement about the ordering, and every affine transform of our column preserves
+the ordering exactly. Measured, the correlation is **0.966 under all four** of:
+
+| mutation | pearson | median \|err\| | slope | intercept | old check | new check |
+|---|---:|---:|---:|---:|---|---|
+| ×2 (double-counting a leg) | 0.966 | 11.28 bp | 1.700 | +3.53 | **passes** | fails |
+| ×100 (percent read as bp) | 0.966 | 950.92 bp | 84.98 | +176.42 | **passes** | fails |
+| +10 bp (a level offset) | 0.966 | 9.34 bp | 0.850 | +11.76 | **passes** | fails |
+| ÷√252 (bp/yr read as bp/day) | 0.966 | 11.09 bp | 0.054 | +0.11 | **passes** | fails |
+
+The replacement grades in bp on a level — median and max absolute error, mean
+error, and the slope and intercept of ours regressed on theirs — and section 2.2
+of the notebook re-runs those four mutations to demonstrate that it can fail.
+
+Real figures: **13/13 rows, median error 0.99 bp, worst 3.06 bp, mean −0.04 bp.**
+
+**And the slope is 0.850, not 1.0.** That is a finding the correlation could
+never have surfaced. Our CA curve is about **15 % flatter across rank** than
+Citi's, sitting on a **+1.76 bp pedestal**: front packs (rank ≤ 8) run **+2.04 bp
+rich** to them, deep packs (rank ≥ 13) **−0.54 bp cheap**. Citi price off a cap
+surface; we invert the futures-versus-swap identity. A difference in the term
+structure of vol lands exactly there. It is a level disagreement of about a
+basis point at the ends — not a units error and not a sign error — and it is now
+on the record instead of averaged into a correlation.
+
+## 8. Data provenance, stated because two things share one name
 
 * **Dealer positioning** — CFTC TFF, weekly, lagged **3 business days** to
   publication (the report measures Tuesday, publishes Friday 15:30 ET, and the

@@ -29,21 +29,32 @@ Positions are held a **mean of 102 business days**, so 117 episodes over 5.63
 years are not 117 independent observations. Effective sample size is about
 **14 independent holds**.
 
-`RVUtils.ConvexityRV.strat1_threeway.expected_max_sharpe_under_null`, at
-`n_obs = 14`:
+`RVUtils.ConvexityRV.strat1_threeway.expected_max_sharpe_under_null` on **two**
+clocks, because the default one is not the clock the Sharpes are measured on.
+`n_obs = 14` sets the standard error to `1/sqrt(14) = 0.268`, the SE of a
+**per-hold** Sharpe. The figures quoted here are **annualised**, whose null SE
+is `1/sqrt(span_years) = 1/sqrt(5.63) = 0.421`. With holds this long the
+annualised clock is the **stricter** of the two, so quoting only the per-hold
+number understated the bar:
 
-| trials | E[max Sharpe \| null] |
-|---:|---:|
-| 6 | 0.347 |
-| 12 | **0.445** |
-| 24 | 0.529 |
-| 48 | 0.604 |
+| trials | E[max SR \| null], per-hold (SE 0.268) | E[max SR \| null], annualised (SE 0.421) |
+|---:|---:|---:|
+| 6 | 0.348 | 0.548 |
+| 12 | **0.446** | **0.702** |
+| 24 | 0.530 | 0.834 |
+| 48 | 0.605 | 0.953 |
 
 The **gross** Sharpe is **0.397**. The exit-rule × minimum-hold sweep alone was
 **12 cells**, and the signal design explored more than that. So the best number
 this strategy produces, *before any transaction cost*, sits below what a
-zero-edge strategy would be expected to produce from the same search. The net
-Sharpe of 0.180 is below even the six-trial null.
+zero-edge strategy would be expected to produce from the same search — on
+**both** clocks, 0.397 against 0.446 and 0.702. The net Sharpe of 0.180 is
+below even the six-trial null on either.
+
+(`w4_rac_screener` reports a third figure, 0.4449, because it floors rather
+than rounds its own slightly different `n_eff`. The spread across all three is
+0.445–0.702 and the gross Sharpe is below all of it, which is the only reason
+the arithmetic detail can be left as a footnote.)
 
 ## 3. Costs, and why they are not the reason
 

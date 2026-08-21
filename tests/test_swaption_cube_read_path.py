@@ -435,6 +435,247 @@ class TestAtmOnlyDaysAreExplained:
         assert no_excel == []
 
 
+# ── a non-session day must not become a COM fetch ─────────────────────────
+
+
+@pytest.fixture
+def holed_store(store):
+    """Warm on both sides of 2026-08-05, and warm again after a wide hole.
+
+    ``HOLIDAY`` stands in for a market holiday: Citi published nothing, so no
+    fetch can produce it. ``AFTER_END`` is past the warm and ``FAR_HOLE`` sits in
+    a month-wide hole - neither is a coverage gap, and both must keep the live
+    fallback they have today.
+    """
+    from MDP.IRSwaptions.CITIVELO.cube_store import clear_stored_cube_cache
+
+    clear_stored_cube_cache()
+    asset = asset_for("USD")
+    warm = [
+        dt.date(2026, 8, 3),
+        dt.date(2026, 8, 4),
+        # 2026-08-05 deliberately absent
+        dt.date(2026, 8, 6),
+        dt.date(2026, 8, 7),
+        # a month-wide hole
+        dt.date(2026, 10, 1),
+        dt.date(2026, 10, 2),
+    ]
+    for d in warm:
+        store.write_day(asset, d, make_cube_data(d), push_l2=False)
+    yield store, warm
+    clear_stored_cube_cache()
+
+
+HOLIDAY = dt.date(2026, 8, 5)
+AFTER_END = dt.date(2026, 10, 5)
+BEFORE_START = dt.date(2026, 7, 20)
+FAR_HOLE = dt.date(2026, 9, 1)
+
+
+class TestStoredGapDates:
+    def test_a_day_warm_on_both_sides_is_a_gap(self, holed_store):
+        from MDP.IRSwaptions.CITIVELO.cube_store import stored_gap_dates
+
+        store, _ = holed_store
+        assert stored_gap_dates("USD", [HOLIDAY], store=store) == frozenset({HOLIDAY})
+
+    def test_a_stored_day_is_never_a_gap(self, holed_store):
+        from MDP.IRSwaptions.CITIVELO.cube_store import stored_gap_dates
+
+        store, warm = holed_store
+        assert stored_gap_dates("USD", warm, store=store) == frozenset()
+
+    @pytest.mark.parametrize("day", [AFTER_END, BEFORE_START, FAR_HOLE])
+    def test_outside_the_neighbourhood_is_not_a_gap(self, holed_store, day):
+        """The whole point of a neighbourhood test rather than a first..last
+        bounds test: a partially warmed history must not be swallowed silently."""
+        from MDP.IRSwaptions.CITIVELO.cube_store import stored_gap_dates
+
+        store, _ = holed_store
+        assert stored_gap_dates("USD", [day], store=store) == frozenset()
+
+    def test_a_cold_store_reports_no_gaps(self, tmp_path):
+        from MDP.IRSwaptions.CITIVELO.cube_store import stored_gap_dates
+
+        cold = SwaptionCubeStore(base_dir=tmp_path / "cold", l2=False)
+        assert stored_gap_dates("USD", [HOLIDAY], store=cold) == frozenset()
+
+    def test_an_unreadable_store_does_not_raise(self):
+        from MDP.IRSwaptions.CITIVELO.cube_store import stored_gap_dates
+
+        class _Exploding:
+            base_dir = "exploding"
+
+            def available_dates(self, asset):
+                raise RuntimeError("no")
+
+        assert stored_gap_dates("USD", [HOLIDAY], store=_Exploding()) == frozenset()
+
+
+class TestProviderSkipsStoreGaps:
+    def test_a_gap_date_is_skipped_and_never_reaches_excel(
+        self, holed_store, no_excel, flat_ql_curve, stub_build
+    ):
+        """The regression: a bdate_range holiday used to drive COM, once per date."""
+        from MDP.IRSwaptions.CITIVELO import provider as prov
+
+        store, warm = holed_store
+        dates = [warm[1], HOLIDAY, warm[2]]
+        out = prov.get_citivelo_vol_objects(
+            curve_name="USD-SOFR-1D", dates=dates, engine="RL",
+            curves={d: flat_ql_curve(d) for d in dates}, cube_store=store,
+        )
+        assert sorted(out) == [warm[1], warm[2]]
+        assert HOLIDAY not in out, "the gap date was priced off some other day's cube"
+        assert no_excel == [], f"Excel was reached for a non-session day: {no_excel}"
+
+    def test_a_date_past_the_warm_still_reaches_excel(
+        self, holed_store, no_excel, flat_ql_curve, stub_build
+    ):
+        """A real session the warm has not caught up with is NOT a gap. Skipping
+        it would turn 'run the warm' into silently missing data."""
+        from MDP.IRSwaptions.CITIVELO import provider as prov
+
+        store, _ = holed_store
+        with pytest.raises(Boom):
+            prov.get_citivelo_vol_objects(
+                curve_name="USD-SOFR-1D", dates=[AFTER_END], engine="RL",
+                curves={AFTER_END: flat_ql_curve(AFTER_END)}, cube_store=store,
+            )
+        assert no_excel, "an unwarmed session was skipped instead of fetched"
+
+    def test_a_caller_cube_still_outranks_the_gap_skip(
+        self, holed_store, no_excel, flat_ql_curve, stub_build
+    ):
+        """The skip sits BELOW cubes=/cube=/snapshot=, so a caller who supplies
+        the holiday's surface still gets it."""
+        from MDP.IRSwaptions.CITIVELO import provider as prov
+
+        store, _ = holed_store
+        supplied = make_cube_data(HOLIDAY)
+        out = prov.get_citivelo_vol_objects(
+            curve_name="USD-SOFR-1D", dates=[HOLIDAY], engine="RL",
+            curves={HOLIDAY: flat_ql_curve(HOLIDAY)},
+            cube_store=store, cubes={HOLIDAY: supplied},
+        )
+        assert sorted(out) == [HOLIDAY]
+        assert stub_build["cube"] is supplied
+        assert no_excel == []
+
+    def test_offline_only_no_longer_raises_on_a_gap(
+        self, holed_store, no_excel, flat_ql_curve, stub_build
+    ):
+        """A gap is data, not a policy refusal, so it is skipped ahead of the
+        offline_only raise - the warm days in the same batch still come back."""
+        from MDP.IRSwaptions.CITIVELO import provider as prov
+
+        store, warm = holed_store
+        dates = [warm[1], HOLIDAY]
+        out = prov.get_citivelo_vol_objects(
+            curve_name="USD-SOFR-1D", dates=dates, engine="RL",
+            curves={d: flat_ql_curve(d) for d in dates},
+            cube_store=store, offline_only=True,
+        )
+        assert sorted(out) == [warm[1]]
+        assert no_excel == []
+
+    def test_one_warning_for_the_whole_batch_not_one_per_date(
+        self, holed_store, no_excel, flat_ql_curve, stub_build, caplog
+    ):
+        import logging
+
+        from MDP.IRSwaptions.CITIVELO import provider as prov
+
+        store, warm = holed_store
+        dates = [warm[1], HOLIDAY, warm[2]]
+        with caplog.at_level(logging.WARNING, logger=prov._logger.name):
+            prov.get_citivelo_vol_objects(
+                curve_name="USD-SOFR-1D", dates=dates, engine="RL",
+                curves={d: flat_ql_curve(d) for d in dates}, cube_store=store,
+            )
+        skips = [r for r in caplog.records if "SKIPPED" in r.getMessage()]
+        assert len(skips) == 1, [r.getMessage() for r in caplog.records]
+        assert HOLIDAY.isoformat() in skips[0].getMessage()
+
+
+class _CitiveloRlMdp:
+    """The three attributes ``IRSwaptionsTB``'s Citi fast path actually reads."""
+
+    source = "CITIVELO-RL"
+    curve_source = "citivelo_excel_rl"
+
+    def __init__(self, **request_kwargs):
+        self._default_request_kwargs = dict(request_kwargs)
+
+    def bulk_get_data(self, request):  # pragma: no cover - a call here is the bug
+        raise AssertionError(
+            f"the ordinary pricing path was entered for {request.get('timestamps')}"
+        )
+
+
+class TestTimeseriesBuilderSkipsStoreGaps:
+    """The provider's skip stops the COM fetch; this stops the pointless work
+    ABOVE it. Without the ``is_store_gap`` gate the gap date still reaches
+    ``bulk_get_data``, builds a context that cannot exist, and logs one
+    "No swaption context" line per market holiday."""
+
+    @pytest.fixture
+    def default_store_is_holed(self, holed_store, monkeypatch):
+        from MDP.IRSwaptions.CITIVELO import cube_store as cs
+
+        store, warm = holed_store
+        monkeypatch.setattr(cs, "_default_store", lambda: store)
+        return store, warm
+
+    def _tb(self, tmp_path, **request_kwargs):
+        from TB.IRSwaptionsTB import IRSwaptionsTB
+
+        return IRSwaptionsTB(
+            _CitiveloRlMdp(**request_kwargs),
+            cache_stem=f"swaption-gap-{tmp_path.name}",
+            ts_base_dir=tmp_path / "values",
+            use_duckdb=False,
+            show_tqdm=False,
+        )
+
+    @staticmethod
+    def _nvol_query():
+        from Query.IRSwaptions.IRSwaptionQuery import IRSwaptionQuery
+
+        return IRSwaptionQuery(curve="USD-SOFR-1D", expiry="1Y", tail="10Y", strike="ATMF")
+
+    def test_a_gap_date_is_dropped_without_entering_the_pricing_path(
+        self, default_store_is_holed, tmp_path
+    ):
+        _store, warm = default_store_is_holed
+        q = self._nvol_query()
+        with self._tb(tmp_path, verify=False) as tb:
+            rows, remaining = tb._native_citivelo_cube_rows(
+                curve_name="USD-SOFR-1D",
+                missing_by_date={warm[1]: [q], HOLIDAY: [q]},
+            )
+        assert [r[0][0] for r in rows] == [warm[1]]
+        assert remaining == {}, (
+            "the holiday was handed to the ordinary path; reverting the "
+            "is_store_gap gate is exactly this regression"
+        )
+
+    def test_a_date_past_the_warm_is_still_handed_on(
+        self, default_store_is_holed, tmp_path
+    ):
+        """Not a gap, so it keeps its live fallback rather than vanishing."""
+        _store, _warm = default_store_is_holed
+        q = self._nvol_query()
+        with self._tb(tmp_path, verify=False) as tb:
+            rows, remaining = tb._native_citivelo_cube_rows(
+                curve_name="USD-SOFR-1D",
+                missing_by_date={AFTER_END: [q]},
+            )
+        assert rows == []
+        assert remaining == {AFTER_END: [q]}
+
+
 class _StubBuilt:
     """Stands in for CitiVeloSwaptionCube: the vol object's identity is not
     under test here, only which SOURCE supplied the numbers behind it."""

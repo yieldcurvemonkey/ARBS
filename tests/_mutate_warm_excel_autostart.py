@@ -19,6 +19,32 @@ TARGET = REPO / "scripts" / "daily_cache_warmer.py"
 TESTS = REPO / "tests" / "test_warm_excel_autostart.py"
 PY = sys.executable
 
+CRLF = "\r\n"
+LF = "\n"
+
+
+def _read(path):
+    """Return ``(normalised_text, was_crlf)``.
+
+    Two failure modes, and the first version of this script had one of them. Reading in
+    text mode TRANSLATES line endings, so writing the file back "unchanged" rewrote
+    every line in a file the script was supposed to leave alone. Reading with
+    ``newline=""`` fixes that but breaks matching, because the patterns below carry
+    plain newlines and would never match a CRLF file -- every mutation silently becomes
+    FIND-MISSING, which reads like a clean run rather than a broken harness.
+
+    So: preserve on read, normalise for matching, restore the original ending on write.
+    """
+    raw = io.open(path, encoding="utf-8", newline="").read()
+    return raw.replace(CRLF, LF), (CRLF in raw)
+
+
+def _write(path, text, crlf):
+    io.open(path, "w", encoding="utf-8", newline="").write(
+        text.replace(LF, CRLF) if crlf else text
+    )
+
+
 #: (label, find, replace, the test that must break)
 MUTATIONS = [
     (
@@ -29,32 +55,49 @@ MUTATIONS = [
     ),
     (
         "the one-repair latch is dropped, so a leak becomes a restart loop",
-        "    if _EXCEL_REPAIR_ATTEMPTED:\n        return f\"{reason}; a repair was already attempted this run and did not stick\"\n    _EXCEL_REPAIR_ATTEMPTED = True",
+        '    if _EXCEL_REPAIR_ATTEMPTED:\n'
+        '        return f"{reason}; a repair was already attempted this run and did not stick"\n'
+        '    _EXCEL_REPAIR_ATTEMPTED = True',
         "    _EXCEL_REPAIR_ATTEMPTED = True",
         "test_only_one_repair_per_run",
     ),
     (
         "the post-repair ceiling re-probe is skipped",
-        "    if mb >= _CV_MEMORY_CEILING_MB:\n        return (f\"repaired Excel but it came back at {mb:.0f} MB, still at or above the \"\n                f\"{_CV_MEMORY_CEILING_MB:.0f} MB ceiling\")",
+        '    if mb >= _CV_MEMORY_CEILING_MB:\n'
+        '        return (f"repaired Excel but it came back at {mb:.0f} MB, still at or above the "\n'
+        '                f"{_CV_MEMORY_CEILING_MB:.0f} MB ceiling")',
         "    if False:\n        pass",
         "test_a_repair_that_relands_over_the_ceiling_still_blocks",
     ),
     (
         "a failed repair propagates instead of returning a reason",
-        "    except Exception as exc:  # noqa: BLE001 - a failed repair is a SKIP, not a crash\n        return (f\"{reason}; tried to fix it and could not after \"\n                f\"{time.perf_counter() - t0:.0f}s ({type(exc).__name__}: {exc})\")",
+        '    except Exception as exc:  # noqa: BLE001 - a failed repair is a SKIP, not a crash\n'
+        '        return (f"{reason}; tried to fix it and could not after "\n'
+        '                f"{time.perf_counter() - t0:.0f}s ({type(exc).__name__}: {exc})")',
         "    except ZeroDivisionError as exc:\n        return str(exc)",
         "test_a_failed_repair_is_a_reason_not_an_exception",
     ),
     (
         "an unreadable re-probe is treated as success",
-        "    if mb is None or mb <= 0.0:\n        return \"repaired Excel but the memory probe still cannot see a running instance\"",
+        '    if mb is None or mb <= 0.0:\n'
+        '        return "repaired Excel but the memory probe still cannot see a running instance"',
         "    if False:\n        pass",
         "test_an_unreadable_reprobe_blocks_rather_than_assuming_success",
     ),
     (
+        # The pattern must name the LAUNCH branch explicitly. The press_login line alone
+        # now appears twice -- the signed-out branch acquired one -- and replace(..., 1)
+        # took the first, mutating code this test does not exercise. It reported ESCAPED
+        # and the escape was in the harness, not the source.
         "the login pane is never pressed, so a started Excel never signs in",
-        "timeout=_CV_SIGNIN_TIMEOUT_S, press_login=True, logger=log",
-        "timeout=_CV_SIGNIN_TIMEOUT_S, press_login=False, logger=log",
+        "            supervisor.launch_excel(logger=log)\n"
+        "            client = supervisor.wait_for_addin(\n"
+        "                timeout=_CV_SIGNIN_TIMEOUT_S, press_login=True, logger=log\n"
+        "            )",
+        "            supervisor.launch_excel(logger=log)\n"
+        "            client = supervisor.wait_for_addin(\n"
+        "                timeout=_CV_SIGNIN_TIMEOUT_S, press_login=False, logger=log\n"
+        "            )",
         "test_no_excel_is_started_and_signed_in",
     ),
     (
@@ -63,20 +106,42 @@ MUTATIONS = [
         "            over_ceiling=True,\n        )",
         "test_preflight_routes_each_cause_to_its_own_repair",
     ),
+    (
+        "a failed Login press gives up instead of escalating to a full re-auth",
+        "            except Exception as exc:  # noqa: BLE001 - escalate rather than give up",
+        "            except ZeroDivisionError as exc:",
+        "test_a_login_press_that_does_not_take_escalates_to_a_full_restart",
+    ),
+    (
+        "a signed-out add-in is restarted instead of having Login pressed",
+        "        if signed_out:",
+        "        if False:",
+        "test_a_signed_out_addin_presses_login_and_does_not_restart",
+    ),
+    (
+        # Aimed at a test that goes through _excel_preflight. The first version pointed
+        # at one that calls _repair_addin_if_silent DIRECTLY, so deleting the call site
+        # changed nothing it could see -- ESCAPED, and again the harness's fault.
+        "the pre-flight never asks whether the add-in answers",
+        "    return _repair_addin_if_silent()",
+        "    return None",
+        "test_the_preflight_reaches_the_liveness_probe",
+    ),
 ]
 
 
 def run(nodeid: str) -> bool:
     """True when the test PASSES."""
     p = subprocess.run(
-        [PY, "-m", "pytest", f"{TESTS}::{nodeid}", "-q", "--no-header", "-p", "no:cacheprovider"],
+        [PY, "-m", "pytest", f"{TESTS}::{nodeid}", "-q", "--no-header",
+         "-p", "no:cacheprovider"],
         cwd=str(REPO), capture_output=True, text=True,
     )
     return p.returncode == 0
 
 
 def main() -> int:
-    original = io.open(TARGET, encoding="utf-8").read()
+    original, crlf = _read(TARGET)
     rows, escaped = [], 0
     try:
         for label, find, repl, nodeid in MUTATIONS:
@@ -84,15 +149,13 @@ def main() -> int:
                 rows.append((label, nodeid, "FIND-MISSING"))
                 escaped += 1
                 continue
-            io.open(TARGET, "w", encoding="utf-8", newline="").write(
-                original.replace(find, repl, 1)
-            )
+            _write(TARGET, original.replace(find, repl, 1), crlf)
             passed = run(nodeid)
             rows.append((label, nodeid, "ESCAPED" if passed else "caught"))
             if passed:
                 escaped += 1
     finally:
-        io.open(TARGET, "w", encoding="utf-8", newline="").write(original)
+        _write(TARGET, original, crlf)
 
     width = max(len(r[0]) for r in rows)
     print(f"\n{'mutation'.ljust(width)}  {'test'.ljust(52)}  result")

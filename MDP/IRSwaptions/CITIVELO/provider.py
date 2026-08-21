@@ -201,7 +201,8 @@ def _cube_for_date(
     client: Any,
     offline_only: bool = False,
     stored: Optional[Dict[dt.date, Any]] = None,
-) -> Tuple[Any, str]:
+    store_gap: bool = False,
+) -> Tuple[Optional[Any], str]:
     """``(SwaptionCubeData, origin)`` from whichever source was configured.
 
     Returns the ORIGIN as well as the data, because the caller has to know which
@@ -209,6 +210,10 @@ def _cube_for_date(
     the store can hold that date too, so a caller-supplied ``cubes=``/``cube=``/
     ``snapshot=`` would be reported as having come from the store — and, worse,
     would be judged against the STORE's smile shape by the ATM-only guard.
+
+    ``(None, 'store_gap')`` means the store is warm either side of this date and
+    holds nothing for it — a non-session day. The caller skips it; see
+    :func:`~MDP.IRSwaptions.CITIVELO.cube_store.stored_gap_dates`.
     """
     if cubes:
         hit = cubes.get(when) or cubes.get(when.isoformat())
@@ -241,6 +246,16 @@ def _cube_for_date(
         hit = stored.get(when)
         if hit is not None:
             return hit.data, "swaption_cube_store"
+
+    # A date the store is warm AROUND but has no partition for is a non-session
+    # day, not a cache miss. Citi published nothing, so the Excel fallback below
+    # cannot produce the missing quotes - it connects, costs a COM round trip,
+    # and comes back with whatever the add-in happens to hold, which on a holiday
+    # is an amputated cube. Skip ahead of `offline_only` because this is a fact
+    # about the DATA; refusing the fallback is a policy, and the policy should
+    # not have to be switched on to stop a fetch that cannot succeed.
+    if store_gap:
+        return None, "store_gap"
 
     if offline_only:
         raise CitiVelocityError(
@@ -333,9 +348,10 @@ def get_citivelo_vol_objects(
     # timestamp_mode is resolved upstream by CITIVELO_EXCEL.timestamps.resolve_request
     # rather than by an isinstance ladder here; see IRSwaptionMDP for why.
     stored: Dict[dt.date, Any] = {}
+    gap_dates: frozenset[dt.date] = frozenset()
     mode = str(timestamp_mode or "eod").strip().lower()
     if use_cube_store and mode != "live":
-        from MDP.IRSwaptions.CITIVELO.cube_store import load_stored_cubes
+        from MDP.IRSwaptions.CITIVELO.cube_store import load_stored_cubes, stored_gap_dates
 
         stored = load_stored_cubes(ccy, wanted, store=cube_store)
         if stored:
@@ -343,6 +359,15 @@ def get_citivelo_vol_objects(
                 "citivelo vol: %d/%d date(s) served from the swaption cube store",
                 len(stored), len(wanted),
             )
+            # Only ask once the store has answered for something. A cold store
+            # answers for nothing, and there the Excel fallback is the whole
+            # point - `use_cube_store=False` and a hermetic test must both keep
+            # reaching it.
+            missing = [d for d in wanted if d not in stored]
+            if missing:
+                gap_dates = stored_gap_dates(ccy, missing, store=cube_store)
+
+    skipped_gaps: List[dt.date] = []
 
     for when in wanted:
         curve = None
@@ -384,7 +409,11 @@ def get_citivelo_vol_objects(
             client=client,
             offline_only=bool(offline_only),
             stored=stored,
+            store_gap=when in gap_dates,
         )
+        if data is None:
+            skipped_gaps.append(when)
+            continue
         backend = "rl-native" if engine_token == "RL" else ("ql-sabr" if sabr else "ql")
 
         hit = stored.get(when) if origin == "swaption_cube_store" else None
@@ -450,6 +479,21 @@ def get_citivelo_vol_objects(
             }
         )
         out[when] = built if engine_token == "RL" else built.ql_handle
+
+    if skipped_gaps:
+        # ONE line for the whole batch. The per-date warning this replaces fired
+        # 51 times on a 4.6-year pull, once per market holiday, and each one was
+        # immediately followed by the COM connect it was warning about.
+        shown = ", ".join(d.isoformat() for d in skipped_gaps[:5])
+        more = f" (+{len(skipped_gaps) - 5} more)" if len(skipped_gaps) > 5 else ""
+        _logger.warning(
+            "Citi vol: %d of %d requested date(s) have no swaption cube store "
+            "partition but are warm either side, so they were SKIPPED rather "
+            "than fetched over Excel COM - those rows are ABSENT from the "
+            "result, not NaN. Normally market holidays, on which Citi published "
+            "no cube. Dates: %s%s.",
+            len(skipped_gaps), len(wanted), shown, more,
+        )
 
     return out
 

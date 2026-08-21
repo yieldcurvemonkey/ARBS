@@ -198,3 +198,143 @@ def test_preflight_routes_each_cause_to_its_own_repair(warmer, monkeypatch):
     assert warmer._excel_preflight() is None
 
     assert seen == [False, True]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Memory is not liveness. Every branch above reads a number from Get-Process;
+# none of them asks whether the add-in ANSWERS. A signed-out Excel under the
+# ceiling passed all of them and then failed every Velocity job in turn -- which
+# is how the swaption cube stopped writing after 2026-08-17.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _wire_probe(monkeypatch, warmer, outcome, sup=None):
+    """Point the liveness probe's lazy imports at a stub with the given outcome."""
+    import MDP.CitiVelocityExcel.com_client as CC
+
+    def _connect(**_k):
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(CC.CitiVelocityExcelClient, "connect", staticmethod(_connect))
+    if sup is not None:
+        import MDP.CitiVelocityExcel as pkg
+        import MDP.CitiVelocityExcel.memory_guard as guard
+        monkeypatch.setattr(pkg, "supervisor", sup, raising=False)
+        monkeypatch.setattr(guard, "excel_memory_mb", lambda: 500.0)
+
+
+def test_a_healthy_addin_lets_the_jobs_run(warmer, monkeypatch):
+    _wire_probe(monkeypatch, warmer, object())
+    assert warmer._repair_addin_if_silent() is None
+
+
+def test_a_signed_out_addin_presses_login_and_does_not_restart(warmer, monkeypatch):
+    """The remedy differs from the memory case, and using the wrong one is expensive.
+
+    A signed-out add-in does not need Excel restarted -- it needs the Login pane
+    pressed. Restarting instead throws away a healthy session and spends ~2.8 min of
+    sign-in to arrive at the same place.
+    """
+    from MDP.CitiVelocityExcel.errors import AddInNotSignedInError
+
+    sup = _Sup()
+    _wire_probe(monkeypatch, warmer, AddInNotSignedInError(), sup=sup)
+
+    assert warmer._repair_addin_if_silent() is None
+    assert sup.calls == ["wait_for_addin"], f"expected a Login press, saw {sup.calls}"
+    assert "restart_excel" not in sup.calls, "a healthy session must not be restarted"
+    assert "launch_excel" not in sup.calls, "Excel is already running"
+    assert sup.kwargs[0]["press_login"] is True
+
+
+def test_an_excel_outside_the_running_object_table_is_restarted(warmer, monkeypatch):
+    """The memory probe sees a process and the bridge cannot bind to it. A Login press
+    cannot fix that; only a restart can."""
+    from MDP.CitiVelocityExcel.errors import ExcelNotRunningError
+
+    sup = _Sup()
+    _wire_probe(monkeypatch, warmer, ExcelNotRunningError(), sup=sup)
+
+    assert warmer._repair_addin_if_silent() is None
+    assert sup.calls == ["restart_excel"], f"expected a restart, saw {sup.calls}"
+    assert sup.kwargs[0].get("force") is not True
+
+
+def test_an_unreadable_probe_does_not_block_the_run(warmer, monkeypatch):
+    """The probe is a diagnostic, not a gate. If IT breaks, the memory reading already
+    said the machine was usable, and refusing on a broken probe would ground the whole
+    Velocity block for a reason that has nothing to do with Excel."""
+    _wire_probe(monkeypatch, warmer, RuntimeError("COM went sideways"))
+    assert warmer._repair_addin_if_silent() is None
+
+
+def test_a_login_press_that_does_not_take_escalates_to_a_full_restart(warmer, monkeypatch):
+    """The user's requirement, stated directly: if COM is having issues, kill the
+    instance and come back through the full auth path.
+
+    A signed-out add-in gets the cheap remedy first because it keeps the session and its
+    warm series cache. But "pressed Login and it did not take" is a real outcome -- the
+    pane's handler is inert for minutes after a launch, and an Excel can be signed out
+    AND wedged at once -- so the run must not stop there.
+    """
+    from MDP.CitiVelocityExcel.errors import AddInNotSignedInError
+
+    sup = _Sup()
+
+    def _wait_fails(**kw):
+        sup.calls.append("wait_for_addin")
+        sup.kwargs.append(kw)
+        raise RuntimeError("the add-in did not sign in within 15 minutes")
+
+    sup.wait_for_addin = _wait_fails
+    _wire_probe(monkeypatch, warmer, AddInNotSignedInError(), sup=sup)
+
+    assert warmer._repair_addin_if_silent() is None
+    assert sup.calls == ["wait_for_addin", "restart_excel"], (
+        f"expected the cheap remedy THEN the escalation, saw {sup.calls}")
+    assert sup.kwargs[-1].get("force") is not True, (
+        "even the escalation rescues unsaved work rather than forcing")
+
+
+def test_the_escalation_is_bounded_and_never_loops(warmer, monkeypatch):
+    """Two remedies inside one latched repair, and no third attempt anywhere."""
+    from MDP.CitiVelocityExcel.errors import AddInNotSignedInError
+
+    sup = _Sup()
+
+    def _boom(**kw):
+        sup.calls.append("wait_for_addin")
+        raise RuntimeError("nope")
+
+    sup.wait_for_addin = _boom
+    sup._restart_raises = RuntimeError("rescue failed, leaving Excel alone")
+    _wire_probe(monkeypatch, warmer, AddInNotSignedInError(), sup=sup)
+
+    first = warmer._repair_addin_if_silent()
+    assert isinstance(first, str), "a repair that exhausts both remedies must say so"
+    assert sup.calls == ["wait_for_addin", "restart_excel"]
+
+    second = warmer._repair_addin_if_silent()
+    assert "already attempted" in second
+    assert sup.calls == ["wait_for_addin", "restart_excel"], "the latch must hold"
+
+
+def test_the_preflight_reaches_the_liveness_probe(warmer, monkeypatch):
+    """End-to-end through _excel_preflight, not the probe in isolation.
+
+    The distinction matters: the other liveness tests call _repair_addin_if_silent
+    directly, so deleting its CALL SITE in the pre-flight leaves them all green. This is
+    the only test that fails if the pre-flight goes back to trusting the memory reading
+    alone -- which is the state that let three nights of swaption cubes go unwarmed.
+    """
+    from MDP.CitiVelocityExcel.errors import AddInNotSignedInError
+
+    sup = _Sup()
+    _wire_probe(monkeypatch, warmer, AddInNotSignedInError(), sup=sup)
+
+    assert warmer._excel_preflight() is None
+    assert sup.calls == ["wait_for_addin"], (
+        "the pre-flight passed a healthy memory reading and never asked whether the "
+        f"add-in answers; saw {sup.calls}")

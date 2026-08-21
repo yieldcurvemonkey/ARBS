@@ -1868,8 +1868,32 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         the depth it needed and the depth that exists. Measured over the whole
         12,772,278-key local slice, the intraday tape reaches contiguous depth 20
         on **zero** dates and its maximum in any year is **17**, so ``GOLDS``
-        (needs 20) and ``SILVERS`` (needs 24) are structurally unreachable and
+        (needs 20) and ``SILVERS`` (needs 24) do not price off the LOCAL TAPE and
         must fail rather than quietly return a shallower pack.
+
+        **That ceiling is ours, not the market's.** An earlier revision of this
+        docstring called it "structurally unreachable", which was an inference
+        from an empty cache rather than a measurement. The deepest-rank histogram
+        across 1,667 dates spikes at **12 (457 dates), 13 (289) and 17 (106)**,
+        with 14/15/16 at 2/2/1 -- and those three numbers are exactly the
+        instrument counts of the three curves the nightly intraday job builds
+        (MIX23 ``SFRCM1..12``, ``Q12STIRT`` ``..13``, ``Q16STIRT`` ``..17``). A
+        liquidity ceiling would be ragged and drift; three spikes sitting on three
+        config lengths is a request ceiling.
+
+        Asked directly, the vendor serves them. One instant, 2026-08-19 14:00 CT,
+        ranks 12..20 all returned a price at the requested minute, monotone
+        95.940 -> 95.755; ranks 18-20 came back freshly stamped in UTC because
+        nothing had ever cached them.
+
+        **That fix now exists.** ``scripts/warm_sr3_intraday_depth.py`` fetches
+        ranks 18-20 at the minutes the tape already holds a front contract for.
+        Measured on 2026-08-19 it moved contiguous depth **17 -> 20** and
+        ``GOLDS`` priced at **9.1837 bp** (``BLUES`` 5.8476 at the same instant,
+        so the pair is monotone in rank as a variance quantity must be). So the
+        paragraph above describes an UNWARMED session: on a warmed one ``GOLDS``
+        prices, and ``SILVERS`` (needs 24) is still refused. The refusal is a
+        statement about what has been fetched, never about what is possible.
 
         Parameters worth choosing deliberately
         --------------------------------------
@@ -2152,9 +2176,12 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             if dead:
                 bits = []
                 depth_limited = False
+                needs = []
                 for l in dead:
                     ranks = plan.get(l)
                     need = max(ranks) if ranks else None
+                    if need:
+                        needs.append(need)
                     reasons = list(dict.fromkeys(
                         self.sfr_cvx_adj_intraday_failures.get(l, {}).values()))
                     why = "; ".join(reasons[:2]) or "no reason recorded"
@@ -2166,10 +2193,24 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         f"-- {why}"
                         if need else f"{l} -- {why}"
                     )
+                # The depths above are measured live. The tail must therefore
+                # not restate a frozen measurement: an earlier version said the
+                # tape "never exceeds 17", and the moment the depth-20 warm ran
+                # it was contradicting a "deepest measured 20" printed two
+                # clauses earlier in the same message. What is durably true is
+                # the SHAPE of the limit -- it is a statement about what has
+                # been fetched -- so the tail says that and names the fix.
+                deepest = max(depth_seen.values(), default=0)
                 tail = (
-                    " Measured over the whole local slice the tape reaches contiguous "
-                    "depth 20 on zero dates and never exceeds 17, so GOLDS (needs 20) "
-                    "and SILVERS (needs 24) are structurally unreachable intraday."
+                    f" The tape reaches contiguous depth {deepest} here, and that "
+                    "ceiling is a REQUEST ceiling rather than the market's: the "
+                    "deepest-rank histogram spikes on 12/13/17, exactly the "
+                    "instrument counts of the three curves the nightly intraday "
+                    "job builds, and asked directly the vendor serves deeper. "
+                    "Run scripts/warm_sr3_intraday_depth.py --date <session> "
+                    f"--depth {max(needs, default=0)} to fill it. Until then this "
+                    "refusal is correct: what must never happen is quietly "
+                    "serving a shallower pack under a deeper pack's name."
                     if depth_limited else ""
                 )
                 raise CI.IntradayRankUnavailable(
