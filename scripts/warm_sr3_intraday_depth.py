@@ -268,7 +268,8 @@ def run_warm(
         "dates_considered": len(days), "dates_touched": 0,
         "instants_seen": 0, "instants_already_deep": 0,
         "instants_warmed": 0, "instants_skipped_live": 0,
-        "instants_failed": 0, "depth_before": {}, "depth_after": {},
+        "instants_failed": 0, "instants_reached_depth": 0,
+        "depth_before": {}, "depth_after": {},
         "gained": 0, "unchanged": 0, "stopped_early": None, "failures": {},
     }
 
@@ -290,8 +291,15 @@ def run_warm(
         log.info("%s: %d stamps, %d already at depth %d, %d to warm",
                  day, len(stamps), p["already_deep"], depth, len(todo))
 
-        deepest_before = max(p["before"].values()) if p["before"] else 0
-        summary["depth_before"][str(day)] = deepest_before
+        # COUNT the instants at target, do not take the day's max. The max is
+        # not monotone in progress: one already-deep instant pins it at the
+        # target and every subsequent completion moves it by nothing. Measured
+        # -- a run that warmed 478 instants with zero failures reported "NO
+        # date gained depth" because 19 instants were already deep.
+        n_at_depth_before = sum(1 for d in p["before"].values() if d >= depth)
+        summary["depth_before"][str(day)] = {
+            "at_target": n_at_depth_before, "of": len(stamps),
+            "deepest": max(p["before"].values()) if p["before"] else 0}
 
         for ts in todo:
             if time.monotonic() - t0 > budget_s:
@@ -320,9 +328,13 @@ def run_warm(
         # nothing, which is precisely the failure this re-measure exists to catch.
         if not dry_run:
             after = {ts: CI.tape_depth(probe, ts, p["ladder"]) for ts in stamps}
-            deepest_after = max(after.values()) if after else 0
-            summary["depth_after"][str(day)] = deepest_after
-            if deepest_after > deepest_before:
+            n_at_depth_after = sum(1 for d in after.values() if d >= depth)
+            summary["depth_after"][str(day)] = {
+                "at_target": n_at_depth_after, "of": len(stamps),
+                "deepest": max(after.values()) if after else 0}
+            summary["instants_reached_depth"] += (
+                n_at_depth_after - n_at_depth_before)
+            if n_at_depth_after > n_at_depth_before:
                 summary["gained"] += 1
             else:
                 summary["unchanged"] += 1
@@ -337,12 +349,20 @@ def _report(s: Dict[str, object]) -> int:
                      indent=2, default=str))
     before, after = s["depth_before"], s["depth_after"]
     if before:
-        print("\ndeepest contiguous depth, before -> after:")
+        # Instants AT TARGET, not the day's deepest. The deepest is not monotone
+        # in progress -- one already-deep instant pins it and every subsequent
+        # completion moves it by nothing -- so it is reported alongside as
+        # context rather than used as the measure.
+        print("\ninstants at target depth, before -> after (day's deepest in "
+              "brackets):")
         for d in sorted(before):
             b = before[d]
             a = after.get(d, b)
-            flag = "  GAINED" if a > b else ""
-            print(f"  {d}  {b:2d} -> {a:2d}{flag}")
+            delta = a["at_target"] - b["at_target"]
+            flag = "  +%d" % delta if delta > 0 else ""
+            print("  %s  %4d/%-4d -> %4d/%-4d   [deepest %2d -> %2d]%s" % (
+                d, b["at_target"], b["of"], a["at_target"], a["of"],
+                b["deepest"], a["deepest"], flag))
     if s["failures"]:
         print("\nfailures (first 5 dates):")
         for d in list(s["failures"])[:5]:
@@ -357,14 +377,15 @@ def _report(s: Dict[str, object]) -> int:
         print("\nNothing to do: every measured instant was already at depth.")
         return 0
     if not s["gained"]:
-        # Deliberately non-zero. A warm that wrote keys and moved no depth is
-        # the exact silent failure this job's acceptance check exists for.
-        print("\nFAILED: instants were fetched and NO date gained depth. Either "
-              "the vendor has nothing at these minutes, or the keys written do "
-              "not match the keys the panel reads. Do not report success.")
+        # Deliberately non-zero. A warm that wrote keys and moved no instant to
+        # the target is the exact silent failure this check exists for.
+        print("\nFAILED: instants were fetched and NO instant reached the target "
+              "depth. Either the vendor has nothing at these minutes, or the "
+              "keys written do not match the keys the panel reads. Do not "
+              "report success.")
         return 1
     print(f"\nOK: {s['gained']} of {s['gained'] + s['unchanged']} dates gained "
-          f"depth.")
+          f"depth; {s['instants_reached_depth']} instants reached the target.")
     return 0
 
 

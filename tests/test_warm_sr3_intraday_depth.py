@@ -127,35 +127,69 @@ def test_the_live_quote_window_is_refused():
     assert ok
 
 
-def test_a_warm_that_moves_no_depth_exits_nonzero():
+def _summary(**kw):
+    base = {
+        "dry_run": False, "dates_touched": 1, "gained": 0, "unchanged": 1,
+        "instants_warmed": 19, "instants_reached_depth": 0,
+        "depth_before": {"2026-08-19": {"at_target": 0, "of": 19, "deepest": 17}},
+        "depth_after": {"2026-08-19": {"at_target": 0, "of": 19, "deepest": 17}},
+        "failures": {}, "instants_seen": 19, "instants_already_deep": 0,
+        "instants_skipped_live": 0, "instants_failed": 0,
+    }
+    base.update(kw)
+    return base
+
+
+def test_a_warm_that_reaches_no_instant_exits_nonzero():
     """The silent failure this job's acceptance check exists for.
 
     A fetch that writes a differently-shaped key reports thousands of successful
     writes and recovers exactly nothing. Keys written is therefore not the
-    criterion; measured depth is.
+    criterion; instants that reached the target depth are.
     """
-    moved_nothing = {
-        "dry_run": False, "dates_touched": 1, "gained": 0, "unchanged": 1,
-        "instants_warmed": 19, "depth_before": {"2026-08-19": 17},
-        "depth_after": {"2026-08-19": 17}, "failures": {},
-        "instants_seen": 19, "instants_already_deep": 0,
-        "instants_skipped_live": 0, "instants_failed": 0,
-    }
-    assert W._report(moved_nothing) == 1
+    assert W._report(_summary()) == 1
 
-    moved = dict(moved_nothing, gained=1, unchanged=0,
-                 depth_after={"2026-08-19": 20})
-    assert W._report(moved) == 0
+    reached = _summary(
+        gained=1, unchanged=0, instants_reached_depth=19,
+        depth_after={"2026-08-19": {"at_target": 19, "of": 19, "deepest": 20}})
+    assert W._report(reached) == 0
+
+
+def test_progress_is_counted_per_instant_not_by_the_days_deepest():
+    """The defect a real run found, pinned so it cannot come back.
+
+    The first version measured `max(depth over the day's instants)` before and
+    after. That is not monotone in progress: one already-deep instant pins the
+    max at the target, and every subsequent completion moves it by nothing. A
+    run that warmed 478 instants with ZERO failures printed "NO date gained
+    depth" and exited 1, because 19 instants were already at 20.
+
+    A false negative rather than a false positive, so nothing was silently
+    accepted -- but a job that reports failure while working is broken in the
+    way that gets its alerts muted, and then the real failure is invisible too.
+    """
+    partial = _summary(
+        gained=1, unchanged=0, instants_warmed=478,
+        instants_reached_depth=478, instants_already_deep=19,
+        instants_seen=541,
+        depth_before={"2026-08-19": {"at_target": 19, "of": 541, "deepest": 20}},
+        depth_after={"2026-08-19": {"at_target": 497, "of": 541, "deepest": 20}})
+
+    # the day's DEEPEST is identical before and after -- the old measure saw
+    # nothing at all here
+    b = partial["depth_before"]["2026-08-19"]
+    a = partial["depth_after"]["2026-08-19"]
+    assert a["deepest"] == b["deepest"] == 20
+    # ... and the count moved by 478, which is what actually happened
+    assert a["at_target"] - b["at_target"] == 478
+    assert W._report(partial) == 0
 
 
 def test_nothing_to_do_is_success_not_failure():
     """A no-op on a warm cache is the daily run's normal outcome."""
-    nothing = {
-        "dry_run": False, "dates_touched": 0, "gained": 0, "unchanged": 0,
-        "instants_warmed": 0, "depth_before": {}, "depth_after": {},
-        "failures": {}, "instants_seen": 300, "instants_already_deep": 300,
-        "instants_skipped_live": 0, "instants_failed": 0,
-    }
+    nothing = _summary(dates_touched=0, unchanged=0, instants_warmed=0,
+                       instants_seen=300, instants_already_deep=300,
+                       depth_before={}, depth_after={})
     assert W._report(nothing) == 0
 
 
