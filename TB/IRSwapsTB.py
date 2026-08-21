@@ -1884,8 +1884,16 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         Asked directly, the vendor serves them. One instant, 2026-08-19 14:00 CT,
         ranks 12..20 all returned a price at the requested minute, monotone
         95.940 -> 95.755; ranks 18-20 came back freshly stamped in UTC because
-        nothing had ever cached them. So Golds intraday is a FETCH away, and the
-        fix is to add a depth-20 intraday warm rather than to accept the limit.
+        nothing had ever cached them.
+
+        **That fix now exists.** ``scripts/warm_sr3_intraday_depth.py`` fetches
+        ranks 18-20 at the minutes the tape already holds a front contract for.
+        Measured on 2026-08-19 it moved contiguous depth **17 -> 20** and
+        ``GOLDS`` priced at **9.1837 bp** (``BLUES`` 5.8476 at the same instant,
+        so the pair is monotone in rank as a variance quantity must be). So the
+        paragraph above describes an UNWARMED session: on a warmed one ``GOLDS``
+        prices, and ``SILVERS`` (needs 24) is still refused. The refusal is a
+        statement about what has been fetched, never about what is possible.
 
         Parameters worth choosing deliberately
         --------------------------------------
