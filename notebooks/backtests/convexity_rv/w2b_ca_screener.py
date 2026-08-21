@@ -161,11 +161,72 @@ TIE = pd.DataFrame(TIE).set_index("column")
 print(TIE.round(4).to_string())
 
 assert TIE.at["ca_bp", "n"] == 13, "all 13 published packs must be resolvable"
-assert TIE.at["ca_bp", "pearson"] > 0.90, (
-    "the measured convexity adjustment must reproduce Citi's published level "
-    "in the cross-section; if it does not, nothing downstream is meaningful")
-print(f"\nPASSES: ca_bp reproduces at pearson {TIE.at['ca_bp','pearson']:.4f} across "
-      f"all 13 rows, and the fitted model at {TIE.at['ca_model_bp','pearson']:.4f}.")
+
+
+# A CORRELATION CANNOT GRADE THIS. Citi's published CA rises almost linearly
+# in rank -- rank alone explains 99.4% of its variance -- so pearson against it
+# is very nearly a statement about the ORDERING, which any affine transform of
+# our column preserves exactly. The tie-out therefore grades in bp, on a level,
+# and section 2.2 re-runs it against four deliberately broken columns to show
+# that it can fail.
+def ca_tieout(ours, theirs) -> dict:
+    a = pd.to_numeric(ours, errors="coerce")
+    b = pd.to_numeric(theirs, errors="coerce")
+    m = a.notna() & b.notna()
+    a, b = a[m], b[m]
+    err = a - b
+    slope, icept = np.polyfit(b.to_numpy(float), a.to_numpy(float), 1)
+    return {"n": int(m.sum()), "median_abs_err_bp": float(err.abs().median()),
+            "max_abs_err_bp": float(err.abs().max()),
+            "mean_err_bp": float(err.mean()), "slope": float(slope),
+            "intercept_bp": float(icept), "pearson": float(a.corr(b))}
+
+
+# Bounds set from the discrepancy the repaired panel actually shows, then
+# checked against the mutations rather than fitted to them.
+CA_TOL = {"median_abs_err_bp": 1.5, "max_abs_err_bp": 3.5, "abs_mean_err_bp": 0.75,
+          "slope_lo": 0.60, "slope_hi": 1.40, "abs_intercept_bp": 4.0}
+
+
+def ca_tieout_failures(t: dict) -> list:
+    f = []
+    if t["median_abs_err_bp"] > CA_TOL["median_abs_err_bp"]:
+        f.append(f"median |err| {t['median_abs_err_bp']:.2f}bp")
+    if t["max_abs_err_bp"] > CA_TOL["max_abs_err_bp"]:
+        f.append(f"max |err| {t['max_abs_err_bp']:.2f}bp")
+    if abs(t["mean_err_bp"]) > CA_TOL["abs_mean_err_bp"]:
+        f.append(f"mean err {t['mean_err_bp']:+.2f}bp (a LEVEL offset)")
+    if not (CA_TOL["slope_lo"] <= t["slope"] <= CA_TOL["slope_hi"]):
+        f.append(f"slope {t['slope']:.3f} (a SCALE error)")
+    if abs(t["intercept_bp"]) > CA_TOL["abs_intercept_bp"]:
+        f.append(f"intercept {t['intercept_bp']:+.2f}bp (a SHIFT)")
+    return f
+
+
+CA_TIE = ca_tieout(_j["ca_bp"], _j["ca_bp_citi"])
+CA_FAILS = ca_tieout_failures(CA_TIE)
+print("\nca_bp vs Citi, graded in bp rather than by correlation:")
+for k, v in CA_TIE.items():
+    print(f"  {k:20} {v:10.4f}")
+assert not CA_FAILS, (
+    "the measured convexity adjustment does not reproduce Citi's published "
+    f"LEVEL in the cross-section: {CA_FAILS}. Nothing downstream is meaningful.")
+print(f"\nPASSES: all 13 packs, median error {CA_TIE['median_abs_err_bp']:.2f}bp, "
+      f"worst {CA_TIE['max_abs_err_bp']:.2f}bp, mean {CA_TIE['mean_err_bp']:+.2f}bp.")
+
+# The slope is the part worth reading, and it is NOT 1.
+print(f"\nBUT the fit is slope {CA_TIE['slope']:.3f}, intercept "
+      f"{CA_TIE['intercept_bp']:+.2f}bp -- inside tolerance, and a real finding:")
+_ord = _j.sort_values("rank")
+_er = pd.to_numeric(_ord["ca_bp"]) - pd.to_numeric(_ord["ca_bp_citi"])
+_front = float(_er[_ord["rank"] <= 8].mean())
+_deep = float(_er[_ord["rank"] >= 13].mean())
+print(f"  our CA curve is ~{(1 - CA_TIE['slope']) * 100:.0f}% FLATTER across rank than")
+print(f"  Citi's, on a +{CA_TIE['intercept_bp']:.2f}bp pedestal. Front packs (rank<=8) run")
+print(f"  {_front:+.2f}bp rich to them, deep packs (rank>=13) {_deep:+.2f}bp cheap.")
+print("  Citi price off a cap surface; we invert the futures-vs-swap identity, so")
+print("  a term-structure-of-vol difference lands exactly here. It is a level")
+print("  disagreement of ~1bp at the ends, not a units or a sign error.")
 print("FAILS, and why each one is expected rather than a bug:")
 print(f"  vs_model_bp   pearson {TIE.at['vs_model_bp','pearson']:+.4f} — the module docstring")
 print("                disclaims this column explicitly: our sigma is fitted to the same")
@@ -224,6 +285,46 @@ _n_differ = int((_f["capvol_over_realized"] != _f["cap_raw"].map(lambda v: round
 print(f"\nOK: round on Implied/Realized, truncate on Cap vol Impl/Rlzd, {_fin.sum()}/13 finite rows.")
 print(f"The two rules give a DIFFERENT printed value on {_n_differ} of {int(_fin.sum())} "
       "of them, so the asymmetry is not cosmetic.")
+
+
+# %% [markdown]
+# ### 2.2 Can that tie-out fail?
+#
+# A check nobody has watched fail is not evidence. The four mutations below
+# are the ones a real defect in this code would produce -- and every one of
+# them is invisible to a correlation, which is why the correlation was
+# replaced. `pearson` is reported alongside so the difference is on the record.
+
+# %%
+MUTATIONS = {
+    "x2 (double-counting a leg)": lambda x: x * 2.0,
+    "x100 (percent read as bp)": lambda x: x * 100.0,
+    "+10bp (a level offset)": lambda x: x + 10.0,
+    "/sqrt(252) (bp/yr read as bp/day)": lambda x: x / np.sqrt(252.0),
+}
+_base = pd.to_numeric(_j["ca_bp"], errors="coerce")
+_rows = []
+for _name, _fn in MUTATIONS.items():
+    _t = ca_tieout(_fn(_base), _j["ca_bp_citi"])
+    _f = ca_tieout_failures(_t)
+    _rows.append({"mutation": _name, "pearson": _t["pearson"],
+                  "median_abs_err_bp": _t["median_abs_err_bp"],
+                  "slope": _t["slope"], "intercept_bp": _t["intercept_bp"],
+                  "old_check_r>0.90": "PASSES" if _t["pearson"] > 0.90 else "fails",
+                  "new_check": "fails" if _f else "PASSES",
+                  "why": "; ".join(_f)[:70]})
+MUT = pd.DataFrame(_rows).set_index("mutation")
+print(MUT.round(4).to_string())
+
+assert (MUT["new_check"] == "fails").all(), (
+    "a broken CA column survived the tie-out; it does not discriminate")
+assert (MUT["old_check_r>0.90"] == "PASSES").all(), (
+    "the discarded correlation check now catches something -- re-derive why it "
+    "was replaced before trusting this section's claim")
+print(f"\nAll {len(MUT)} mutations are caught by the bp tie-out and MISSED by the")
+print(f"correlation, which reads {MUT['pearson'].iloc[0]:.4f} for every one of them --")
+print("identical to the unmutated column, to four decimals. That is what an affine")
+print("transform does to a correlation, and why r>0.90 graded nothing at all.")
 
 # %% [markdown]
 # ## 3. The sign probe

@@ -704,19 +704,35 @@ print(f"n_eff             {n_eff:.2f} independent holds")
 print(f"\ngross Sharpe      {gross_sr:.4f}   (zero-cost arm)")
 print(f"net Sharpe        {net_sr:.4f}   (base arm)")
 
+# THREE numbers, not one, and the spread between them is the point. `n_obs=k`
+# sets sr_std = 1/sqrt(k), the standard error of a PER-HOLD Sharpe, and the
+# floor-vs-round choice moves it a little. `gross_sr` is ANNUALISED, and an
+# annualised Sharpe has null standard error 1/sqrt(span_years) -- with holds
+# this long, the LARGER of the two, so the per-hold clock is the flattering
+# one. The verdict has to hold on the strictest of them.
 NULL = pd.DataFrame([{"trials": N,
-                      "E[max SR|null], n_obs=int(n_eff)":
+                      "per-hold, floor(n_eff)":
                           expected_max_sharpe_under_null(N, n_obs=int(n_eff)),
-                      "E[max SR|null], n_obs=round(n_eff)":
-                          expected_max_sharpe_under_null(N, n_obs=int(round(n_eff)))}
+                      "per-hold, round(n_eff)":
+                          expected_max_sharpe_under_null(N, n_obs=int(round(n_eff))),
+                      "annualised, 1/sqrt(span)":
+                          expected_max_sharpe_under_null(
+                              N, sr_std=1.0 / np.sqrt(span))}
                      for N in (1, 6, 12, 24, 48)])
 print("\n" + NULL.round(4).to_string(index=False))
 
 null_lo = float(NULL.loc[NULL["trials"] == 12].iloc[0, 1:].min())
 null_hi = float(NULL.loc[NULL["trials"] == 12].iloc[0, 1:].max())
-print(f"\nat 12 trials the null expectation is {null_lo:.4f} .. {null_hi:.4f} "
-      "depending on\nwhether n_eff is floored or rounded; the gross Sharpe is "
+null_ann = float(NULL.loc[NULL["trials"] == 12, "annualised, 1/sqrt(span)"].iloc[0])
+print(f"\nat 12 trials the null expectation spans {null_lo:.4f} .. {null_hi:.4f} "
+      "across the\nthree clocks; the gross Sharpe is "
       f"{gross_sr:.4f}.")
+assert gross_sr < null_ann, (
+    f"the gross Sharpe {gross_sr:.4f} now clears the ANNUALISED 12-trial null "
+    f"{null_ann:.4f}, the clock that matches how it is measured")
+assert null_ann >= null_hi, (
+    "the annualised clock is no longer the strictest of the three, so the "
+    "comment above about which one flatters is wrong for this book")
 
 assert gross_sr < null_lo, (
     f"the gross Sharpe {gross_sr:.4f} now clears the 12-trial null {null_lo:.4f}; "
@@ -728,8 +744,14 @@ print("No cost assumption rescues this, because the failure is in the gross numb
 print("\nA NUMBER YOU MAY HAVE SEEN: the workflow write-up quotes 0.445 for this")
 print(f"null. That is n_obs = {int(round(n_eff))} (n_eff rounded); flooring n_eff "
       f"gives {int(n_eff)} and")
-print(f"{expected_max_sharpe_under_null(12, n_obs=int(n_eff)):.4f}, which is what "
-      "w4_rac_backtest prints. Both exceed 0.397.")
+print(f"{expected_max_sharpe_under_null(12, n_obs=int(n_eff)):.4f}.")
+print("w4_rac_backtest computes n_eff from its own episode series and its own")
+print("span_years, so it lands a fraction away and prints 0.446. The two do not")
+print("have to agree to the digit; what matters is that the whole range does.")
+print(f"The annualised clock -- the one that matches an annualised Sharpe -- is "
+      f"stricter still at {null_ann:.4f}.")
+print(f"All three exceed the {gross_sr:.3f} gross Sharpe, which is why the verdict")
+print("does not turn on the choice.")
 
 # %% [markdown]
 # ## 10. The picture

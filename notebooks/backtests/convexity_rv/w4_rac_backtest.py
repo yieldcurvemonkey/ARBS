@@ -376,25 +376,57 @@ span = float(PERF[PERF["arm"] == "base"]["span_years"].iloc[0])
 n_eff = span * 252.0 / mean_hold
 print(f"mean hold {mean_hold:.0f} bdays -> n_eff ~ {n_eff:.1f} independent holds")
 
+# TWO CLOCKS, AND THEY MUST BOTH BE SHOWN.
+# `expected_max_sharpe_under_null(N, n_obs=k)` defaults to sr_std = 1/sqrt(k),
+# the standard error of a PER-OBSERVATION Sharpe. `ann_sharpe` is ANNUALISED.
+# Comparing them directly is a clock mismatch, and here it is the flattering
+# direction: an annualised Sharpe has standard error 1/sqrt(span_years) under
+# the null, and with holds this long that is the LARGER number, so the
+# per-observation null understates what the search has to clear.
+#
+# Both are reported. A verdict that depended on the choice would not be one.
+sr_std_perhold = 1.0 / np.sqrt(n_eff)              # per-hold clock
+sr_std_ann = 1.0 / np.sqrt(span)                   # annualised clock
+print(f"null SE, per-hold clock   {sr_std_perhold:.3f}  (1/sqrt(n_eff={n_eff:.1f}))")
+print(f"null SE, annualised clock {sr_std_ann:.3f}  (1/sqrt(span={span:.2f}y))")
+
 rows = []
 for N in (1, 6, 12, 24, 48):
-    rows.append({"trials": N,
-                 "E[max SR | null]": expected_max_sharpe_under_null(N, n_obs=int(n_eff))})
+    rows.append({
+        "trials": N,
+        "E[max SR | null] per-hold": expected_max_sharpe_under_null(
+            N, sr_std=sr_std_perhold),
+        "E[max SR | null] annualised": expected_max_sharpe_under_null(
+            N, sr_std=sr_std_ann)})
 NULL = pd.DataFrame(rows)
 print("\n" + NULL.round(3).to_string(index=False))
 
 gross_sr = float(PERF[PERF["arm"] == "zero_cost"]["ann_sharpe"].iloc[0])
 net_sr = float(PERF[PERF["arm"] == "base"]["ann_sharpe"].iloc[0])
-null_12 = float(NULL[NULL["trials"] == 12]["E[max SR | null]"].iloc[0])
-print(f"\ngross Sharpe {gross_sr:.3f}   net {net_sr:.3f}")
-print(f"E[max SR | null] at 12 trials: {null_12:.3f}")
+null_12 = float(NULL[NULL["trials"] == 12]["E[max SR | null] per-hold"].iloc[0])
+null_12_ann = float(NULL[NULL["trials"] == 12]["E[max SR | null] annualised"].iloc[0])
+print(f"\ngross Sharpe (annualised) {gross_sr:.3f}   net {net_sr:.3f}")
+print(f"E[max SR | null] at 12 trials: per-hold {null_12:.3f}, "
+      f"annualised {null_12_ann:.3f}")
 
 assert gross_sr < null_12, (
-    "the gross Sharpe now clears the 12-trial null; the verdict in this "
-    "notebook needs re-deriving"
+    "the gross Sharpe now clears the 12-trial per-hold null; the verdict in "
+    "this notebook needs re-deriving"
+)
+assert gross_sr < null_12_ann, (
+    "the gross Sharpe now clears the 12-trial ANNUALISED null -- the clock "
+    "that matches how ann_sharpe is measured; re-derive the verdict"
+)
+assert null_12_ann > null_12, (
+    "the annualised null is no longer the harder bar, so the prose above "
+    "about which way the mismatch cut is wrong for this book"
 )
 print("\nVERDICT: the GROSS Sharpe is below the null expectation for a 12-cell")
 print("search, and the exit-rule x minimum-hold sweep alone was 12 cells.")
+print(f"It is below on BOTH clocks -- {gross_sr:.3f} against {null_12:.3f} per-hold")
+print(f"and {null_12_ann:.3f} annualised -- so the verdict does not rest on the")
+print("choice of clock, which is the only reason reporting one of them would be")
+print("acceptable.")
 print("No cost assumption rescues this, because the failure is in the gross number.")
 
 # %% [markdown]

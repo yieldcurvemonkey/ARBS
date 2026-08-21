@@ -818,15 +818,24 @@ mean_hold = float(SIM1["mean_hold"].mean())
 span = float(SIM1["years"].mean())
 n_eff = span * 252.0 / mean_hold
 print(f"mean hold {mean_hold:.1f} obs over {span:.2f}y -> n_eff ~ {n_eff:.0f} independent holds")
-print("\nBailey & Lopez de Prado, for reference:")
+# Two clocks. `n_obs=n_eff` makes sr_std the standard error of a PER-HOLD
+# Sharpe; the Sharpes in this notebook are ANNUALISED, whose null standard
+# error is 1/sqrt(span_years). Both are printed because quoting the smaller
+# one alone understates the bar -- and here neither matters, because the
+# EMPIRICAL placebo below dwarfs both.
+print("\nBailey & Lopez de Prado, for reference (both clocks):")
 for N in (1, 4, 16, 64):
-    print(f"  E[max SR | null], {N:3} trials: "
-          f"{expected_max_sharpe_under_null(N, n_obs=int(n_eff)):.3f}")
+    _ph = expected_max_sharpe_under_null(N, sr_std=1.0 / np.sqrt(n_eff))
+    _an = expected_max_sharpe_under_null(N, sr_std=1.0 / np.sqrt(span))
+    print(f"  E[max SR | null], {N:3} trials: {_ph:.3f} per-hold, "
+          f"{_an:.3f} annualised")
 print(f"\nempirical E[max SR | null] from the placebo, 16 trials, exec_lag=1: "
       f"{float(_n1.groupby('rep')['gross_sr'].max().mean()):.3f}")
 print("The empirical figure is an order of magnitude larger than the analytic one,")
 print("because the analytic version assumes iid observations and this rule's P&L")
-print("is anything but.")
+print("is anything but. That is why the placebo, not the formula, is the bar this")
+print("notebook actually holds the result to: the gap between the two analytic")
+print("clocks is small next to the gap between either of them and the placebo.")
 
 # %%
 fig = go.Figure()

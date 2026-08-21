@@ -812,23 +812,53 @@ print(f"span {SPAN:.2f}y   mean hold {mean_hold:.1f} bdays   "
 print(f"(sanity check: the book planned {len(SPECS)} epochs, so n_eff and the "
       "epoch count agree to within 20%)")
 
-NULL = pd.DataFrame([{"trials": N,
-                      "E[max SR | null]": expected_max_sharpe_under_null(
-                          N, n_obs=N_OBS)}
-                     for N in (1, 2, 6, 12, 24, 48, 1569)])
+# TWO CLOCKS, AND THEY MUST BOTH BE SHOWN.
+# `expected_max_sharpe_under_null(N, n_obs=k)` defaults to sr_std = 1/sqrt(k),
+# the standard error of a PER-OBSERVATION Sharpe. `GROSS_SR` is ANNUALISED.
+# Comparing them is a clock mismatch, and it is the flattering direction here:
+# an annualised Sharpe has null standard error 1/sqrt(span_years), which with
+# holds this long is the LARGER number, so the per-observation null understates
+# the bar. Both are reported -- a verdict that turned on the choice would not
+# be one.
+sr_std_perhold = 1.0 / np.sqrt(n_eff)
+sr_std_ann = 1.0 / np.sqrt(SPAN)
+print(f"null SE, per-hold clock   {sr_std_perhold:.3f}  (1/sqrt(n_eff={n_eff:.1f}))")
+print(f"null SE, annualised clock {sr_std_ann:.3f}  (1/sqrt(span={SPAN:.2f}y))")
+
+NULL = pd.DataFrame([{
+    "trials": N,
+    "E[max SR | null] per-hold": expected_max_sharpe_under_null(
+        N, sr_std=sr_std_perhold),
+    "E[max SR | null] annualised": expected_max_sharpe_under_null(
+        N, sr_std=sr_std_ann)}
+    for N in (1, 2, 6, 12, 24, 48, 1569)])
 print("\n" + NULL.round(3).to_string(index=False))
 
-null_6 = float(NULL.loc[NULL["trials"] == 6, "E[max SR | null]"].iloc[0])
-null_grid = float(NULL.loc[NULL["trials"] == 1569, "E[max SR | null]"].iloc[0])
+null_6 = float(NULL.loc[NULL["trials"] == 6, "E[max SR | null] per-hold"].iloc[0])
+null_grid = float(NULL.loc[NULL["trials"] == 1569, "E[max SR | null] per-hold"].iloc[0])
+null_6_ann = float(NULL.loc[NULL["trials"] == 6, "E[max SR | null] annualised"].iloc[0])
+null_grid_ann = float(
+    NULL.loc[NULL["trials"] == 1569, "E[max SR | null] annualised"].iloc[0])
 net_sr = float(PERF.at["unhedged_base", "ann_sharpe"])
 print(f"\ngross Sharpe (zero cost, unhedged)  {GROSS_SR:.3f}")
 print(f"net Sharpe   (0.5bp,     unhedged)  {net_sr:.3f}")
-print(f"E[max SR | null], 6 trials          {null_6:.3f}")
-print(f"E[max SR | null], 1,569 trials      {null_grid:.3f}")
+print(f"E[max SR | null], 6 trials          {null_6:.3f} per-hold, "
+      f"{null_6_ann:.3f} annualised")
+print(f"E[max SR | null], 1,569 trials      {null_grid:.3f} per-hold, "
+      f"{null_grid_ann:.3f} annualised")
 
 assert GROSS_SR < null_6, (
-    "the gross Sharpe now clears the 6-trial null; the verdict needs re-deriving")
+    "the gross Sharpe now clears the 6-trial per-hold null; re-derive the verdict")
 assert GROSS_SR < null_grid
+assert GROSS_SR < null_6_ann, (
+    "the gross Sharpe now clears the 6-trial ANNUALISED null -- the clock that "
+    "matches how GROSS_SR is measured; re-derive the verdict")
+assert GROSS_SR < null_grid_ann
+assert null_6_ann > null_6, (
+    "the annualised null is no longer the harder bar, so the prose above about "
+    "which way the mismatch cut is wrong for this book")
+print("\nBelow both clocks at both trial counts, so the verdict does not rest on")
+print("which standard error was used -- the only reason quoting one would do.")
 print("\nSix trials is this notebook alone — two hedge modes x three cost")
 print("levels. The honest count is far larger: the same family was grid-searched")
 print("at 1,890 cells / 1,569 scored (strat2_gridsearch_verdict.json), whose own")
@@ -847,13 +877,18 @@ n_eff_traded = span_traded * 252.0 / mean_hold
 sr_traded = float(sub_u.diff().dropna().mean() / sub_u.diff().dropna().std() * np.sqrt(252))
 sr_traded_h = float(H.loc[t0:].diff().dropna().mean()
                     / H.loc[t0:].diff().dropna().std() * np.sqrt(252))
-null_6_traded = expected_max_sharpe_under_null(6, n_obs=int(round(n_eff_traded)))
+null_6_traded = expected_max_sharpe_under_null(
+    6, sr_std=1.0 / np.sqrt(n_eff_traded))
+null_6_traded_ann = expected_max_sharpe_under_null(
+    6, sr_std=1.0 / np.sqrt(span_traded))
 print(f"traded window {t0.date()} .. {sub_u.index[-1].date()}  "
       f"({span_traded:.2f}y, {len(sub_u)} marks)")
 print(f"  Sharpe unhedged {sr_traded:.4f}   hedged {sr_traded_h:.4f}")
 print(f"  n_eff {n_eff_traded:.1f}  ->  E[max SR | null] at 6 trials "
-      f"{null_6_traded:.3f}")
+      f"{null_6_traded:.3f} per-hold, {null_6_traded_ann:.3f} annualised")
 assert sr_traded < null_6_traded, "the traded-window Sharpe clears its own null"
+assert sr_traded < null_6_traded_ann, (
+    "the traded-window Sharpe clears its own ANNUALISED null")
 print("\nDropping the flat year RAISES the Sharpe to 0.144 and raises the null")
 print("it has to clear to 0.198, because there are fewer independent holds in a")
 print("shorter window. It fails on both windows.")
