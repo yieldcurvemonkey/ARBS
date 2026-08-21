@@ -50,10 +50,11 @@ pd.set_option("display.width", 240, "display.max_columns", 40)
 #   `BARCHART_TOS_LIVE_STIRF-RL`. The settle lives under `BARCHART_STIRF-RL`.
 #   The source token is part of the diskcache key, so a request under the wrong
 #   one does not fall back — it **misses and goes to the vendor**.
-# * **A different depth.** The intraday tape reaches depth 20 on **zero** dates
-#   and never exceeds 18, so **Golds is not reachable intraday, ever**, and Blues
-#   only sometimes. The API refuses per-rank rather than quietly serving a
-#   shallower pack.
+# * **A different depth, for a reason that turns out to be ours.** The intraday
+#   tape reaches contiguous depth 20 on **zero** dates, so the API refuses Golds
+#   per-rank rather than quietly serving a shallower pack. But that ceiling is a
+#   **request** ceiling, not a market one -- see §2, which measures it and then
+#   asks the vendor directly.
 # * **A different level.** Intraday quotes and 17:00 settles are not the same
 #   mark. The two must never be concatenated into one series, and §5 measures
 #   the gap so the size of that hazard is on the record.
@@ -126,14 +127,34 @@ print(f"reachable intraday : {REACHABLE}")
 for k, v in REFUSED.items():
     print(f"REFUSED  {k:7} (needs depth {NEEDS[k]:2d}): {v}")
 
-assert "GOLDS" not in REACHABLE, (
-    "Golds resolved intraday. It needs a contiguous strip of 20 and the "
-    "intraday tape has historically reached 20 on ZERO dates -- if this now "
-    "passes, the tape changed and section 1's premise needs re-measuring."
-)
 assert REACHABLE, "nothing is reachable intraday on this session"
-print("\nGolds needs a contiguous 20 and the intraday tape reaches 20 on ZERO")
-print("dates, so it is structurally unavailable intraday -- not a gap to fill.")
+
+print("\nWHY Golds is refused, and why that is OUR ceiling rather than the market's.")
+print("The obvious reading -- 'deferred SR3 does not quote intraday' -- is an")
+print("inference from an empty cache, and it is wrong. Two measurements:")
+print()
+print("1. The deepest rank ever written to the intraday tape, across 1,667 dates,")
+print("   is not smoothly distributed. It SPIKES:")
+print("        rank 12 -> 457 dates      rank 14 -> 2")
+print("        rank 13 -> 289 dates      rank 15 -> 2")
+print("        rank 17 -> 106 dates      rank 16 -> 1")
+print("   and 12 / 13 / 17 are exactly the instrument counts of the three curves")
+print("   the nightly intraday job builds: MIX23 SFRCM1..12, Q12STIRT ..13,")
+print("   Q16STIRT ..17. A liquidity ceiling would be ragged and would drift with")
+print("   volume. Three spikes sitting on three config lengths is a REQUEST ceiling.")
+print()
+print("2. Asked directly, the vendor serves them. One instant, 2026-08-19 14:00 CT,")
+print("   ranks 12..20, every one returned a price at the requested minute:")
+print("        12 SR3M29 95.940   16 SR3M30 95.875   19 SR3H31 95.785")
+print("        13 SR3U29 95.930   17 SR3U30 95.850   20 SR3M31 95.755")
+print("        14 SR3Z29 95.915   18 SR3Z30 95.820")
+print("   Ranks 12-17 came from cache (Chicago-stamped keys); 18-20 came back")
+print("   freshly stamped in UTC, because nothing had ever asked for them.")
+print()
+print("So Golds intraday is a FETCH away. The fix is a depth-20 intraday warm --")
+print("the same shape as the depth-20 SETTLE warm that repaired the daily panel --")
+print("not a workaround. Until that runs, the refusal above is correct behaviour:")
+print("what must never happen is quietly serving a shallower pack.")
 
 # %%
 CA = tb.sfr_cvx_adj_intraday(REACHABLE, STAMPS)

@@ -390,10 +390,17 @@ def test_the_futures_source_is_pinned_and_a_settle_source_is_refused(tb):
 def test_golds_fails_loud_with_the_depth_it_needed_and_the_depth_that_exists(tb, warm):
     """Never a shallower pack served under the deeper pack's name.
 
-    The intraday tape reaches contiguous depth 20 on ZERO dates in every year
-    2018-2026 and its maximum anywhere is 17, so GOLDS (rank 17, needs depth 20)
-    is structurally unreachable. The failure has to name both numbers or the
-    reader cannot tell "not today" from "not ever".
+    The LOCAL intraday tape reaches contiguous depth 20 on ZERO dates in every
+    year 2018-2026 and its maximum anywhere is 17, so GOLDS (rank 17, needs
+    depth 20) cannot be priced off what is cached. The failure has to name both
+    numbers or the reader cannot tell "not today" from "not ever".
+
+    It is the first of those. The 17 is a REQUEST ceiling -- the deepest-rank
+    histogram spikes on 12/13/17, the instrument counts of the three curves the
+    nightly intraday job builds -- and asked directly the vendor priced ranks
+    18-20 at the requested minute. So this test pins the REFUSAL, not an
+    impossibility: once a depth-20 intraday warm runs, GOLDS should price and
+    this test should be the thing that has to change.
     """
     with pytest.raises(CI.IntradayRankUnavailable) as ei:
         tb.sfr_cvx_adj_intraday(["GOLDS"], [PINNED])

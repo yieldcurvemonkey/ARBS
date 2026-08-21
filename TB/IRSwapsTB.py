@@ -1868,8 +1868,24 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         the depth it needed and the depth that exists. Measured over the whole
         12,772,278-key local slice, the intraday tape reaches contiguous depth 20
         on **zero** dates and its maximum in any year is **17**, so ``GOLDS``
-        (needs 20) and ``SILVERS`` (needs 24) are structurally unreachable and
+        (needs 20) and ``SILVERS`` (needs 24) do not price off the LOCAL TAPE and
         must fail rather than quietly return a shallower pack.
+
+        **That ceiling is ours, not the market's.** An earlier revision of this
+        docstring called it "structurally unreachable", which was an inference
+        from an empty cache rather than a measurement. The deepest-rank histogram
+        across 1,667 dates spikes at **12 (457 dates), 13 (289) and 17 (106)**,
+        with 14/15/16 at 2/2/1 -- and those three numbers are exactly the
+        instrument counts of the three curves the nightly intraday job builds
+        (MIX23 ``SFRCM1..12``, ``Q12STIRT`` ``..13``, ``Q16STIRT`` ``..17``). A
+        liquidity ceiling would be ragged and drift; three spikes sitting on three
+        config lengths is a request ceiling.
+
+        Asked directly, the vendor serves them. One instant, 2026-08-19 14:00 CT,
+        ranks 12..20 all returned a price at the requested minute, monotone
+        95.940 -> 95.755; ranks 18-20 came back freshly stamped in UTC because
+        nothing had ever cached them. So Golds intraday is a FETCH away, and the
+        fix is to add a depth-20 intraday warm rather than to accept the limit.
 
         Parameters worth choosing deliberately
         --------------------------------------
@@ -2168,8 +2184,12 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                     )
                 tail = (
                     " Measured over the whole local slice the tape reaches contiguous "
-                    "depth 20 on zero dates and never exceeds 17, so GOLDS (needs 20) "
-                    "and SILVERS (needs 24) are structurally unreachable intraday."
+                    "depth 20 on zero dates and never exceeds 17. That ceiling is a "
+                    "REQUEST ceiling, not the market's: the deepest-rank histogram "
+                    "spikes on 12/13/17, exactly the instrument counts of the three "
+                    "curves the nightly intraday job builds, and asked directly the "
+                    "vendor served ranks 18-20 at the requested minute. Golds "
+                    "intraday needs a depth-20 intraday warm, not a workaround."
                     if depth_limited else ""
                 )
                 raise CI.IntradayRankUnavailable(
