@@ -85,9 +85,19 @@ MUTATIONS = [
         "test_an_unreadable_reprobe_blocks_rather_than_assuming_success",
     ),
     (
+        # The pattern must name the LAUNCH branch explicitly. The press_login line alone
+        # now appears twice -- the signed-out branch acquired one -- and replace(..., 1)
+        # took the first, mutating code this test does not exercise. It reported ESCAPED
+        # and the escape was in the harness, not the source.
         "the login pane is never pressed, so a started Excel never signs in",
-        "timeout=_CV_SIGNIN_TIMEOUT_S, press_login=True, logger=log",
-        "timeout=_CV_SIGNIN_TIMEOUT_S, press_login=False, logger=log",
+        "            supervisor.launch_excel(logger=log)\n"
+        "            client = supervisor.wait_for_addin(\n"
+        "                timeout=_CV_SIGNIN_TIMEOUT_S, press_login=True, logger=log\n"
+        "            )",
+        "            supervisor.launch_excel(logger=log)\n"
+        "            client = supervisor.wait_for_addin(\n"
+        "                timeout=_CV_SIGNIN_TIMEOUT_S, press_login=False, logger=log\n"
+        "            )",
         "test_no_excel_is_started_and_signed_in",
     ),
     (
@@ -95,6 +105,27 @@ MUTATIONS = [
         "            over_ceiling=False,\n        )",
         "            over_ceiling=True,\n        )",
         "test_preflight_routes_each_cause_to_its_own_repair",
+    ),
+    (
+        "a failed Login press gives up instead of escalating to a full re-auth",
+        "            except Exception as exc:  # noqa: BLE001 - escalate rather than give up",
+        "            except ZeroDivisionError as exc:",
+        "test_a_login_press_that_does_not_take_escalates_to_a_full_restart",
+    ),
+    (
+        "a signed-out add-in is restarted instead of having Login pressed",
+        "        if signed_out:",
+        "        if False:",
+        "test_a_signed_out_addin_presses_login_and_does_not_restart",
+    ),
+    (
+        # Aimed at a test that goes through _excel_preflight. The first version pointed
+        # at one that calls _repair_addin_if_silent DIRECTLY, so deleting the call site
+        # changed nothing it could see -- ESCAPED, and again the harness's fault.
+        "the pre-flight never asks whether the add-in answers",
+        "    return _repair_addin_if_silent()",
+        "    return None",
+        "test_the_preflight_reaches_the_liveness_probe",
     ),
 ]
 
