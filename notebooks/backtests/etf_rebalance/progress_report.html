@@ -168,53 +168,53 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-spa
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">Progress report &middot; 20 August 2026 &middot; 23:20 ET</p>
+    <p class="eyebrow">Progress report &middot; 21 August 2026 &middot; 05:30 ET</p>
     <h1>ETF Rebalance RV, and four things it turned up on the way</h1>
     <p class="standfirst">
-      Five workstreams, four multi-agent workflows, 32 commits across four branches. The
-      trade is dead three independent ways. Most of the durable value is in the defects
+      Five workstreams, four multi-agent workflows, 32 commits, <strong>four PRs open</strong>.
+      The trade is dead three independent ways. Most of the durable value is in the defects
       found while killing it.
     </p>
   </header>
 
   <section>
     <h2>Where everything stands</h2>
-    <p class="sub">Branch state as of 23:17 ET. Nothing pushed; <code>main</code> is at <code>61fa6d1a</code>.</p>
+    <p class="sub">All four branches pushed and open as PRs against <code>main</code> at <code>61fa6d1a</code>. #472 is stacked on #471.</p>
     <div class="ledger">
 
       <div class="row">
         <span class="tag t-dead">Dead</span>
         <div><b>ETF rebalance micro-fly &mdash; the original thesis</b>
           <p>Holdings scraped, panel built, 5,192 configurations across four grids. Nothing alive. Figure pack and interactive ladder explorer delivered.</p></div>
-        <span class="meta">feat/etf-rebalance-rv<br>12 commits</span>
+        <span class="meta">PR #471<br>13 commits</span>
       </div>
 
       <div class="row">
         <span class="tag t-dead">Dead</span>
         <div><b>Citi Velocity intraday &mdash; execution-timestamp grid</b>
           <p>79.2M cells backfilled. 23,040 cells / 483,840 configurations searched. Best break-even 0.065&times; of one round trip.</p></div>
-        <span class="meta">feat/etf-rebalance-rv<br>eecb32e5</span>
+        <span class="meta">PR #471<br>eecb32e5</span>
       </div>
 
       <div class="row">
         <span class="tag t-dead">Dead</span>
         <div><b>Multi-issuer aggregate &mdash; State Street + Vanguard</b>
           <p>Providers built, N-PORT history wired. Aggregate correlates 0.994 with TLT-only and scores marginally <em>worse</em>.</p></div>
-        <span class="meta">feat/etf-multi-issuer<br>17 commits</span>
+        <span class="meta">PR #472 (stacked)<br>6 commits</span>
       </div>
 
       <div class="row">
         <span class="tag t-shipped">Shipped</span>
         <div><b>TimeseriesBuilder <code>direct=</code> &mdash; read Citi straight from the add-in</b>
           <p>Works, tested, mutation-verified. Found three pre-existing production defects on the way in.</p></div>
-        <span class="meta">feat/tb-direct-citivelo<br>2 commits</span>
+        <span class="meta">PR #473<br>2 commits</span>
       </div>
 
       <div class="row">
-        <span class="tag t-blocked">Blocked</span>
+        <span class="tag t-blocked">Partial</span>
         <div><b>MI01 whole-universe warm in the nightly cron</b>
-          <p>Do not merge yet. One live check settles it, and tonight revealed the root cause is not what the branch fixes.</p></div>
-        <span class="meta">fix/cache-warmer-reliability<br>14890c16</span>
+          <p>Live check done &mdash; the guard is safe. But the nightly still cannot run unattended, and that is the bigger gap.</p></div>
+        <span class="meta">PR #474<br>14890c16</span>
       </div>
 
     </div>
@@ -381,16 +381,30 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-spa
         path. Wiring it in is the missing piece.
       </p>
     </div>
-    <div class="block warn">
-      <h3>Two decisions</h3>
+    <div class="block ship">
+      <h3>Settled overnight: the batch-0 guard is safe</h3>
       <p>
-        <strong>1.</strong> One live <code>CVTSHIST</code> against a matured ISIN settles whether the
-        cron branch is safe to merge or would break the currently-green EOD warm. Five minutes,
-        needs a signed-in Excel.
+        The outstanding live check is done. The wire reports <code>no block</code> for an all-dead
+        MI01 chunk &mdash; 16 of 16 tags &mdash; which is the <em>dangerous</em> answer: a guard keyed
+        on the reason string would abort at batch 0, and arming it on the EOD job would have broken
+        a warm that has been green at ~2,765 s.
       </p>
       <p>
-        <strong>2.</strong> Nothing is pushed. 32 commits sit across four branches awaiting your
-        review.
+        The shipped guard does not key on the reason. It keys on maturity from the catalog, and
+        batch 0&rsquo;s 22 bonds resolve <strong>0 alive, 0 unknown</strong> (US912810DX38 redeemed
+        2016-11-15). The stop condition needs a non-empty alive set, so batch 0 cannot halt the run
+        under any reason string. #474 is out of draft.
+      </p>
+    </div>
+    <div class="block warn">
+      <h3>One decision left</h3>
+      <p>
+        Four PRs are open and awaiting review: <strong>#471</strong> (the study),
+        <strong>#472</strong> stacked on it (multi-issuer), <strong>#473</strong> (TimeseriesBuilder
+        <code>direct=</code>), <strong>#474</strong> (the cron guard). All four merge cleanly.
+      </p>
+      <p>
+        The unattended-Excel gap is the real remaining work and is deliberately not in any of them.
       </p>
     </div>
   </section>
