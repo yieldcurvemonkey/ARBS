@@ -4,7 +4,7 @@ import json
 import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import re
 import pandas as pd
@@ -1249,6 +1249,18 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         return self._rows_to_frame(all_rows)
 
+    #: Where :meth:`sfr_cvx_adj` records the dates it could not price, as
+    #: ``{label: {iso_date: reason}}``. Cleared at the top of every call.
+    #:
+    #: Both per-date loops used to be ``except Exception: pass``, so a date that
+    #: failed to price and a date with no vendor data produced the same thing --
+    #: a gap. That is how a convexity-adjustment series came to look
+    #: interpolated: the sparsity was read as absence when some of it was
+    #: failure. Absence and failure are different findings and lead to different
+    #: fixes (fetch versus code), so they are now distinguishable without
+    #: re-running anything.
+    sfr_cvx_adj_failures: dict[str, dict[str, str]] = {}
+
     def sfr_cvx_adj(
         self,
         items: list[str],
@@ -1257,7 +1269,35 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         *,
         ignore_cache: bool = False,
         use_globex: bool = False,
+        matched_frequency: Optional[str] = "Q",
+        matched_leg2_frequency: Optional[str] = "Q",
     ) -> pd.DataFrame:
+        r"""Convexity adjustment ``pack_rate - matched_swap_rate`` in bp, by label.
+
+        ``items`` accepts an IMM code (``"H26"``), a constant-maturity rank
+        (``"SFR9"``), a pack colour (``"WHITES"``, ``"REDS"``, ``"GREENS"``,
+        ``"BLUES"``, ``"GOLDS"``, ``"SILVERS"``) or a bundle (``"BUNDLE2"``).
+
+        **The matched swap is quarterly/quarterly by default, and that is not a
+        detail.** Citi specifies it verbatim; the ``usd_irs`` spec these curves
+        carry quotes annual fixed, and the compounding gap was measured at
+        +4.585 / +5.816 / +5.884 bp on three dates spanning 2023-2025 -- larger
+        than the Whites and Reds adjustment being measured, which runs 1.3-6.8
+        bp. Every value this method published before the fix was low by that
+        much. Pass ``matched_frequency=None`` for the spec default; it is the
+        negative control in ``tests/test_convexity_rv_shared_ca_path.py`` and
+        must not tie out to Citi's screen.
+
+        The convention travels in the query's ``value_kwargs``, which is part of
+        ``_query_fingerprint``. So it is part of the mapping-cache key and of the
+        ``data/ts`` symbol: changing it orphans the rows computed under the old
+        convention rather than silently serving them. The cache version is
+        therefore derived from the inputs rather than hand-bumped.
+
+        **Failures are recorded, not swallowed.** A date this method cannot
+        price lands in :attr:`sfr_cvx_adj_failures` with a reason. See that
+        attribute's note for why the distinction matters.
+        """
         import rateslib as rl
 
         from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
@@ -1270,6 +1310,21 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         _date_col = getattr(self, "_date_col", "date")
         mapping = getattr(self, self._cache_attr)
         leg_prefix = "/SR3" if use_globex else "SFR"
+
+        # Carried on every query built below, so the cache fingerprint moves with
+        # the convention, and splatted into every `.apply()` so the value
+        # function actually sees it. Both, or the probe and the write disagree
+        # about which key they are talking about.
+        cvx_value_kwargs: dict[str, Any] = {
+            "matched_frequency": matched_frequency,
+            "matched_leg2_frequency": matched_leg2_frequency,
+        }
+
+        self.sfr_cvx_adj_failures = {}
+
+        def _note_failure(label: str, dts: Any, reason: str) -> None:
+            key = pd.Timestamp(dts).date().isoformat()
+            self.sfr_cvx_adj_failures.setdefault(label, {})[key] = reason
 
         _IMM_PAT = re.compile(r"^[FGHJKMNQUVXZ]\d{2}$")
         _CM_PAT = re.compile(r"^SFR(\d{1,2})$")
@@ -1398,6 +1453,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                     structure=IRSwapStructure.OUTRIGHT,
                     structure_kwargs={"bpv": 1},
                     value=IRSwapValue.CVX_ADJ,
+                    value_kwargs=dict(cvx_value_kwargs),
                 )
 
                 key = self._cache_key(ts, curve, q)
@@ -1495,6 +1551,12 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             interval=None,  # daily settles
             tickers=sorted(needed_tickers),
             use_globex=use_globex,
+            # Explicit, because the historical default was the opposite and it
+            # was a look-ahead: the fetcher used to `.bfill().ffill()` the whole
+            # frame unconditionally, so a contract that did not print on a date
+            # received the NEXT date's price. A missing settle must stay NaN and
+            # be reported through `sfr_cvx_adj_failures`, not be filled in.
+            fill=False,
         )
         if px_df.empty:
             return pd.concat(out_frames_cached, axis=1).sort_index(kind="mergesort") if out_frames_cached else pd.DataFrame()
@@ -1542,6 +1604,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                     structure=IRSwapStructure.OUTRIGHT,
                     structure_kwargs={"bpv": 1},
                     value=IRSwapValue.CVX_ADJ,
+                    value_kwargs=dict(cvx_value_kwargs),
                 )
 
                 for dts in _iter_eval_dates_for_label():
@@ -1549,6 +1612,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         ts = pd.Timestamp(dts).to_pydatetime()
                         price = px_df.at[dts, leg]
                         if pd.isna(price):
+                            _note_failure(label, dts, "no price")
                             continue
 
                         ch = _get_curve_for_day(dts.date())
@@ -1556,15 +1620,15 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         vmap = q.build_value_map(pricer_or_curve=ch, package=pkg, risk_weights=rws)
 
                         _, rl_sfr = build_rl_stirf(ticker=leg, curve_id=ch.id(), price=float(price), use_globex=use_globex)
-                        cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, **{"sfr": [rl_sfr]}))
+                        cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, sfr=[rl_sfr], **cvx_value_kwargs))
 
                         record = {_date_col: pd.Timestamp(dts).to_pydatetime(), colname: cvx}
                         rows.append(record)
 
                         if not _is_today(ts):
                             pending_writes.append((self._cache_key(ts, curve, q), {_date_col: ts, q.col_name(curve): cvx}))
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        _note_failure(label, dts, f"{type(exc).__name__}: {exc}")
 
             else:
                 # CM / PACKS / BUNDLES
@@ -1579,7 +1643,10 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         d = pd.Timestamp(dts).date()
                         codes = [_imm_code_from_date_rank(d, r) for r in ranks]
                         legs_here = [f"{leg_prefix}{c}" for c in codes]
-                        if not all((leg in px_df.columns) and pd.notna(px_df.at[dts, leg]) for leg in legs_here):
+                        absent = [leg for leg in legs_here
+                                  if (leg not in px_df.columns) or pd.isna(px_df.at[dts, leg])]
+                        if absent:
+                            _note_failure(label, dts, f"no price for {','.join(absent)}")
                             continue
 
                         anchor_code = codes[0]
@@ -1597,6 +1664,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                                 structure=IRSwapStructure.OUTRIGHT,
                                 structure_kwargs={"bpv": 1},
                                 value=IRSwapValue.CVX_ADJ,
+                                value_kwargs=dict(cvx_value_kwargs),
                             )
                             q_cache[q_key] = q
 
@@ -1610,14 +1678,14 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             _, rl_sfr = build_rl_stirf(ticker=leg, curve_id=ch.id(), price=price, use_globex=use_globex)
                             rl_sfrs.append(rl_sfr)
 
-                        cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, **{"sfr": rl_sfrs}))
+                        cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, sfr=rl_sfrs, **cvx_value_kwargs))
                         rows.append({_date_col: pd.Timestamp(dts).to_pydatetime(), colname: cvx})
 
                         ts = pd.Timestamp(dts).to_pydatetime()
                         if not _is_today(ts):
                             pending_writes.append((self._cache_key(ts, curve, q), {_date_col: ts, q.col_name(curve): cvx}))
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        _note_failure(label, dts, f"{type(exc).__name__}: {exc}")
 
             if rows:
                 df_i = pd.DataFrame(rows).sort_values(_date_col, kind="mergesort").drop_duplicates(subset=[_date_col], keep="last").set_index(_date_col)[[colname]]

@@ -125,3 +125,106 @@ def test_registered_in_the_daily_warmer_and_ordering_still_holds():
     assert "SR3 EOD settles (depth 20)" in names
     assert_ordered(WARM_JOBS)
     assert_unique_providers(WARM_JOBS)
+
+
+# ---------------------------------------------------------------------------
+# The helper the test above is NAMED for, but never called
+# ---------------------------------------------------------------------------
+def test_depth_by_date_forces_its_own_floor_through_to_the_scan(monkeypatch):
+    """``W._depth_by_date`` must pass ``min_depth=1``, not merely set min_instruments.
+
+    ``test_depth_by_date_sees_dates_a_floored_config_hides`` asserts on
+    ``strip_depth_by_date`` directly and never touches ``W._depth_by_date``, so
+    it passed for as long as the helper it is named for was blind. ``9df2875a``
+    moved universe admission from ``min_instruments`` to ``min_strip_depth``
+    (default 4) and the helper was not updated, so it stopped seeing every date
+    below depth 4 -- the common case for a cold date, and exactly what a warm
+    exists to find.
+    """
+    import RVUtils.ConvexityRV.strat2_q20 as Q
+
+    seen = {}
+
+    def _spy(cfg, **kwargs):
+        seen.update(kwargs)
+        seen["min_strip_depth"] = cfg.min_strip_depth
+        return {}
+
+    monkeypatch.setattr(Q, "strip_depth_by_date", _spy)
+    W._depth_by_date(20, dt.date(2026, 7, 1), dt.date(2026, 7, 31))
+
+    assert seen.get("min_depth") == 1, (
+        "the warm's depth scan does not override the universe floor, so every "
+        f"date below min_strip_depth={seen.get('min_strip_depth')} is invisible "
+        "to it"
+    )
+
+
+def test_depth_by_date_reports_a_shallow_date(monkeypatch):
+    """Behavioural version: a depth-2 date must survive the helper.
+
+    The stub reproduces the real admission rule -- a date is dropped when its
+    depth is below ``min_depth`` if given, else below ``cfg.min_strip_depth`` --
+    so this fails whenever the helper stops overriding the floor.
+    """
+    import RVUtils.ConvexityRV.strat2_q20 as Q
+
+    shallow, deep = dt.date(2026, 7, 8), dt.date(2026, 7, 9)
+    truth = {shallow: 2, deep: 6}
+
+    def _stub(cfg, **kwargs):
+        floor = kwargs.get("min_depth")
+        if floor is None:
+            floor = cfg.min_strip_depth
+        return {d: n for d, n in truth.items() if n >= floor}
+
+    monkeypatch.setattr(Q, "strip_depth_by_date", _stub)
+    got = W._depth_by_date(20, shallow, deep)
+
+    assert shallow in got and got[shallow] == 2, (
+        f"the depth-2 date is invisible to the warm: {got}. Its acceptance test "
+        "would then read before[d]=0 and score a genuine 2->3 gain as no gain."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Never warm a session that has not settled
+# ---------------------------------------------------------------------------
+def test_session_has_settled_is_a_clock_test_not_a_calendar_test():
+    """Yesterday always; today only after the settle; tomorrow never.
+
+    A flat ``d >= today`` refusal -- which is what ``warm_sr3_deferred`` does --
+    would make this nightly a no-op every night, since its whole job is the
+    session that just closed. The hazard is fetching before the settle exists,
+    so the test is on the clock.
+    """
+    noon = dt.datetime(2026, 7, 9, 12, 0)
+    evening = dt.datetime(2026, 7, 9, 18, 15)
+    today, yesterday = dt.date(2026, 7, 9), dt.date(2026, 7, 8)
+    tomorrow = dt.date(2026, 7, 10)
+
+    assert W._session_has_settled(yesterday, now_et=noon)
+    assert not W._session_has_settled(today, now_et=noon), (
+        "warming the live session files an intraday print under a 17:00 "
+        "settlement alias")
+    assert W._session_has_settled(today, now_et=evening), (
+        "the 18:15 ET slot is after the ~15:00 ET SR3 settle; refusing here "
+        "would make the nightly do nothing at all")
+    assert not W._session_has_settled(tomorrow, now_et=evening)
+
+
+def test_run_warm_refuses_an_unsettled_session(monkeypatch):
+    """`run_warm` must not fetch a date whose session is still open."""
+    today = dt.date.today()
+
+    def _boom(*a, **k):
+        raise AssertionError("run_warm fetched an unsettled session")
+
+    monkeypatch.setattr(W, "warm_one_date", _boom)
+    monkeypatch.setattr(W, "_business_days", lambda s, e: [today])
+    monkeypatch.setattr(W, "_session_has_settled", lambda d, **k: False)
+    monkeypatch.setattr(W, "_depth_by_date", lambda *a, **k: {})
+
+    out = W.run_warm(today, today, depth=20)
+    assert out["warmed"] == 0
+    assert out.get("skipped_unsettled") == 1, out

@@ -1063,7 +1063,15 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     "SFRCM13",
                 ],
                 "reference_key": "USD-SOFR-1D",
-                "max_tenor_from_timestamp_months": 39,
+                # 45 = 3*13 + 6. SFRCM13 references [IMM_13, IMM_14] and so
+                # matures at IMM_1 + 39m, which is strictly later than
+                # as_of + 39m because IMM_1 > as_of always. Under 39 the
+                # terminal instrument was a solver target with no node of its
+                # own on every date, and was priced by extrapolation off the
+                # last segment -- the defect db95871d fixed for Q20 and
+                # explicitly flagged, unfixed, here. The extra quarter is what
+                # IMM_1 - as_of can reach. See tests/test_stirf_curve_horizons.py.
+                "max_tenor_from_timestamp_months": 45,
                 "rl_irs_spec": "usd_irs_lt_2y",
                 "stirf_target_weight": 1e6,
             },
@@ -1090,7 +1098,8 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     "SFRCM17",
                 ],
                 "reference_key": "USD-SOFR-1D",
-                "max_tenor_from_timestamp_months": 51,
+                # 57 = 3*17 + 6; same defect as Q12STIRT above, same cure.
+                "max_tenor_from_timestamp_months": 57,
                 "rl_irs_spec": "usd_irs",
             },
             "USD-SOFR-1D-Q20STIRT": {

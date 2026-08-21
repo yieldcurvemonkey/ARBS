@@ -60,6 +60,10 @@ import os
 import sys
 import time
 from typing import Dict, List, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
+
+#: SR3 settles on a New York clock; the scheduler's local time is not it.
+_NY_TZ = ZoneInfo("America/New_York")
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
@@ -100,16 +104,59 @@ def _strip_symbols(as_of: dt.date, depth: int) -> List[str]:
 def _depth_by_date(depth: int, start: dt.date, end: dt.date) -> Dict[dt.date, int]:
     """Contiguous front-strip depth per date, straight off the local shards.
 
-    ``min_instruments`` is forced to 1. Its default is 12 and
-    ``strip_depth_by_date`` *omits* any date below it -- a sane rule for the Q20
-    curve solve (a 20-node curve fitted to six contracts is not a curve) but the
-    wrong lens for a warm, whose whole job is to find the shallow dates. Left at
-    the default, this function cannot see the very dates it needs to report.
+    Both floors have to be lowered, and for a while only one of them was.
+
+    ``min_instruments`` is the **curve-solve** floor. Forcing it to 1 was correct
+    when it was also the universe floor: a 20-node curve fitted to six contracts
+    is not a curve, but that is the wrong lens for a warm, whose whole job is to
+    find the shallow dates.
+
+    ``9df2875a`` then split the two, moving universe admission to
+    ``min_strip_depth`` (default 4) and leaving ``min_instruments`` to the solve.
+    This function was not updated, so from that commit it silently stopped seeing
+    every date below depth 4 -- measured on a synthetic shard, a date at depth 2
+    was omitted entirely while depth 6 came through. The acceptance test then
+    reads ``before[d] = 0`` for such a date, so a genuine 2 -> 3 gain scores as no
+    gain. The manual deferred warm's ledger recorded **213 dates at depth 0-3**
+    before it ran, so this is the common case for a cold date, not an edge case.
+
+    ``strip_depth_by_date``'s own ``min_depth`` overrides the universe floor,
+    which is what ``warm_sr3_deferred.plan`` passes and what this needs.
     """
     from RVUtils.ConvexityRV.strat2_q20 import Q20Config, strip_depth_by_date
 
-    return strip_depth_by_date(Q20Config(
-        max_instruments=depth, min_instruments=1, start=start, end=end))
+    return strip_depth_by_date(
+        Q20Config(max_instruments=depth, min_instruments=1, start=start, end=end),
+        min_depth=1,
+    )
+
+
+#: Hour (America/New_York) after which the current session's SR3 settle is
+#: assumed published. SR3 settles at ~15:00 ET; the scheduled slot is 18:15 ET.
+SETTLE_HOUR_ET = 16
+
+
+def _session_has_settled(d: dt.date, *, now_et: Optional[dt.datetime] = None) -> bool:
+    """Is *d*'s SR3 settlement published yet?
+
+    ``warm_sr3_deferred`` refuses any date ``>= today`` outright, because
+    ``get_data`` stamps a 17:00 settlement alias from whatever the vendor serves
+    at request time -- so warming a live session files an intraday print under a
+    settlement key, the exact confusion ``assert_settle_source`` exists to catch,
+    arriving through the back door. This job had no such guard and its default is
+    ``start = end = today``, so the two disagreed.
+
+    A flat ``d >= today`` refusal is the wrong reconciliation: it would make the
+    nightly, whose entire purpose is the session that just closed, a no-op every
+    night. The hazard is not the calendar date, it is fetching **before the settle
+    exists**. So the test is on the clock.
+    """
+    now = now_et or dt.datetime.now(_NY_TZ).replace(tzinfo=None)
+    if d < now.date():
+        return True
+    if d > now.date():
+        return False
+    return now.hour >= SETTLE_HOUR_ET
 
 
 def warm_one_date(mdp, as_of: dt.date, depth: int) -> Tuple[int, Optional[str]]:
@@ -142,6 +189,19 @@ def run_warm(
     if not dates:
         log.info("No business days in %s..%s", start, end)
         return {"dates_considered": 0, "warmed": 0, "skipped": 0, "failed": 0}
+
+    # Never reach for a session whose settle does not exist yet: `get_data`
+    # stamps a 17:00 settlement alias from whatever the vendor serves at request
+    # time, so an unsettled date files an intraday print under a settlement key.
+    unsettled = [d for d in dates if not _session_has_settled(d)]
+    if unsettled:
+        log.info("skipping %d date(s) whose session has not settled: %s",
+                 len(unsettled), ", ".join(str(d) for d in unsettled[:5]))
+        dates = [d for d in dates if _session_has_settled(d)]
+        if not dates:
+            log.info("nothing settled in %s..%s yet", start, end)
+            return {"dates_considered": 0, "warmed": 0, "skipped": 0,
+                    "failed": 0, "skipped_unsettled": len(unsettled)}
 
     before = _depth_by_date(depth, start, end)
     todo = dates if force else [d for d in dates if before.get(d, 0) < depth]
