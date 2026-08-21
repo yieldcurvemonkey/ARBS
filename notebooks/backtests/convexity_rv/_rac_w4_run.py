@@ -31,6 +31,7 @@ EXIT_PCT = 0.35
 MIN_HOLD = 21
 MAX_HOLD = 252
 
+sys.stdout.reconfigure(line_buffering=True)
 t0 = time.time()
 cfg = R.RacConfig()
 panel = pd.read_parquet(DATA / "rac_screen_panel.parquet")
@@ -67,8 +68,27 @@ for half_spread, tag in ((0.25, "base"), (0.0, "zero_cost")):
 
     closed = getattr(getattr(bt, "portfolio", bt), "closed_positions_log", None)
     if closed is not None and len(closed):
-        cl = pd.DataFrame(closed)
-        print(f"  closed legs {len(cl):,}")
+        # The log carries live ResolvedQueryPosition objects (rl.IRS handles and
+        # the source query), which pyarrow cannot infer a type for. Project to
+        # the scalar columns rather than dropping the log.
+        rows = []
+        for c in closed:
+            d = dict(c) if isinstance(c, dict) else dict(getattr(c, "__dict__", {}))
+            pos = d.get("position")
+            meta = getattr(pos, "meta", {}) or {}
+            rows.append({
+                "opened": getattr(pos, "opened", None),
+                "closed": d.get("closed") or d.get("date"),
+                "pnl": d.get("pnl") or d.get("realized_pnl"),
+                "fee": d.get("fee"),
+                "tags": ",".join(meta.get("tags", []) or []),
+                "entry_npv": meta.get("entry_npv"),
+            })
+        cl = pd.DataFrame(rows)
+        for col in ("opened", "closed"):
+            cl[col] = pd.to_datetime(cl[col], errors="coerce")
+        print(f"  closed legs {len(cl):,}   realised "
+              f"{pd.to_numeric(cl['pnl'], errors='coerce').sum():,.0f}")
         cl.to_parquet(DATA / f"rac_w4_closed_{tag}.parquet")
 
 meta = {"episodes": len(eps), "dates": len(dates),
