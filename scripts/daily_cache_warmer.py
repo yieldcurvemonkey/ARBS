@@ -1114,7 +1114,7 @@ def _warn_unguarded_fallthrough(what):
         )
 
 
-def _repair_excel(reason: str, *, over_ceiling: bool):
+def _repair_excel(reason: str, *, over_ceiling: bool, signed_out: bool = False):
     """Try ONCE to give this run a signed-in Excel. ``None`` on success, else why not.
 
     Two situations, two different repairs, and the difference matters because one of
@@ -1148,7 +1148,30 @@ def _repair_excel(reason: str, *, over_ceiling: bool):
 
     t0 = time.perf_counter()
     try:
-        if over_ceiling:
+        if signed_out:
+            # ESCALATING, cheap remedy first. A signed-out add-in usually just needs the
+            # Login pane pressed, which keeps the session and its warm series cache and
+            # costs seconds. But "pressed Login and it did not take" is a real outcome --
+            # the pane's handler is inert for minutes after a launch, and an Excel can be
+            # signed out AND wedged at the same time -- so when the cheap remedy fails
+            # the run is not out of options: kill it and do the full auth path.
+            #
+            # Bounded by construction: two remedies inside ONE latched repair, never a
+            # loop. If the restart does not produce a usable session either, the
+            # Velocity block is SKIPPED exactly as before.
+            log.warning("Excel pre-flight: %s -- pressing Login and waiting", reason)
+            try:
+                client = supervisor.wait_for_addin(
+                    timeout=_CV_SIGNIN_TIMEOUT_S, press_login=True, logger=log
+                )
+            except Exception as exc:  # noqa: BLE001 - escalate rather than give up
+                log.warning("Excel pre-flight: the Login press did not take (%s: %s) -- "
+                            "escalating to a full restart and re-auth",
+                            type(exc).__name__, exc)
+                client = supervisor.restart_excel(
+                    ready_timeout=_CV_SIGNIN_TIMEOUT_S, logger=log
+                )
+        elif over_ceiling:
             log.warning("Excel pre-flight: %s -- restarting it (rescuing first, force=False)",
                         reason)
             client = supervisor.restart_excel(ready_timeout=_CV_SIGNIN_TIMEOUT_S, logger=log)
@@ -1267,9 +1290,60 @@ def _excel_preflight():
             "on 2026-08-07)",
             over_ceiling=True,
         )
-    log.info("Excel pre-flight: %.0f MB, under the %.0f MB ceiling - Velocity jobs may run",
-             mb, _CV_MEMORY_CEILING_MB)
-    return None
+    log.info("Excel pre-flight: %.0f MB, under the %.0f MB ceiling", mb, _CV_MEMORY_CEILING_MB)
+
+    # MEMORY IS NOT LIVENESS, and the gap between them cost three nights of cubes.
+    #
+    # Every branch above reads a number from Get-Process. None of them asks the only
+    # question that matters: does the add-in ANSWER? An Excel sitting at 500 MB with the
+    # Velocity add-in signed out passes all three and then fails every Velocity job with
+    # AddInNotSignedInError, one job at a time, for the whole run.
+    #
+    # Measured on the swaption cube (job 8), which stopped writing after 2026-08-17:
+    #   2026-08-19  vol fetch exited 1 after 2 s     -> Excel at 12,501 MB, guard refused
+    #   2026-08-20  vol fetch exited 1 after 164 s   -> ExcelNotRunningError, no Excel
+    # Both of those the memory branches now repair. A signed-out session is the third
+    # way in and was still unhandled, so this asks directly.
+    #
+    # One attach, bounded. It is the same call every Velocity job is about to make, so
+    # it adds no new hazard -- it moves the failure thirty seconds earlier, to the one
+    # place in the run that can still do something about it.
+    return _repair_addin_if_silent()
+
+
+def _repair_addin_if_silent():
+    """``None`` when the add-in answers. Otherwise repair once, or say why not.
+
+    Kept separate from the memory branches because the remedy differs: a signed-out
+    add-in does not need Excel restarted, it needs the Login pane pressed, and
+    ``wait_for_addin`` does exactly that. Restarting instead would throw away a healthy
+    session and cost ~2.8 min of sign-in to reach the same place.
+    """
+    try:
+        from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
+        from MDP.CitiVelocityExcel.errors import AddInNotSignedInError, ExcelNotRunningError
+    except Exception as exc:  # noqa: BLE001 - the offline jobs must still run
+        log.warning("could not import the Velocity bridge for the liveness probe (%s); "
+                    "proceeding on the memory reading alone", exc)
+        return None
+
+    try:
+        CitiVelocityExcelClient.connect(attempts=1, readiness_timeout=60.0)
+        log.info("Excel pre-flight: the add-in answers - Velocity jobs may run")
+        return None
+    except AddInNotSignedInError:
+        return _repair_excel("Excel is running and under the ceiling but the Velocity "
+                             "add-in is SIGNED OUT", over_ceiling=False, signed_out=True)
+    except ExcelNotRunningError:
+        # The memory probe saw a process and the bridge cannot bind to it -- an Excel
+        # outside the Running Object Table, which a restart fixes and a Login press
+        # does not.
+        return _repair_excel("Excel is running but the bridge cannot bind to it (not in "
+                             "the Running Object Table)", over_ceiling=True)
+    except Exception as exc:  # noqa: BLE001 - an unreadable probe must not end the run
+        log.warning("Excel pre-flight: the liveness probe failed (%s: %s); proceeding on "
+                    "the memory reading alone", type(exc).__name__, exc)
+        return None
 
 
 def _citivelo_bond_resolutions(as_of):

@@ -206,8 +206,23 @@ def test_not_signed_in_means_keep_waiting(monkeypatch):
 
     monkeypatch.setattr(com_client.CitiVelocityExcelClient, "connect", staticmethod(fake_connect))
     monkeypatch.setattr(supervisor.time, "sleep", lambda _s: None)
+    # THE ONE LINE THAT KEPT HANGING THE GATE. wait_for_addin presses the add-in's
+    # Login button the first time it sees AddInNotSignedInError, and the mock above
+    # raises it three times on purpose. Unstubbed, press_addin_login reaches pywinauto's
+    # UIA element walk against whatever Excel the machine has -- or against none, where
+    # it takes an access violation and STALLS rather than failing. Two whole-suite runs
+    # were abandoned to this. conftest now rails it as well; this keeps the test honest
+    # about what it is exercising, which is the WAITING, not the clicking.
+    presses = []
+    monkeypatch.setattr(supervisor, "press_addin_login", lambda **kw: presses.append(kw) or True)
     assert supervisor.wait_for_addin(timeout=300, poll=0.0) is sentinel
     assert calls["n"] == 4
+    # Once per not-signed-in poll, which is three here, and that is CORRECT rather
+    # than tolerated: the add-in's Login handler is inert for the first minutes after
+    # launch, so a single early press is a silent no-op. The source says as much --
+    # "a press that arrives too early is a silent no-op, and that is the failure worth
+    # designing against". I asserted 1 first and the code was right, not the test.
+    assert len(presses) == 3, "the pane is pressed on every not-signed-in poll"
 
 
 def test_excel_not_running_also_means_keep_waiting(monkeypatch):

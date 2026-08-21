@@ -127,6 +127,88 @@ os.environ.setdefault("ARBS_WARM_EXCEL_AUTOSTART", "0")
 
 
 @pytest.fixture(autouse=True)
+def _no_live_excel(request, monkeypatch):
+    """No test attaches to the user's Excel unless it says so out loud.
+
+    This is a RAIL, not a stub: it does not make Excel work, it makes reaching for it
+    fail loudly and instantly instead of blocking forever.
+
+    The failure it prevents has cost real time twice. ``CitiVelocityExcelClient.connect``
+    goes through ``com_retry``, which has no deadline, so a test that reaches a live-but-
+    busy Excel does not fail -- it stalls at ~0% CPU indefinitely. Two whole-suite runs
+    were abandoned that way on 2026-08-20 (25+ minutes each, killed by hand), and the
+    signature is brutal for the reader: a hard hang never reaches a summary line, so
+    pytest never says which test stopped it. Worse, the same test PASSES when Excel is
+    shut, so it is green on CI and lethal on the developer's machine.
+
+    Individual fixtures already stub ``connect`` in a dozen files, and one of those stubs
+    was added only after a py-spy trace identified the culprit. That approach is
+    whack-a-mole: it fixes the tests that exist and cannot fix the one written next week.
+    A rail cannot be forgotten.
+
+    Tests that WANT a real session mark themselves ``@pytest.mark.live_excel`` and are
+    deselected by default in the fast gate. Tests that stub ``connect`` themselves are
+    unaffected -- their patch is applied after this one and wins.
+    """
+    if request.node.get_closest_marker("live_excel"):
+        return
+    try:
+        from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
+    except Exception:  # noqa: BLE001 - no bridge, nothing to fence
+        return
+
+    def _refuse(*_a, **_k):
+        raise RuntimeError(
+            "This test tried to attach to a live Excel via "
+            "CitiVelocityExcelClient.connect(). Tests must stub the transport: an "
+            "attach against a busy Excel blocks forever inside com_retry, which has no "
+            "deadline, and the same call silently passes when Excel is shut. If this "
+            "test genuinely needs a real session, mark it @pytest.mark.live_excel."
+        )
+
+    monkeypatch.setattr(CitiVelocityExcelClient, "connect", _refuse)
+
+    # ``connect`` is not the only way in, and the other one is worse.
+    #
+    # ``wait_for_addin`` presses the add-in's Login button on the first
+    # AddInNotSignedInError, and ``press_addin_login`` drives pywinauto's UIA element
+    # walk. With no Excel to walk, that takes a Windows FATAL EXCEPTION: ACCESS
+    # VIOLATION -- the process does not die, it STALLS. Measured again on 2026-08-21
+    # while adding this rail: the citivelo block sat at 0.00 s of CPU over a 25 s
+    # window having already burned 15 minutes of wall clock, and produced no output at
+    # all, because a hard hang never reaches a pytest summary line.
+    #
+    # ``test_not_signed_in_means_keep_waiting`` stubs connect and time.sleep but not
+    # this, which is precisely how it hung the gate. That test is fixed directly too;
+    # the rail is here so the next one cannot be written the same way.
+    # These two are fenced as NO-OPS, not as raises, and the difference is deliberate.
+    #
+    # ``connect`` must raise: a stub that silently hands back a fake client would let a
+    # test fabricate market data and pass, which is worse than any hang. But
+    # ``press_addin_login`` and ``dismiss_excel_dialogs`` are side EFFECTS on a window.
+    # "Nothing was pressed" is a truthful answer that keeps the surrounding retry logic
+    # testable -- ``test_the_wait_gives_up_on_the_wall_clock`` exercises exactly that
+    # loop and would fail on a raise for the wrong reason.
+    #
+    # ``launch_excel`` and ``quit_excel`` are deliberately NOT fenced. They are
+    # destructive, but they are also directly under test with ``excel_pids`` stubbed,
+    # and a no-op would make ``assert quit_excel() == []`` pass trivially and hide a
+    # real regression. The path that actually restarted the developer's Excel was the
+    # nightly's autostart, and that is railed by ARBS_WARM_EXCEL_AUTOSTART above.
+    try:
+        from MDP.CitiVelocityExcel import supervisor as _sup
+    except Exception:  # noqa: BLE001
+        return
+
+    def _no_ui(*_a, **_k):
+        return False
+
+    for _name in ("press_addin_login", "dismiss_excel_dialogs"):
+        if hasattr(_sup, _name):
+            monkeypatch.setattr(_sup, _name, _no_ui)
+
+
+@pytest.fixture(autouse=True)
 def _reset_pandas_copy_on_write():
     """Force pd.options.mode.copy_on_write = False before every test.
 
