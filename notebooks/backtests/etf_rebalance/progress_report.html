@@ -1,0 +1,402 @@
+<title>ETF Rebalance RV Progress</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Public+Sans:wght@400;500;600;700&display=swap">
+
+<style>
+/* Light is complete on bare :root. Dark redefines ONLY tokens, twice, so the
+   un-stamped (system) state and the explicit stamp both resolve. */
+:root {
+  --paper:      #F2F4F6;
+  --surface:    #FFFFFF;
+  --sunk:       #E7EBEF;
+  --ink:        #12171C;
+  --ink-2:      #4E5A66;
+  --ink-3:      #808E9B;
+  --rule:       #D2D9E0;
+  --rule-soft:  #E4E9ED;
+
+  --accent:     #23486B;
+
+  /* Status is the page's primary signal, so it is a reserved scale, separate
+     from the accent and never reused as decoration. */
+  --dead:       #9E3B2E;
+  --dead-bg:    #F6E7E4;
+  --shipped:    #1F6F43;
+  --shipped-bg: #E2F0E8;
+  --blocked:    #9A6B12;
+  --blocked-bg: #F7EEDA;
+  --idle:       #6B7885;
+  --idle-bg:    #E7EBEF;
+
+  --serif: "Newsreader", ui-serif, Georgia, serif;
+  --sans:  "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono:  "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:      #14181C;
+    --surface:    #1A2026;
+    --sunk:       #0F1317;
+    --ink:        #E6EBF0;
+    --ink-2:      #A3AFBA;
+    --ink-3:      #71808D;
+    --rule:       #2C363F;
+    --rule-soft:  #232C34;
+    --accent:     #7FA8D4;
+    --dead:       #E08573;
+    --dead-bg:    #3A211C;
+    --shipped:    #6BBF8F;
+    --shipped-bg: #17301F;
+    --blocked:    #D9AC5A;
+    --blocked-bg: #33270F;
+    --idle:       #8B98A5;
+    --idle-bg:    #232C34;
+  }
+}
+:root[data-theme="dark"] {
+  --paper:      #14181C;
+  --surface:    #1A2026;
+  --sunk:       #0F1317;
+  --ink:        #E6EBF0;
+  --ink-2:      #A3AFBA;
+  --ink-3:      #71808D;
+  --rule:       #2C363F;
+  --rule-soft:  #232C34;
+  --accent:     #7FA8D4;
+  --dead:       #E08573;
+  --dead-bg:    #3A211C;
+  --shipped:    #6BBF8F;
+  --shipped-bg: #17301F;
+  --blocked:    #D9AC5A;
+  --blocked-bg: #33270F;
+  --idle:       #8B98A5;
+  --idle-bg:    #232C34;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--sans); font-size: 15px; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap {
+  max-width: 1080px; margin: 0 auto;
+  padding: clamp(24px,4vw,52px) clamp(16px,3vw,32px) 72px;
+  display: flex; flex-direction: column; gap: 34px;
+}
+
+.eyebrow {
+  font-family: var(--mono); font-size: 11.5px; font-weight: 500;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); margin: 0;
+}
+h1 {
+  font-family: var(--serif); font-weight: 600; font-size: clamp(30px,4.6vw,44px);
+  line-height: 1.08; margin: 6px 0 0; letter-spacing: -.018em; text-wrap: balance;
+}
+.standfirst {
+  margin: 12px 0 0; max-width: 64ch; font-size: 17px; color: var(--ink-2);
+  line-height: 1.5; text-wrap: pretty;
+}
+
+h2 {
+  font-family: var(--serif); font-weight: 600; font-size: 23px; letter-spacing: -.012em;
+  margin: 0 0 3px; text-wrap: balance;
+}
+.sub { margin: 0 0 16px; color: var(--ink-3); font-size: 13.5px; }
+
+section { display: flex; flex-direction: column; }
+
+/* ---- the ledger: ruled register, not boxy cards ---- */
+.ledger { border-top: 2px solid var(--ink); }
+.row {
+  display: grid;
+  grid-template-columns: 96px minmax(0,1fr) auto;
+  gap: 10px 18px; align-items: baseline;
+  padding: 14px 2px; border-bottom: 1px solid var(--rule-soft);
+}
+@media (max-width: 660px) { .row { grid-template-columns: 84px minmax(0,1fr); } .row .meta { grid-column: 1 / -1; } }
+.tag {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; padding: 3px 7px; border-radius: 2px; text-align: center;
+  white-space: nowrap;
+}
+.t-dead    { color: var(--dead);    background: var(--dead-bg); }
+.t-shipped { color: var(--shipped); background: var(--shipped-bg); }
+.t-blocked { color: var(--blocked); background: var(--blocked-bg); }
+.t-idle    { color: var(--idle);    background: var(--idle-bg); }
+.row b { font-weight: 600; font-size: 15.5px; display: block; }
+.row p { margin: 3px 0 0; color: var(--ink-2); font-size: 13.5px; }
+.meta { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); text-align: right; white-space: nowrap; }
+
+/* ---- figure callouts ---- */
+/* Four figures, so the track count is 2 or 4 -- never auto-fit, which packed three
+   into the first row and left the fourth beside a run of empty grid that reads as a
+   missing panel rather than a tidy row. */
+.figs { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1px; background: var(--rule-soft); border: 1px solid var(--rule-soft); margin-top: 4px; }
+@media (min-width: 760px) { .figs { grid-template-columns: repeat(4, minmax(0,1fr)); } }
+.fig { background: var(--surface); padding: 13px 14px 15px; }
+.fig b { font-family: var(--mono); font-size: 21px; font-weight: 700; letter-spacing: -.02em; display: block; }
+.fig span { display: block; margin-top: 3px; font-size: 12px; color: var(--ink-3); line-height: 1.4; }
+
+/* ---- detail blocks ---- */
+.block { border-left: 2px solid var(--rule); padding: 2px 0 2px 18px; margin-top: 18px; }
+.block h3 { font-family: var(--sans); font-weight: 700; font-size: 14px; margin: 0 0 5px; letter-spacing: -.005em; }
+.block p { margin: 0 0 8px; color: var(--ink-2); font-size: 14px; }
+.block p:last-child { margin-bottom: 0; }
+.block.dead { border-left-color: var(--dead); }
+.block.ship { border-left-color: var(--shipped); }
+.block.warn { border-left-color: var(--blocked); }
+
+code {
+  font-family: var(--mono); font-size: .875em; background: var(--sunk);
+  padding: .1em .36em; border-radius: 2px; color: var(--ink);
+}
+strong { font-weight: 700; color: var(--ink); }
+
+.scroller { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.foot { border-top: 1px solid var(--rule); padding-top: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Progress report &middot; 20 August 2026 &middot; 23:20 ET</p>
+    <h1>ETF Rebalance RV, and four things it turned up on the way</h1>
+    <p class="standfirst">
+      Five workstreams, four multi-agent workflows, 32 commits across four branches. The
+      trade is dead three independent ways. Most of the durable value is in the defects
+      found while killing it.
+    </p>
+  </header>
+
+  <section>
+    <h2>Where everything stands</h2>
+    <p class="sub">Branch state as of 23:17 ET. Nothing pushed; <code>main</code> is at <code>61fa6d1a</code>.</p>
+    <div class="ledger">
+
+      <div class="row">
+        <span class="tag t-dead">Dead</span>
+        <div><b>ETF rebalance micro-fly &mdash; the original thesis</b>
+          <p>Holdings scraped, panel built, 5,192 configurations across four grids. Nothing alive. Figure pack and interactive ladder explorer delivered.</p></div>
+        <span class="meta">feat/etf-rebalance-rv<br>12 commits</span>
+      </div>
+
+      <div class="row">
+        <span class="tag t-dead">Dead</span>
+        <div><b>Citi Velocity intraday &mdash; execution-timestamp grid</b>
+          <p>79.2M cells backfilled. 23,040 cells / 483,840 configurations searched. Best break-even 0.065&times; of one round trip.</p></div>
+        <span class="meta">feat/etf-rebalance-rv<br>eecb32e5</span>
+      </div>
+
+      <div class="row">
+        <span class="tag t-dead">Dead</span>
+        <div><b>Multi-issuer aggregate &mdash; State Street + Vanguard</b>
+          <p>Providers built, N-PORT history wired. Aggregate correlates 0.994 with TLT-only and scores marginally <em>worse</em>.</p></div>
+        <span class="meta">feat/etf-multi-issuer<br>17 commits</span>
+      </div>
+
+      <div class="row">
+        <span class="tag t-shipped">Shipped</span>
+        <div><b>TimeseriesBuilder <code>direct=</code> &mdash; read Citi straight from the add-in</b>
+          <p>Works, tested, mutation-verified. Found three pre-existing production defects on the way in.</p></div>
+        <span class="meta">feat/tb-direct-citivelo<br>2 commits</span>
+      </div>
+
+      <div class="row">
+        <span class="tag t-blocked">Blocked</span>
+        <div><b>MI01 whole-universe warm in the nightly cron</b>
+          <p>Do not merge yet. One live check settles it, and tonight revealed the root cause is not what the branch fixes.</p></div>
+        <span class="meta">fix/cache-warmer-reliability<br>14890c16</span>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>The three verdicts</h2>
+    <p class="sub">Each killed by a different mechanism, measured rather than asserted.</p>
+
+    <div class="figs">
+      <div class="fig"><b>0 / 5,192</b><span>daily configurations covering their own round trip</span></div>
+      <div class="fig"><b>0.065&times;</b><span>best intraday break-even, of one measured spread</span></div>
+      <div class="fig"><b>0.994</b><span>aggregate ladder vs TLT-only &mdash; the same signal</span></div>
+      <div class="fig"><b>5.32</b><span>IC needed to break even on the 15:00&ndash;16:00 seam</span></div>
+    </div>
+
+    <div class="block dead">
+      <h3>The original thesis: the fund has nothing left to buy</h3>
+      <p>
+        The eligible 20y+ board is <strong>40 bonds</strong>, and TLT holds 68&ndash;95% of it
+        (median 83%, rising to 95% by 2026). A manager already holding most of a 40-bond board
+        is not choosing which bonds to buy. Raw active-weight IC is strong and <em>backwards</em>;
+        controlling for the bond&rsquo;s own richness flips every sign and collapses the edge to
+        0.003&ndash;0.005 bp/z.
+      </p>
+      <p>
+        A structural point that reframes the premise: at 20y+, a 0.25y bucket holds a
+        <strong>median of one bond</strong>. At this end of the curve the &ldquo;3-month risk
+        bucket&rdquo; is a per-CUSIP signal, not a bucket.
+      </p>
+    </div>
+
+    <div class="block dead">
+      <h3>Intraday: the structure is real and an order of magnitude too small</h3>
+      <p>
+        Your intuition about the seam was <strong>right in direction</strong>. Opportunity does
+        vary by hour and peaks where structure says it should &mdash; 09&rarr;10 at 0.1499 bp and
+        the 15&rarr;16 seam at 0.1484 bp against a 13&rarr;14 trough of 0.1184 bp, a 1.27&times;
+        peak-to-trough. It is simply too small: the seam is 0.188&times; of one round trip.
+      </p>
+      <p>
+        Real and worth keeping: a Treasury fly moves <strong>~1.75&times; more per minute</strong>
+        between 15:00 and 17:00 on the last business day of the month (permutation p = 0.0004),
+        ramping to 2.30&times; in the quarter-hour before the NAV strike. It is a price effect,
+        not activity &mdash; print counts are flat and the amplification grows on well-printed bonds.
+      </p>
+    </div>
+
+    <div class="block dead">
+      <h3>Aggregation: it is TLT wearing a larger coat</h3>
+      <p>
+        On a paired test where <strong>only the fund set changed</strong> across 288 matched cells,
+        aggregating cost &minus;0.00072 bp/trade. Best partial-IC |t| was 2.48 for the aggregate
+        against <strong>2.52 for TLT alone</strong>. Every long-end fund holds 97&ndash;100% of the
+        same small board and they choose nearly identically.
+      </p>
+      <p>
+        What would change the answer is not more funds &mdash; it is demand that is not an index
+        tracker&rsquo;s book: dealer inventory, primary-dealer positioning, or the STRIPS complex
+        (EDV/ZROZ, 27 quarters already backfilled).
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Defects found</h2>
+    <p class="sub">These outlast the strategy. All measured, all in production code.</p>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Where</th><th>What</th><th>Consequence</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>cache.py</code></td>
+            <td><code>ignore_cache=True</code> is not a bypass &mdash; it is refetch-and-persist</td>
+            <td>With Excel down it <strong>silently serves stale rows</strong>, DEBUG log only</td>
+          </tr>
+          <tr>
+            <td><code>cache.py:439</code></td>
+            <td>Same flag <strong>writes</strong> into the shared parquet, &ldquo;incoming wins&rdquo;</td>
+            <td>A live intraday pull overwrites settled EOD values for every consumer</td>
+          </tr>
+          <tr>
+            <td><code>TimeseriesBuilder</code></td>
+            <td>CITIVELO never reaches its own fast path</td>
+            <td><strong>8 CVTSHIST calls</strong> for a 7-timestep request instead of 1</td>
+          </tr>
+          <tr>
+            <td>FedInvest panel</td>
+            <td>&ldquo;EOD&rdquo; is struck at <strong>~11:30 New York</strong>, not the 15:00 cash close</td>
+            <td>Every EOD number in the study is a late-morning mark (p &asymp; 3e-6)</td>
+          </tr>
+          <tr>
+            <td>Holdings store</td>
+            <td>TLT 2017 held <strong>123 days against ~250</strong></td>
+            <td>Hidden because a median over all dates reported it as 0%, i.e. &ldquo;held nothing&rdquo;</td>
+          </tr>
+          <tr>
+            <td>Vanguard feed</td>
+            <td><code>?asOfDate=</code> accepted and <strong>silently ignored</strong> (HTTP 200, wrong date)</td>
+            <td>Would store twelve identical snapshots under twelve keys</td>
+          </tr>
+          <tr>
+            <td>Vanguard feed</td>
+            <td>Book is the whole multi-share-class fund, <strong>1.408&times;</strong> the ETF</td>
+            <td>Ownership numbers are index-fund-family footprint, not ETF</td>
+          </tr>
+          <tr>
+            <td>Warm script</td>
+            <td>The &ldquo;cached nothing&rdquo; guard was <strong>dead code</strong></td>
+            <td><code>rows_served</code> came from the cache&rsquo;s own re-read, so it never fired</td>
+          </tr>
+          <tr>
+            <td>Test suite</td>
+            <td>Two tests drive <strong>live Excel over COM</strong> during the fast gate</td>
+            <td>Pass when Excel is down, hang forever when it is up and busy</td>
+          </tr>
+          <tr>
+            <td><code>yield_gate_fail</code></td>
+            <td>Reads 0 on <strong>2 genuinely corrupt dates</strong> (disagreements to 69.5 bp)</td>
+            <td>A possibility gate cannot see a plausible-but-misaligned curve</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Assets built, independent of the verdict</h2>
+    <div class="block ship">
+      <h3>Data</h3>
+      <p>
+        Daily iShares holdings 2016&ndash;2026 for seven funds behind a rotating-proxy scraper that
+        cannot record a refusal as absence. SSGA and Vanguard providers on the same contract, plus
+        SEC N-PORT for quarterly cross-issuer history. <strong>79.2M cells</strong> of Citi Velocity
+        intraday UST tape (MI01 to 2021-01, hourly to 2019-11), with the New York stamp convention
+        and the start-stamped-bar rule established five ways and captured in a safe reader.
+      </p>
+    </div>
+    <div class="block ship">
+      <h3>Analysis and tooling</h3>
+      <p>
+        A 21-figure pack where every effect panel carries its own null; an interactive risk-ladder
+        explorer across six funds; a configurable backtest notebook; coverage audit and gap repair
+        for the holdings store; and <code>direct=</code> on TimeseriesBuilder for live add-in reads
+        that raise rather than degrade.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Open, and needing you</h2>
+    <div class="block warn">
+      <h3>The nightly cron cannot run unattended &mdash; and that is the real blocker</h3>
+      <p>
+        Tonight jobs 9, 10 and 11 all failed with <code>ExcelNotRunningError</code>. The bridge
+        <strong>attaches to a human-signed-in Excel and never spawns one</strong>, because spawned
+        instances do not register the <code>CV*</code> UDFs. Three nights, three different causes:
+        batch-0 abort, then a 12,501 MB memory guard, then no Excel at all. The branch fixes only
+        the first.
+      </p>
+      <p>
+        It is solvable and today proved it: the intraday backfill agent launched Excel and signed in
+        <strong>autonomously 3 of 3 times</strong> via the supervisor. The nightly does not use that
+        path. Wiring it in is the missing piece.
+      </p>
+    </div>
+    <div class="block warn">
+      <h3>Two decisions</h3>
+      <p>
+        <strong>1.</strong> One live <code>CVTSHIST</code> against a matured ISIN settles whether the
+        cron branch is safe to merge or would break the currently-green EOD warm. Five minutes,
+        needs a signed-in Excel.
+      </p>
+      <p>
+        <strong>2.</strong> Nothing is pushed. 32 commits sit across four branches awaiting your
+        review.
+      </p>
+    </div>
+  </section>
+
+  <p class="foot">
+    All figures measured this session &middot; nulls and placebos carried throughout &middot;
+    no result reported without its cost line
+  </p>
+</div>
