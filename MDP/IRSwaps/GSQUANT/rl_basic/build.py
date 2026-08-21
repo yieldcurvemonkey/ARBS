@@ -70,6 +70,68 @@ GSQUANT_CURVE_MAP = {
             "reference_key": "USD-SOFR-1D",
         }
     },
+    # The full-curve CME twin of USD-SOFR-1D, NOT of USD-SOFR-1D-STIR-CME below --
+    # that one stops at 3y and carries no extrapolation, so it cannot answer the
+    # 30Y outrights and 10y20y forwards the nightly asks for.
+    #
+    # 28/28 base tenors and 14/14 knots verified present as "CME Cleared" in
+    # IR_SWAP_RATES_V1_STANDARD_COVERAGE.xlsx. History starts 2018-04-27 against
+    # LCH's earlier start, which is SOFR's own age rather than a coverage gap.
+    "USD-SOFR-1D-CME": {
+        "rl_basic": {
+            "base_tenors": [
+                "USD Swap SOFR ATM frb1 to frb2 CME Cleared",
+                "USD Swap SOFR ATM frb2 to frb3 CME Cleared",
+                "USD Swap SOFR ATM frb3 to frb4 CME Cleared",
+                "USD Swap SOFR ATM frb4 to frb5 CME Cleared",
+                "USD Swap SOFR ATM frb5 to frb6 CME Cleared",
+                "USD Swap SOFR ATM frb6 to frb7 CME Cleared",
+                
+                "USD Swap SOFR 3m ATM imm1 to 3m CME Cleared",
+                "USD Swap SOFR 3m ATM imm2 to 3m CME Cleared",
+                "USD Swap SOFR 3m ATM imm3 to 3m CME Cleared",
+                "USD Swap SOFR 3m ATM imm4 to 3m CME Cleared",
+
+                "USD Swap SOFR 6m ATM imm1 to 6m CME Cleared",
+                "USD Swap SOFR 6m ATM imm2 to 6m CME Cleared",
+                "USD Swap SOFR 6m ATM imm3 to 6m CME Cleared",
+                "USD Swap SOFR 6m ATM imm4 to 6m CME Cleared",
+                
+                "USD Swap SOFR 1y ATM 0b to 2y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 3y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 4y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 5y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 6y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 7y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 8y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 9y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 10y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 12y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 15y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 20y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 25y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 30y CME Cleared",
+            ],
+            "knots": [
+                "USD Swap SOFR 1y ATM 0b to 2y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 3y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 4y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 5y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 6y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 7y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 8y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 9y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 10y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 12y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 15y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 20y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 25y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 30y CME Cleared",
+            ],
+            "extrapolation": datetime.timedelta(days=365 * 20),
+            "reference_key": "USD-SOFR-1D",
+        }
+    },
     "USD-OIS": {
         "rl_basic": {
             "base_tenors": [
@@ -126,6 +188,72 @@ GSQUANT_CURVE_MAP = {
             "reference_key": "USD-OIS",
         }
     },
+    # The full-curve CME twin of USD-OIS (Fed Funds OIS), reaching 30y.
+    #
+    # 21/21 base tenors and 14/14 knots verified present as "CME Cleared".
+    # History starts 2010-01-04, the same as LCH -- so the LCH/CME basis is
+    # measurable across the whole sample for Fed Funds, unlike SOFR.
+    "USD-OIS-CME": {
+        "rl_basic": {
+            "base_tenors": [
+                "USD Swap OIS ATM frb1 to frb2 CME Cleared",
+                "USD Swap OIS ATM frb2 to frb3 CME Cleared",
+                "USD Swap OIS ATM frb3 to frb4 CME Cleared",
+                "USD Swap OIS ATM frb4 to frb5 CME Cleared",
+                "USD Swap OIS ATM frb5 to frb6 CME Cleared",
+                "USD Swap OIS ATM frb6 to frb7 CME Cleared",
+                
+                # "USD Swap OIS 3m ATM imm1 to 3m CME Cleared",
+                # "USD Swap OIS 3m ATM imm2 to 3m CME Cleared",
+                # "USD Swap OIS 3m ATM imm3 to 3m CME Cleared",
+                # "USD Swap OIS 3m ATM imm4 to 3m CME Cleared",
+
+                # "USD Swap OIS 6m ATM imm1 to 6m CME Cleared",
+                # "USD Swap OIS 6m ATM imm2 to 6m CME Cleared",
+                # "USD Swap OIS 6m ATM imm3 to 6m CME Cleared",
+                # "USD Swap OIS 6m ATM imm4 to 6m CME Cleared",
+                
+                "USD Swap OIS 1y ATM 0b to 1y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 2y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 3y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 4y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 5y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 6y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 7y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 8y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 9y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 10y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 12y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 15y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 20y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 25y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 30y CME Cleared",
+            ],
+            "knots": [
+                "USD Swap OIS 1y ATM 0b to 2y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 3y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 4y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 5y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 6y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 7y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 8y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 9y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 10y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 12y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 15y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 20y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 25y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 30y CME Cleared",
+            ],
+            "extrapolation": datetime.timedelta(days=365 * 20),
+            "reference_key": "USD-OIS",
+        }
+    },
+    # Fed Funds OIS STIR, LCH cleared, extended from 1y to 3y so it pairs with
+    # the SOFR STIR curves. 28 of the 33-leg template resolve: GS publishes no
+    # sub-1y SPOT-STARTING OIS swaps, so the five 0b-to-Nm legs are absent for
+    # OIS at BOTH houses. Every FOMC, IMM and annual leg is present, and the
+    # curve still reaches 3y through '1y ATM 0b to 3y'.
     "USD-OIS-STIR-LCH": {
         "rl_basic": {
             "base_tenors": [
@@ -135,34 +263,108 @@ GSQUANT_CURVE_MAP = {
                 "USD Swap OIS ATM frb4 to frb5 LCH Cleared",
                 "USD Swap OIS ATM frb5 to frb6 LCH Cleared",
                 "USD Swap OIS ATM frb6 to frb7 LCH Cleared",
-                
                 "USD Swap OIS 3m ATM imm1 to 3m LCH Cleared",
                 "USD Swap OIS 3m ATM imm2 to 3m LCH Cleared",
                 "USD Swap OIS 3m ATM imm3 to 3m LCH Cleared",
                 "USD Swap OIS 3m ATM imm4 to 3m LCH Cleared",
-
                 "USD Swap OIS 6m ATM imm1 to 6m LCH Cleared",
                 "USD Swap OIS 6m ATM imm2 to 6m LCH Cleared",
                 "USD Swap OIS 6m ATM imm3 to 6m LCH Cleared",
                 "USD Swap OIS 6m ATM imm4 to 6m LCH Cleared",
-                
-                # "USD Swap OIS 1y ATM 0b to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 0b to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 0b to 2y LCH Cleared",
+                "USD Swap OIS 1y ATM 0b to 3y LCH Cleared",
+                "USD Swap OIS 1y ATM imm1 to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM imm1 to 2y LCH Cleared",
+                "USD Swap OIS 1y ATM imm2 to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM imm2 to 2y LCH Cleared",
+                "USD Swap OIS 1y ATM imm3 to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM imm3 to 2y LCH Cleared",
+                "USD Swap OIS 1y ATM imm4 to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM imm4 to 2y LCH Cleared",
                 "USD Swap OIS 1y ATM 1y to 1y LCH Cleared",
                 "USD Swap OIS 1y ATM 2y to 1y LCH Cleared",
-                "USD Swap OIS 1y ATM 3y to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 1y to 2y LCH Cleared",
             ],
-            "knots": [
-                # "USD Swap OIS 6m ATM imm2 to 6m LCH Cleared",
-                "USD Swap OIS 6m ATM imm3 to 6m LCH Cleared",
-                "USD Swap OIS 6m ATM imm4 to 6m LCH Cleared",
-                
-                # "USD Swap OIS 1y ATM 0b to 1y LCH Cleared",
-                "USD Swap OIS 1y ATM 1y to 1y LCH Cleared",
-                "USD Swap OIS 1y ATM 2y to 1y LCH Cleared",
-                "USD Swap OIS 1y ATM 3y to 1y LCH Cleared",
-            ],
-            "extrapolation": datetime.timedelta(days=360 * 1.25),
             "reference_key": "USD-OIS-STIR"
+        }
+    },
+    # The CME twin of USD-OIS-STIR-LCH, same 28 legs. Fed Funds OIS clears at
+    # both houses back to 2010-01-04, so this basis is measurable across the
+    # whole sample -- unlike SOFR, which only begins in 2018.
+    "USD-OIS-STIR-CME": {
+        "rl_basic": {
+            "base_tenors": [
+                "USD Swap OIS ATM frb1 to frb2 CME Cleared",
+                "USD Swap OIS ATM frb2 to frb3 CME Cleared",
+                "USD Swap OIS ATM frb3 to frb4 CME Cleared",
+                "USD Swap OIS ATM frb4 to frb5 CME Cleared",
+                "USD Swap OIS ATM frb5 to frb6 CME Cleared",
+                "USD Swap OIS ATM frb6 to frb7 CME Cleared",
+                "USD Swap OIS 3m ATM imm1 to 3m CME Cleared",
+                "USD Swap OIS 3m ATM imm2 to 3m CME Cleared",
+                "USD Swap OIS 3m ATM imm3 to 3m CME Cleared",
+                "USD Swap OIS 3m ATM imm4 to 3m CME Cleared",
+                "USD Swap OIS 6m ATM imm1 to 6m CME Cleared",
+                "USD Swap OIS 6m ATM imm2 to 6m CME Cleared",
+                "USD Swap OIS 6m ATM imm3 to 6m CME Cleared",
+                "USD Swap OIS 6m ATM imm4 to 6m CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 1y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 2y CME Cleared",
+                "USD Swap OIS 1y ATM 0b to 3y CME Cleared",
+                "USD Swap OIS 1y ATM imm1 to 1y CME Cleared",
+                "USD Swap OIS 1y ATM imm1 to 2y CME Cleared",
+                "USD Swap OIS 1y ATM imm2 to 1y CME Cleared",
+                "USD Swap OIS 1y ATM imm2 to 2y CME Cleared",
+                "USD Swap OIS 1y ATM imm3 to 1y CME Cleared",
+                "USD Swap OIS 1y ATM imm3 to 2y CME Cleared",
+                "USD Swap OIS 1y ATM imm4 to 1y CME Cleared",
+                "USD Swap OIS 1y ATM imm4 to 2y CME Cleared",
+                "USD Swap OIS 1y ATM 1y to 1y CME Cleared",
+                "USD Swap OIS 1y ATM 2y to 1y CME Cleared",
+                "USD Swap OIS 1y ATM 1y to 2y CME Cleared",
+            ],
+            "reference_key": "USD-OIS-STIR"
+        }
+    },
+    "USD-SOFR-1D-STIR-LCH": {
+        "rl_basic": {
+            "base_tenors": [
+                "USD Swap SOFR 1m ATM 0b to 1m LCH Cleared",
+                "USD Swap SOFR 2m ATM 0b to 2m LCH Cleared",
+                "USD Swap SOFR 3m ATM 0b to 3m LCH Cleared",
+                "USD Swap SOFR 6m ATM 0b to 6m LCH Cleared",
+                "USD Swap SOFR 9m ATM 0b to 9m LCH Cleared",
+                "USD Swap SOFR ATM frb1 to frb2 LCH Cleared",
+                "USD Swap SOFR ATM frb2 to frb3 LCH Cleared",
+                "USD Swap SOFR ATM frb3 to frb4 LCH Cleared",
+                "USD Swap SOFR ATM frb4 to frb5 LCH Cleared",
+                "USD Swap SOFR ATM frb5 to frb6 LCH Cleared",
+                "USD Swap SOFR ATM frb6 to frb7 LCH Cleared",
+                "USD Swap SOFR 3m ATM imm1 to 3m LCH Cleared",
+                "USD Swap SOFR 3m ATM imm2 to 3m LCH Cleared",
+                "USD Swap SOFR 3m ATM imm3 to 3m LCH Cleared",
+                "USD Swap SOFR 3m ATM imm4 to 3m LCH Cleared",
+                "USD Swap SOFR 6m ATM imm1 to 6m LCH Cleared",
+                "USD Swap SOFR 6m ATM imm2 to 6m LCH Cleared",
+                "USD Swap SOFR 6m ATM imm3 to 6m LCH Cleared",
+                "USD Swap SOFR 6m ATM imm4 to 6m LCH Cleared",
+                "USD Swap SOFR 1y ATM 0b to 1y LCH Cleared",
+                "USD Swap SOFR 1y ATM 0b to 2y LCH Cleared",
+                "USD Swap SOFR 1y ATM 0b to 3y LCH Cleared",
+                "USD Swap SOFR 1y ATM imm1 to 1y LCH Cleared",
+                "USD Swap SOFR 1y ATM imm1 to 2y LCH Cleared",
+                "USD Swap SOFR 1y ATM imm2 to 1y LCH Cleared",
+                "USD Swap SOFR 1y ATM imm2 to 2y LCH Cleared",
+                "USD Swap SOFR 1y ATM imm3 to 1y LCH Cleared",
+                "USD Swap SOFR 1y ATM imm3 to 2y LCH Cleared",
+                "USD Swap SOFR 1y ATM imm4 to 1y LCH Cleared",
+                "USD Swap SOFR 1y ATM imm4 to 2y LCH Cleared",
+                "USD Swap SOFR 1y ATM 1y to 1y LCH Cleared",
+                "USD Swap SOFR 1y ATM 2y to 1y LCH Cleared",
+                "USD Swap SOFR 1y ATM 1y to 2y LCH Cleared",
+            ],
+            "reference_key": "USD-SOFR-1D"
         }
     },
     "USD-SOFR-1D-STIR-CME": {

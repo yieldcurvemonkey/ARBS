@@ -198,8 +198,11 @@ strong { font-weight:700; color:var(--ink); }
   <div class="tt">
 
     <div class="job"><span class="n">1</span>
-      <div><b><span class="chip c-value">value</span>GSQUANT USD-OIS EOD</b>
-        <p>Outrights to 30Y plus 12 forwards, priced through rateslib.</p>
+      <div><b><span class="chip c-value">value</span>GSQUANT USD SOFR+OIS EOD, LCH+CME, 30y+STIR</b>
+        <p>A 2x2x2: SOFR and Fed Funds OIS, each at both clearing houses, at both the long
+           end (30y) and the front end (3y STIR, on FOMC and IMM legs). 160 queries over
+           eight curves. Each curve gets only the tenors it can answer &mdash; the STIR curves
+           carry no extrapolation, so a request past 3y fails rather than inventing one.</p>
         <span class="src">IRSwapsMDP(source="GSQUANT-RL") &rarr; computed TS</span></div>
       <span class="dur">89s<i class="bar" style="width:4%"></i></span></div>
 

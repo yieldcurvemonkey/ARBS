@@ -191,6 +191,55 @@ _CITIVELO_INTRADAY_TENORS = ("2Y", "5Y", "10Y", "30Y", "2y/10y", "5y/10y/30y")
 _CITIVELO_INTRADAY_FREQ = "15min"
 
 # USD-OIS uses the same outrights + a subset of forwards (max 30Y)
+#: The USD curves warmed from GS Quant: SOFR and Fed Funds OIS, at BOTH clearing
+#: houses, at BOTH the long end and the front end. A clean 2x2x2.
+#:
+#:                      LCH cleared              CME cleared
+#:   SOFR   30y   USD-SOFR-1D              USD-SOFR-1D-CME
+#:   OIS    30y   USD-OIS                  USD-OIS-CME
+#:   SOFR    3y   USD-SOFR-1D-STIR-LCH     USD-SOFR-1D-STIR-CME
+#:   OIS     3y   USD-OIS-STIR-LCH         USD-OIS-STIR-CME
+#:
+#: The LCH/CME basis is the reason for warming both sides, and it is only readable if
+#: the two are priced on the same tenor grid on the same dates -- which is why the grid
+#: is keyed off the curve rather than applied uniformly.
+#:
+#: EACH CURVE GETS THE GRID IT CAN ANSWER, and that is the difference between a rate and
+#: a fabrication. The 30y curves carry 7,300 days of extrapolation and answer the whole
+#: ladder. The STIR curves reach 3y and carry NO extrapolation, deliberately, so a
+#: request past their support fails loudly instead of interpolating something plausible.
+#: Every tenor in the STIR grid ENDS inside 3y -- the longest are 1y2y and 2y1y.
+#:
+#: Verified against IR_SWAP_RATES_V1_STANDARD_COVERAGE.xlsx before wiring: every leg of
+#: all eight curves resolves. Two asymmetries are coverage facts rather than gaps, and
+#: both are worth knowing before reading a basis off these:
+#:
+#:   * The OIS STIR curves carry 28 legs against SOFR's 33. GS publishes no sub-1y
+#:     SPOT-STARTING OIS swaps, so the five ``0b to 1m/2m/3m/6m/9m`` legs are absent for
+#:     OIS at both houses. Every FOMC (frb) and IMM leg is present.
+#:   * CME SOFR history starts 2018-04-27, because SOFR began that year. CME Fed Funds
+#:     OIS reaches back to 2010-01-04 like LCH -- so the Fed Funds LCH/CME basis is
+#:     measurable across the whole sample and SOFR's is not.
+
+#: The STIR grid. Ends at 3y, inside every STIR curve's support, and no further because
+#: none of them extrapolates.
+_GS_STIR_TENORS = (
+    "1Y", "2Y", "3Y",
+    "3m3m", "3m6m", "3m1y", "6m3m", "6m6m", "6m1y", "1y1y", "1y2y", "2y1y",
+)
+
+#: curve -> its grid. ``None`` means the full outright + forward ladder below.
+_GSQUANT_CURVES = {
+    "USD-SOFR-1D":          None,              # SOFR,        LCH, 30y
+    "USD-SOFR-1D-CME":      None,              # SOFR,        CME, 30y
+    "USD-OIS":              None,              # Fed Funds,   LCH, 30y
+    "USD-OIS-CME":          None,              # Fed Funds,   CME, 30y
+    "USD-SOFR-1D-STIR-LCH": _GS_STIR_TENORS,   # SOFR STIR,   LCH,  3y
+    "USD-SOFR-1D-STIR-CME": _GS_STIR_TENORS,   # SOFR STIR,   CME,  3y
+    "USD-OIS-STIR-LCH":     _GS_STIR_TENORS,   # FF OIS STIR, LCH,  3y
+    "USD-OIS-STIR-CME":     _GS_STIR_TENORS,   # FF OIS STIR, CME,  3y
+}
+
 _OIS_OUTRIGHT_TENORS = tuple(t for t in _EOD_OUTRIGHT_TENORS if int(t.rstrip("Y")) <= 30)
 _OIS_FORWARD_TENORS = (
     "1y1y", "1y2y", "1y5y", "1y10y",
@@ -215,7 +264,7 @@ def _citivelo_eod_tenors(curve: str):
 # ─────────────────────────────────────────────────────────────────────
 
 def warm_gsquant_ois_eod(start, end):
-    """Job 1: GSQUANT-RL USD-OIS EOD — outrights + forwards."""
+    """Job 1: GSQUANT-RL USD EOD -- SOFR and Fed Funds OIS, LCH and CME, 30y and STIR."""
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
     from TB.IRSwapsTB import IRSwapsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
@@ -225,12 +274,15 @@ def warm_gsquant_ois_eod(start, end):
     mdp = IRSwapsMDP(source="GSQUANT-RL")
     tb = TimeseriesBuilder()
 
-    queries = [
-        UnifiedQuery(curve="USD-OIS", tenor=t, value=UnifiedValue.IRS_RATE)
-        for t in (*_OIS_OUTRIGHT_TENORS, *_OIS_FORWARD_TENORS)
-    ]
-    log.info("  %d queries (%d outrights + %d forwards)",
-             len(queries), len(_OIS_OUTRIGHT_TENORS), len(_OIS_FORWARD_TENORS))
+    full = (*_OIS_OUTRIGHT_TENORS, *_OIS_FORWARD_TENORS)
+    queries = []
+    for curve, own in _GSQUANT_CURVES.items():
+        tenors = full if own is None else own
+        queries += [UnifiedQuery(curve=curve, tenor=t, value=UnifiedValue.IRS_RATE)
+                    for t in tenors]
+        log.info("  %-22s %2d tenors%s", curve, len(tenors),
+                 "" if own is None else "  (3y STIR grid; this curve does not extrapolate)")
+    log.info("  %d queries over %d curves", len(queries), len(_GSQUANT_CURVES))
 
     df = tb.get_timeseries(
         start=start,
@@ -1747,7 +1799,7 @@ _CV_CURVE_STORE = "CITIVELO-CURVESTORE"
 _CV_SWAPTION_CUBE = "CITIVELO-SWAPTION-CUBE"
 
 WARM_JOBS = [
-    WarmJob("GSQUANT USD-OIS EOD", warm_gsquant_ois_eod),
+    WarmJob("GSQUANT USD SOFR+OIS EOD (LCH+CME, 30y+STIR)", warm_gsquant_ois_eod),
     WarmJob("ERIS USD-SOFR-1D EOD", warm_eris_eod),
     WarmJob("FRB FedInvest EOD", warm_frb_fedinvest_eod),
     WarmJob("SR3 EOD settles (depth 20)", warm_sr3_settles_eod),
