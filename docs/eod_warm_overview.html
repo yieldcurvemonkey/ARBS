@@ -334,17 +334,33 @@ strong { font-weight:700; color:var(--ink); }
   <p class="sub">Five distinct stores, and one of them is not where you would guess.</p>
   <div class="scroller">
     <table>
-      <thead><tr><th>store</th><th>path</th><th>written by</th></tr></thead>
+      <thead><tr><th>store</th><th>path</th><th class="m">files</th><th class="m">size</th><th>written by</th></tr></thead>
       <tbody>
         <tr><td class="m">computed TS</td><td class="m">&lt;checkout&gt;/data/ts + DuckDB mirror + optional Supabase L2</td>
+            <td class="m">1,938,842</td><td class="m">9.0 GB</td>
             <td>every <strong>value</strong> job</td></tr>
+        <tr><td class="m">CurveStore</td><td class="m">Cache/curve_store</td>
+            <td class="m">74,949</td><td class="m">4.2 GB</td><td>job 8</td></tr>
         <tr><td class="m">CitiVelo tag cache</td><td class="m">%LOCALAPPDATA%/ARBS/ARBS/Cache/citivelo_excel</td>
+            <td class="m">32,885</td><td class="m">1.4 GB</td>
             <td>jobs 10, 11, 12 &mdash; the only ones that touch Excel</td></tr>
-        <tr><td class="m">CurveStore</td><td class="m">Cache/curve_store</td><td>job 8</td></tr>
-        <tr><td class="m">SwaptionCubeStore</td><td class="m">Cache/swaption_cube_store, partitioned asset/date</td><td>job 9</td></tr>
-        <tr><td class="m">USTFutureStore</td><td class="m">Cache/ust_future_store</td><td>job 6</td></tr>
+        <tr><td class="m">USTFutureStore</td><td class="m">Cache/ust_future_store</td>
+            <td class="m">19,048</td><td class="m">0.1 GB</td><td>job 6</td></tr>
+        <tr><td class="m">SwaptionCubeStore</td><td class="m">Cache/swaption_cube_store, partitioned asset/date</td>
+            <td class="m">2,709</td><td class="m">36 MB</td><td>job 9</td></tr>
       </tbody>
     </table>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>Nearly two million files, and that is the shape of the problem</h3>
+    <p>
+      The computed TS store holds <strong>1,938,842 files for 9.0 GB</strong> &mdash; a mean under
+      5 KB. It is addressed per asset, and the Citi UST family alone contributes an
+      <code>asset=FRB__USTS_CITIVELO-RL__&hellip;</code> directory per CUSIP per value. That is why an
+      enumeration of it takes minutes, why a naive <code>du</code> over the cache root does not return,
+      and why anything that walks the tree rather than reading the index is a mistake. The DuckDB
+      mirror exists precisely so readers do not have to.
+    </p>
   </div>
   <div class="card" style="margin-top:14px">
     <h3>The computed TS path is repo-relative, and that is a trap</h3>
