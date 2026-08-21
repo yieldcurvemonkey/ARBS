@@ -380,9 +380,17 @@ parser first, because a regex that matched nothing would make every assertion pa
 ### On the recurring warm
 
 The nightly job `WarmJob("SR3 EOD settles (depth 20)")` **is** wired into
-`scripts/daily_cache_warmer.py:1416`, so the decay does not recur by construction — but it
-has never actually executed (12 nightly logs, no match), and it carried three defects that
-would have blunted it: a depth scan blind to every date below depth 4 (the common case for
+`scripts/daily_cache_warmer.py:1416`, and that registration is present in the **primary**
+checkout — the tree the scheduled task actually runs. So the job will fire.
+
+**But the three fixes below are on this branch only.** The primary checkout carries neither
+`min_depth=1` nor `_session_has_settled` (both grep to 0 there), so until this branch is
+merged the scheduled job still runs with the blind depth scan and no settle guard. "The
+decay does not recur" is a statement about the roster entry, **not yet** about the repaired
+job.
+
+It has also never actually executed — 12 nightly logs, no match — and it carried three
+defects that would have blunted it: a depth scan blind to every date below depth 4 (the common case for
 a cold date — the manual warm's ledger recorded 213 such dates), a test named for that
 helper that never called it, and no guard against warming a session that has not settled.
 
