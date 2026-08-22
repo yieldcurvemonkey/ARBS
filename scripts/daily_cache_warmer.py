@@ -191,6 +191,61 @@ _CITIVELO_INTRADAY_TENORS = ("2Y", "5Y", "10Y", "30Y", "2y/10y", "5y/10y/30y")
 _CITIVELO_INTRADAY_FREQ = "15min"
 
 # USD-OIS uses the same outrights + a subset of forwards (max 30Y)
+#: The USD curves warmed from GS Quant: SOFR and Fed Funds OIS, at BOTH clearing
+#: houses, at BOTH the long end and the front end. A clean 2x2x2.
+#:
+#:                      LCH cleared              CME cleared
+#:   SOFR   30y   USD-SOFR-1D              USD-SOFR-1D-CME
+#:   OIS    30y   USD-OIS                  USD-OIS-CME
+#:   SOFR    3y   USD-SOFR-1D-STIR-LCH     USD-SOFR-1D-STIR-CME
+#:   OIS     3y   USD-OIS-STIR-LCH         USD-OIS-STIR-CME
+#:
+#: The LCH/CME basis is the reason for warming both sides, and it is only readable if
+#: the two are priced on the same tenor grid on the same dates -- which is why the grid
+#: is keyed off the curve rather than applied uniformly.
+#:
+#: EACH CURVE GETS THE GRID IT CAN ANSWER, and that is the difference between a rate and
+#: a fabrication. The 30y curves carry 7,300 days of extrapolation and answer the whole
+#: ladder. The STIR curves reach 3y and carry NO extrapolation, deliberately, so a
+#: request past their support fails loudly instead of interpolating something plausible.
+#: Every tenor in the STIR grid ENDS inside 3y -- the longest are 1y2y and 2y1y.
+#:
+#: Verified against IR_SWAP_RATES_V1_STANDARD_COVERAGE.xlsx before wiring: every leg of
+#: all eight curves resolves. Two asymmetries are coverage facts rather than gaps, and
+#: both are worth knowing before reading a basis off these:
+#:
+#:   * The OIS STIR curves carry 28 legs against SOFR's 33. GS publishes no sub-1y
+#:     SPOT-STARTING OIS swaps, so the five ``0b to 1m/2m/3m/6m/9m`` legs are absent for
+#:     OIS at both houses. Every FOMC (frb) and IMM leg is present.
+#:   * The BUILDABLE start of a curve is the LATEST history start among its legs, not
+#:     the earliest -- a curve needs all of them. Measured after the backfill:
+#:       USD-OIS          2005-10-24     USD-OIS-CME           2010-01-04
+#:       USD-SOFR-1D      2018-08-01     USD-SOFR-1D-CME       2018-08-02
+#:       ...-STIR-LCH     2018-08-01     ...-STIR-CME          2018-08-02
+#:       USD-OIS-STIR-LCH 2018-08-01     USD-OIS-STIR-CME      2019-04-09
+#:     So only the Fed Funds 30y pair spans the whole sample; everything else starts in
+#:     2018 or later. Quoting the earliest leg start (2018-04-27 for CME SOFR) overstates
+#:     it by three months and I did exactly that before measuring.
+
+#: The STIR grid. Ends at 3y, inside every STIR curve's support, and no further because
+#: none of them extrapolates.
+_GS_STIR_TENORS = (
+    "1Y", "2Y", "3Y",
+    "3m3m", "3m6m", "3m1y", "6m3m", "6m6m", "6m1y", "1y1y", "1y2y", "2y1y",
+)
+
+#: curve -> its grid. ``None`` means the full outright + forward ladder below.
+_GSQUANT_CURVES = {
+    "USD-SOFR-1D":          None,              # SOFR,        LCH, 30y
+    "USD-SOFR-1D-CME":      None,              # SOFR,        CME, 30y
+    "USD-OIS":              None,              # Fed Funds,   LCH, 30y
+    "USD-OIS-CME":          None,              # Fed Funds,   CME, 30y
+    "USD-SOFR-1D-STIR-LCH": _GS_STIR_TENORS,   # SOFR STIR,   LCH,  3y
+    "USD-SOFR-1D-STIR-CME": _GS_STIR_TENORS,   # SOFR STIR,   CME,  3y
+    "USD-OIS-STIR-LCH":     _GS_STIR_TENORS,   # FF OIS STIR, LCH,  3y
+    "USD-OIS-STIR-CME":     _GS_STIR_TENORS,   # FF OIS STIR, CME,  3y
+}
+
 _OIS_OUTRIGHT_TENORS = tuple(t for t in _EOD_OUTRIGHT_TENORS if int(t.rstrip("Y")) <= 30)
 _OIS_FORWARD_TENORS = (
     "1y1y", "1y2y", "1y5y", "1y10y",
@@ -215,22 +270,41 @@ def _citivelo_eod_tenors(curve: str):
 # ─────────────────────────────────────────────────────────────────────
 
 def warm_gsquant_ois_eod(start, end):
-    """Job 1: GSQUANT-RL USD-OIS EOD — outrights + forwards."""
+    """Job 1: GSQUANT-RL USD EOD -- SOFR and Fed Funds OIS, LCH and CME, 30y and STIR."""
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
     from TB.IRSwapsTB import IRSwapsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
     from Query.Unified.UnifiedQuery import UnifiedQuery
     from Query.Unified.registry import UnifiedValue
 
+    from scripts.warm_gsquant_curve_store import warm as warm_gsquant_curves
+
+    # THE STORE WARM COMES FIRST, and without it the rest of this job is decoration.
+    #
+    # IRSwapsMDP opts GSQUANT-RL into the CurveStore raw-curve and analytics fast paths,
+    # and _build_irs_curve_store_curve_map READS that store and returns {} on a miss --
+    # it never builds. Nothing in the nightly banked those curves
+    # (import_gsquant_curve_panel.py is a one-off CSV importer), so USD-OIS coasted on a
+    # historical import that ended 2026-08-03 and this job reported
+    # "OK (68.6s, 0 rows x 0 cols)" every night against an empty read.
+    #
+    # Measured for 2026-08-20: with the store warm the frame goes from 0 columns to 160.
+    # Idempotent -- a day already holding both partitions is skipped, so this is a no-op
+    # on a warm store and costs ~18s for eight cold curve-days.
+    warm_gsquant_curves(start=start, end=end, curves=tuple(_GSQUANT_CURVES))
+
     mdp = IRSwapsMDP(source="GSQUANT-RL")
     tb = TimeseriesBuilder()
 
-    queries = [
-        UnifiedQuery(curve="USD-OIS", tenor=t, value=UnifiedValue.IRS_RATE)
-        for t in (*_OIS_OUTRIGHT_TENORS, *_OIS_FORWARD_TENORS)
-    ]
-    log.info("  %d queries (%d outrights + %d forwards)",
-             len(queries), len(_OIS_OUTRIGHT_TENORS), len(_OIS_FORWARD_TENORS))
+    full = (*_OIS_OUTRIGHT_TENORS, *_OIS_FORWARD_TENORS)
+    queries = []
+    for curve, own in _GSQUANT_CURVES.items():
+        tenors = full if own is None else own
+        queries += [UnifiedQuery(curve=curve, tenor=t, value=UnifiedValue.IRS_RATE)
+                    for t in tenors]
+        log.info("  %-22s %2d tenors%s", curve, len(tenors),
+                 "" if own is None else "  (3y STIR grid; this curve does not extrapolate)")
+    log.info("  %d queries over %d curves", len(queries), len(_GSQUANT_CURVES))
 
     df = tb.get_timeseries(
         start=start,
@@ -240,6 +314,22 @@ def warm_gsquant_ois_eod(start, end):
         routers={"IRS": IRSwapsTB(mdp, show_tqdm=True)},
         ignore_cache_miss=True,
     )
+
+    # AN EMPTY FRAME IS NOT A SUCCESS, and treating it as one is what hid the outage.
+    #
+    # The runner reports whatever shape it is handed -- "OK (68.6s, 0 rows x 0 cols)" is
+    # a real line from four consecutive nights. A value job that priced nothing has not
+    # warmed anything, and it should read FAILED so somebody looks, rather than green so
+    # nobody does. This is not the Excel case: no provider was unavailable here, the job
+    # simply produced no numbers, which means something is broken.
+    if df is None or df.empty or not len(df.columns):
+        raise RuntimeError(
+            f"GS Quant EOD priced NOTHING for {start}..{end} across "
+            f"{len(_GSQUANT_CURVES)} curve(s). The curve store warm ran first, so an "
+            "empty frame here means the pricing path found no curves it could read -- "
+            "check the CurveStore partitions for these curve names before re-running."
+        )
+    log.info("  %d series priced across %d curve(s)", len(df.columns), len(_GSQUANT_CURVES))
     return df
 
 
@@ -1747,7 +1837,7 @@ _CV_CURVE_STORE = "CITIVELO-CURVESTORE"
 _CV_SWAPTION_CUBE = "CITIVELO-SWAPTION-CUBE"
 
 WARM_JOBS = [
-    WarmJob("GSQUANT USD-OIS EOD", warm_gsquant_ois_eod),
+    WarmJob("GSQUANT USD SOFR+OIS EOD (LCH+CME, 30y+STIR)", warm_gsquant_ois_eod),
     WarmJob("ERIS USD-SOFR-1D EOD", warm_eris_eod),
     WarmJob("FRB FedInvest EOD", warm_frb_fedinvest_eod),
     WarmJob("SR3 EOD settles (depth 20)", warm_sr3_settles_eod),

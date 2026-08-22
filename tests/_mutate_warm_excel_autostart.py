@@ -119,6 +119,18 @@ MUTATIONS = [
         "test_a_signed_out_addin_presses_login_and_does_not_restart",
     ),
     (
+        "an empty GS Quant frame is reported as a success",
+        '    if df is None or df.empty or not len(df.columns):',
+        "    if False:",
+        "test_an_empty_gsquant_frame_is_not_a_success",
+    ),
+    (
+        "the curve store is warmed AFTER pricing, so the read finds nothing",
+        "    warm_gsquant_curves(start=start, end=end, curves=tuple(_GSQUANT_CURVES))",
+        "    pass",
+        "test_the_curve_store_is_warmed_before_pricing",
+    ),
+    (
         # Aimed at a test that goes through _excel_preflight. The first version pointed
         # at one that calls _repair_addin_if_silent DIRECTLY, so deleting the call site
         # changed nothing it could see -- ESCAPED, and again the harness's fault.

@@ -1,0 +1,420 @@
+<title>The Nightly Warm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bitter:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+
+<style>
+/* Light is complete on bare :root; dark redefines ONLY tokens, twice, so the
+   un-stamped system state and the explicit stamp both resolve. */
+:root {
+  --paper:   #F5F3EF;
+  --card:    #FFFFFF;
+  --sunk:    #EBE8E2;
+  --ink:     #1B1A17;
+  --ink-2:   #56534C;
+  --ink-3:   #8A867D;
+  --rule:    #D9D5CC;
+  --rule-2:  #E8E5DE;
+  --accent:  #6B4E1E;
+
+  /* Reserved. Kind and health are the page's signal; never decoration. */
+  --store:   #1F5C7A;  --store-bg:   #E1EDF3;
+  --value:   #5A4A85;  --value-bg:   #EAE6F4;
+  --excel:   #8A5A12;  --excel-bg:   #F6EBD8;
+  --ok:      #2C6B45;  --ok-bg:      #E3F0E8;
+  --bad:     #9A3A2C;  --bad-bg:     #F7E6E2;
+
+  --serif: "Bitter", ui-serif, Georgia, serif;
+  --sans:  "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  --mono:  "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #17171A; --card: #1E1E22; --sunk: #121215;
+    --ink: #EDEAE3; --ink-2: #A9A49A; --ink-3: #78736A;
+    --rule: #33322F; --rule-2: #292826; --accent: #C9A45C;
+    --store: #6FB4D6; --store-bg: #15303D;
+    --value: #A99AD6; --value-bg: #26213A;
+    --excel: #D9A44E; --excel-bg: #33270F;
+    --ok: #6DBF8E; --ok-bg: #16301F;
+    --bad: #E08573; --bad-bg: #37201B;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #17171A; --card: #1E1E22; --sunk: #121215;
+  --ink: #EDEAE3; --ink-2: #A9A49A; --ink-3: #78736A;
+  --rule: #33322F; --rule-2: #292826; --accent: #C9A45C;
+  --store: #6FB4D6; --store-bg: #15303D;
+  --value: #A99AD6; --value-bg: #26213A;
+  --excel: #D9A44E; --excel-bg: #33270F;
+  --ok: #6DBF8E; --ok-bg: #16301F;
+  --bad: #E08573; --bad-bg: #37201B;
+}
+
+* { box-sizing: border-box; }
+body { margin:0; background:var(--paper); color:var(--ink);
+       font-family:var(--sans); font-size:15.5px; line-height:1.55;
+       -webkit-font-smoothing:antialiased; }
+.wrap { max-width:1120px; margin:0 auto;
+        padding:clamp(22px,4vw,48px) clamp(14px,3vw,30px) 72px;
+        display:flex; flex-direction:column; gap:34px; }
+
+.eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.17em;
+           text-transform:uppercase; color:var(--ink-3); margin:0; }
+h1 { font-family:var(--serif); font-weight:700; font-size:clamp(30px,4.4vw,42px);
+     line-height:1.08; margin:6px 0 0; letter-spacing:-.015em; text-wrap:balance; }
+.stand { margin:12px 0 0; max-width:66ch; color:var(--ink-2); font-size:17px;
+         line-height:1.5; text-wrap:pretty; }
+
+h2 { font-family:var(--serif); font-weight:600; font-size:22px; margin:0 0 3px;
+     letter-spacing:-.01em; text-wrap:balance; }
+.sub { margin:0 0 14px; color:var(--ink-3); font-size:13.5px; }
+section { display:flex; flex-direction:column; }
+
+/* ---- the timetable ---- */
+.tt { border-top:2px solid var(--ink); }
+.job { display:grid; grid-template-columns:30px 1fr 118px; gap:6px 14px;
+       padding:12px 4px; border-bottom:1px solid var(--rule-2); align-items:baseline; }
+@media (max-width:720px){ .job{ grid-template-columns:30px 1fr; } .job .dur{ grid-column:2; } }
+.n { font-family:var(--mono); font-size:12px; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+.job b { font-weight:600; font-size:15.5px; display:block; }
+.job p { margin:3px 0 0; color:var(--ink-2); font-size:13.5px; }
+.job .src { font-family:var(--mono); font-size:12px; color:var(--ink-3); display:block; margin-top:3px; }
+.dur { font-family:var(--mono); font-size:12px; color:var(--ink-3);
+       text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.bar { display:block; height:3px; background:var(--accent); opacity:.55;
+       border-radius:2px; margin-top:4px; margin-left:auto; }
+
+.chip { display:inline-block; font-family:var(--mono); font-size:9.5px; font-weight:600;
+        letter-spacing:.09em; text-transform:uppercase; padding:2px 6px;
+        border-radius:2px; margin-right:5px; vertical-align:1px; }
+.c-store{color:var(--store);background:var(--store-bg);}
+.c-value{color:var(--value);background:var(--value-bg);}
+.c-excel{color:var(--excel);background:var(--excel-bg);}
+
+/* ---- generic cards ---- */
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(268px,1fr)); gap:16px; }
+.card { background:var(--card); border:1px solid var(--rule); border-radius:3px; padding:14px 16px 16px; }
+.card h3 { font-family:var(--sans); font-weight:700; font-size:14px; margin:0 0 6px; }
+.card p { margin:0 0 8px; color:var(--ink-2); font-size:13.5px; }
+.card p:last-child { margin-bottom:0; }
+
+/* Four cells, so 2 or 4 tracks and never auto-fit -- auto-fit packs three and leaves
+   the fourth beside empty grid, which reads as a missing panel. */
+.flow { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px;
+        background:var(--rule-2); border:1px solid var(--rule-2); }
+@media (min-width:880px){ .flow{ grid-template-columns:repeat(4,minmax(0,1fr)); } }
+.flow div { background:var(--card); padding:12px 14px; }
+.flow b { display:block; font-family:var(--mono); font-size:11px; letter-spacing:.09em;
+          text-transform:uppercase; color:var(--ink-3); margin-bottom:5px; }
+.flow span { font-size:13.5px; color:var(--ink-2); }
+
+.scroller { overflow-x:auto; }
+table { border-collapse:collapse; width:100%; font-size:13.5px; }
+th,td { text-align:left; padding:8px 14px 8px 0; border-bottom:1px solid var(--rule-2); vertical-align:top; }
+th { font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+     color:var(--ink-3); font-weight:500; }
+td.m { font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
+
+code { font-family:var(--mono); font-size:.87em; background:var(--sunk);
+       padding:.1em .35em; border-radius:2px; }
+strong { font-weight:700; color:var(--ink); }
+.foot { border-top:1px solid var(--rule); padding-top:13px; font-family:var(--mono);
+        font-size:11px; color:var(--ink-3); }
+@media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important;} }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">ARBS &middot; daily_cache_warmer.py &middot; 18 jobs</p>
+  <h1>The Nightly Warm</h1>
+  <p class="stand">
+    What actually gets priced and banked between 18:15 and roughly 21:00 each weekday &mdash;
+    which provider feeds it, which store it lands in, and which jobs cannot run until
+    another has finished.
+  </p>
+</header>
+
+<section>
+  <h2>The shape of a run</h2>
+  <p class="sub">Two scheduled tasks, both executing from the primary checkout on <code>main</code>.</p>
+  <div class="flow">
+    <div><b>Weekdays 18:15</b><span><code>daily_cache_warmer.py</code> &mdash; today only</span></div>
+    <div><b>Saturdays 10:00</b><span><code>--backfill 7</code> &mdash; the past week, to catch anything a weekday lost</span></div>
+    <div><b>Log</b><span><code>logs/cache_warmer/</code>, dated per run, 60 kept</span></div>
+    <div><b>Exit code</b><span><code>0</code> all OK &middot; <code>1</code> a job FAILED &middot; <code>2</code> only SKIPPED</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Before any job runs: the Excel pre-flight</h2>
+  <p class="sub">Asked once, not rediscovered by every Velocity job. Nine of the eighteen depend on it.</p>
+  <div class="cards">
+    <div class="card">
+      <h3>It repairs rather than refuses</h3>
+      <p>
+        Four states, four remedies. <strong>No Excel</strong> &rarr; launch and wait for sign-in.
+        <strong>Over the 3,800 MB ceiling</strong> &rarr; restart, rescuing unsaved work first.
+        <strong>Signed out</strong> &rarr; press Login. <strong>Running but not bindable</strong> &rarr;
+        restart, because a Login press cannot fix an Excel outside the Running Object Table.
+      </p>
+      <p>
+        A failed Login press escalates to a full kill and re-auth. Two remedies inside one
+        latched repair &mdash; never a loop. <code>force=True</code> is never passed.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Memory is not liveness</h3>
+      <p>
+        The first three checks read a number from <code>Get-Process</code>. None of them asks
+        whether the add-in <em>answers</em>, and an Excel at 500 MB with Velocity signed out
+        passes all of them, then fails every Velocity job in turn. So the pre-flight ends with
+        one bounded attach &mdash; the same call the jobs make thirty seconds later.
+      </p>
+      <p>
+        Measured cold start: <strong>0 processes to signed-in and serving in 3.3 min</strong>,
+        one Login press, against a 900 s budget.
+      </p>
+    </div>
+    <div class="card">
+      <h3>SKIPPED is not FAILED</h3>
+      <p>
+        A job blocked by an unusable Excel wrote <em>nothing</em>, so its consumers still read
+        the cumulative tag cache and run. A job that FAILED may have written half a partition,
+        so its consumers are held back. That distinction is why the exit code means something.
+      </p>
+      <p>Knobs: <code>ARBS_WARM_EXCEL_AUTOSTART</code>, <code>ARBS_WARM_EXCEL_SIGNIN_TIMEOUT</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>The eighteen jobs, in execution order</h2>
+  <p class="sub">
+    Durations are from 2026-08-18, a healthy night. Order is load-bearing and enforced at import
+    by <code>utils.warm_jobs.check</code>: a store warm must precede any value job that reads it.
+  </p>
+  <div class="tt">
+
+    <div class="job"><span class="n">1</span>
+      <div><b><span class="chip c-value">value</span>GSQUANT USD SOFR+OIS EOD, LCH+CME, 30y+STIR</b>
+        <p>A 2x2x2: SOFR and Fed Funds OIS, each at both clearing houses, at both the long
+           end (30y) and the front end (3y STIR, on FOMC and IMM legs). 160 queries over
+           eight curves. Each curve gets only the tenors it can answer &mdash; the STIR curves
+           carry no extrapolation, so a request past 3y fails rather than inventing one.</p>
+        <span class="src">IRSwapsMDP(source="GSQUANT-RL") &rarr; computed TS</span></div>
+      <span class="dur">89s<i class="bar" style="width:4%"></i></span></div>
+
+    <div class="job"><span class="n">2</span>
+      <div><b><span class="chip c-value">value</span>ERIS USD-SOFR-1D EOD</b>
+        <p>18 outrights, 27 forwards, and the CT curve/spread grid against FedInvest USTs.</p>
+        <span class="src">IRSwapsMDP("ERIS_EOD_LIVE-RL_BASIC") + FixedRateBondsMDP("USTS_FEDINVEST_WSJ_LIVE-RL")</span></div>
+      <span class="dur">151s<i class="bar" style="width:6%"></i></span></div>
+
+    <div class="job"><span class="n">3</span>
+      <div><b><span class="chip c-value">value</span>FRB FedInvest EOD</b>
+        <p>On-the-run plus three off-the-runs at 2/3/5/7/10/20/30y &mdash; 28 CUSIP aliases.</p>
+        <span class="src">FixedRateBondsMDP("USTS_FEDINVEST_WSJ_LIVE-RL") &rarr; computed TS</span></div>
+      <span class="dur">11s<i class="bar" style="width:1%"></i></span></div>
+
+    <div class="job"><span class="n">4</span>
+      <div><b><span class="chip c-value">value</span>SR3 EOD settles, depth 20</b>
+        <p>The 17:00 settle cache the convexity panel reads. Depth 20 because Golds spans
+           contracts 17&ndash;20. Idempotent: a warm date is skipped.</p>
+        <span class="src">scripts/warm_sr3_settles.py</span></div>
+      <span class="dur">&mdash;</span></div>
+
+    <div class="job"><span class="n">5</span>
+      <div><b><span class="chip c-value">value</span>STIRF CME Session</b>
+        <p>One-minute curves across the whole Globex session, 17:00 CT prior day to 16:00 CT.
+           Q12STIRT and Q16STIRT, 12 IMM relative pairs.</p>
+        <span class="src">scripts/stirf_curve_service.py, fetcher on BARCHART_TOS_LIVE_STIRF-RL</span></div>
+      <span class="dur">1,648s<i class="bar" style="width:62%"></i></span></div>
+
+    <div class="job"><span class="n">6</span>
+      <div><b><span class="chip c-value">value</span>UST Futures Invoice Caches</b>
+        <p>Delivery basket and pricer caches for the front months of TU/FV/TY/UXY/US/WN, keyed
+           by as-of date. Without it the SDR invoice-swap path pays a Barchart + FedInvest
+           round trip per root on first use.</p>
+        <span class="src">scripts/warm_ustf_cache.py &rarr; ust_future_store</span></div>
+      <span class="dur">29s<i class="bar" style="width:2%"></i></span></div>
+
+    <div class="job"><span class="n">7</span>
+      <div><b><span class="chip c-value">value</span>STIRFO SFR Options EOD</b>
+        <p>Delta-addressed option snapshots at 20 symbols per contract, plus SABR smiles at
+           beta = 0.5, for the first 12 SFR quarterlies.</p>
+        <span class="src">scripts/eod_stirfo_service.py</span></div>
+      <span class="dur">1,541s<i class="bar" style="width:58%"></i></span></div>
+
+    <div class="job"><span class="n">8</span>
+      <div><b><span class="chip c-store">store</span>CitiVelo CurveStore, intraday + EOD</b>
+        <p>Par grid refresh, then the minute fetch, then a pure-CPU build, then the offline EOD
+           warm. Five curves: USD-SOFR, EUR-ESTR, GBP-SONIA, CAD-CORRA, JPY-TONAR-LCH.
+           <strong>provides</strong> <code>CITIVELO-CURVESTORE</code>.</p>
+        <span class="src">citivelo_excel_intraday_warm.py fetch|build &middot; citivelo_excel_warm.py warm</span></div>
+      <span class="dur">146s<i class="bar" style="width:6%"></i></span></div>
+
+    <div class="job"><span class="n">9</span>
+      <div><b><span class="chip c-store">store</span>CitiVelo swaption cube</b>
+        <p>USD vol tags over 7 years in three groups &mdash; atm, liquid, wings &mdash; then one
+           cube per observation date. <strong>provides</strong> <code>CITIVELO-SWAPTION-CUBE</code>.</p>
+        <span class="src">citivelo_swaption_vol_warm.py fetch|build|status &rarr; swaption_cube_store</span></div>
+      <span class="dur">1,151s<i class="bar" style="width:44%"></i></span></div>
+
+    <div class="job"><span class="n">10</span>
+      <div><b><span class="chip c-store">store</span><span class="chip c-excel">excel</span>UST universe tags, EOD</b>
+        <p>All <strong>877</strong> bonds at DAILY on a rolling 30-day window, so the cache stays
+           current without re-asking five years every night. Resumable per batch.
+           <strong>provides</strong> <code>CITIVELO-TAGS-RATES.BOND</code>.</p>
+        <span class="src">citivelo_ust_universe_warm.py eod &rarr; citivelo tag cache</span></div>
+      <span class="dur">2,645s<i class="bar" style="width:100%"></i></span></div>
+
+    <div class="job"><span class="n">11</span>
+      <div><b><span class="chip c-store">store</span><span class="chip c-excel">excel</span>UST universe tags, INTRADAY</b>
+        <p>PRICE and YIELD only at MI01 &mdash; a measured budget, since intraday costs ~1.7 MB of
+           Excel per tag. Rolling 2-day window plus a backward depth pass.
+           <strong>provides</strong> <code>...-RATES.BOND-MI01</code>.</p>
+        <span class="src">citivelo_ust_universe_warm.py intraday | depth</span></div>
+      <span class="dur">varies</span></div>
+
+    <div class="job"><span class="n">12</span>
+      <div><b><span class="chip c-store">store</span><span class="chip c-excel">excel</span>Swap-spread tags</b>
+        <p><code>RATES.OIS.USD_SOFR.SWAP_SPREAD.&lt;tenor&gt;</code>. The tenor axis is read from the
+           catalog, never hardcoded &mdash; it is ragged per index and only 13 of 20 indices carry
+           the family at all.</p>
+        <span class="src">MDP/IRSwaps/CITIVELO_EXCEL/swap_spreads.py</span></div>
+      <span class="dur">5s<i class="bar" style="width:1%"></i></span></div>
+
+    <div class="job"><span class="n">13</span>
+      <div><b><span class="chip c-value">value</span>CitiVelo EOD timeseries</b>
+        <p>112 queries across the five curves &mdash; outrights, forwards, and 2s5s / 2s10s /
+           5s10s / 10s30s plus the two flies. Reads the CurveStore, never Excel.</p>
+        <span class="src">IRSwapsMDP(source="citivelo_excel_rl") &middot; requires CURVESTORE</span></div>
+      <span class="dur">36s<i class="bar" style="width:2%"></i></span></div>
+
+    <div class="job"><span class="n">14</span>
+      <div><b><span class="chip c-value">value</span>CitiVelo swaption values EOD</b>
+        <p>Scalar package values from persisted inputs only. Intersects CurveStore and CubeStore
+           coverage and <strong>raises rather than falling back to live Excel</strong> &mdash; its COM
+           tripwire is armed for the duration.</p>
+        <span class="src">citivelo_swaption_eod_warm.py &middot; requires CURVESTORE + SWAPTION-CUBE</span></div>
+      <span class="dur">7s<i class="bar" style="width:1%"></i></span></div>
+
+    <div class="job"><span class="n">15</span>
+      <div><b><span class="chip c-value">value</span>CitiVelo intraday timeseries</b>
+        <p>30 queries at 15-minute resolution &mdash; 2Y, 5Y, 10Y, 30Y, 2s10s and 5s10s30s across
+           the curve set.</p>
+        <span class="src">IRSwapsMDP("citivelo_excel_rl"), freq 15min &middot; requires CURVESTORE</span></div>
+      <span class="dur">1,087s<i class="bar" style="width:41%"></i></span></div>
+
+    <div class="job"><span class="n">16</span>
+      <div><b><span class="chip c-value">value</span>CITIVELO FRB values EOD</b>
+        <p>Bond values on the Citi source for the 14 on-the-run aliases, built offline from the
+           banked tags.</p>
+        <span class="src">FixedRateBondsMDP(source="USTS_CITIVELO-RL") &middot; requires RATES.BOND</span></div>
+      <span class="dur">58s<i class="bar" style="width:3%"></i></span></div>
+
+    <div class="job"><span class="n">17</span>
+      <div><b><span class="chip c-value">value</span>CITIVELO UST timeseries values EOD</b>
+        <p><strong>377 symbols</strong> &mdash; 28 constant-maturity aliases plus 349 listed issues
+           &mdash; across ten values. Builds <em>offline</em>, so a tag the store never banked comes
+           back as an empty column rather than a live Excel call. That is why job 10 must precede it.</p>
+        <span class="src">citivelo_ust_timeseries_warm.py build &middot; requires RATES.BOND</span></div>
+      <span class="dur">1,150s<i class="bar" style="width:43%"></i></span></div>
+
+    <div class="job"><span class="n">18</span>
+      <div><b><span class="chip c-value">value</span>CITIVELO swap spreads EOD</b>
+        <p>The 11 USD_SOFR swap-spread tenors as durable values.</p>
+        <span class="src">IRSwapsMDP(source="CITIVELO_EXCEL-RL") &middot; requires SWAP_SPREAD tags</span></div>
+      <span class="dur">30s<i class="bar" style="width:2%"></i></span></div>
+
+  </div>
+</section>
+
+<section>
+  <h2>Where it all lands</h2>
+  <p class="sub">Five distinct stores, and one of them is not where you would guess.</p>
+  <div class="scroller">
+    <table>
+      <thead><tr><th>store</th><th>path</th><th class="m">files</th><th class="m">size</th><th>written by</th></tr></thead>
+      <tbody>
+        <tr><td class="m">computed TS</td><td class="m">&lt;checkout&gt;/data/ts + DuckDB mirror + optional Supabase L2</td>
+            <td class="m">1,938,842</td><td class="m">9.0 GB</td>
+            <td>every <strong>value</strong> job</td></tr>
+        <tr><td class="m">CurveStore</td><td class="m">Cache/curve_store</td>
+            <td class="m">74,949</td><td class="m">4.2 GB</td><td>job 8</td></tr>
+        <tr><td class="m">CitiVelo tag cache</td><td class="m">%LOCALAPPDATA%/ARBS/ARBS/Cache/citivelo_excel</td>
+            <td class="m">32,885</td><td class="m">1.4 GB</td>
+            <td>jobs 10, 11, 12 &mdash; the only ones that touch Excel</td></tr>
+        <tr><td class="m">USTFutureStore</td><td class="m">Cache/ust_future_store</td>
+            <td class="m">19,048</td><td class="m">0.1 GB</td><td>job 6</td></tr>
+        <tr><td class="m">SwaptionCubeStore</td><td class="m">Cache/swaption_cube_store, partitioned asset/date</td>
+            <td class="m">2,709</td><td class="m">36 MB</td><td>job 9</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>Nearly two million files, and that is the shape of the problem</h3>
+    <p>
+      The computed TS store holds <strong>1,938,842 files for 9.0 GB</strong> &mdash; a mean under
+      5 KB. It is addressed per asset, and the Citi UST family alone contributes an
+      <code>asset=FRB__USTS_CITIVELO-RL__&hellip;</code> directory per CUSIP per value. That is why an
+      enumeration of it takes minutes, why a naive <code>du</code> over the cache root does not return,
+      and why anything that walks the tree rather than reading the index is a mistake. The DuckDB
+      mirror exists precisely so readers do not have to.
+    </p>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>The computed TS path is repo-relative, and that is a trap</h3>
+    <p>
+      <code>DEFAULT_COMPUTED_TS_BASE_DIR</code> resolves to <code>&lt;checkout&gt;/data/ts</code>. The cron
+      runs from the primary checkout, so that is where nightly values land &mdash; but a suite or
+      script run from a <em>worktree</em> can resolve to the primary checkout anyway under full-suite
+      import ordering, which makes it a production-write hazard from a place that looks isolated.
+    </p>
+    <p>
+      Most of <code>AppData/Local/ARBS</code> is a junction to <code>D:\ARBS_DATA</code> after the
+      storage migration, so "local" cache paths are physically on D:.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>What this does not cover</h2>
+  <p class="sub">Stated so it is not rediscovered.</p>
+  <div class="cards">
+    <div class="card">
+      <h3>Only three jobs drive Excel</h3>
+      <p>
+        Jobs 10, 11 and 12 carry <code>needs_excel</code>. Jobs 8 and 9 shell out to scripts that
+        drive Excel in their <em>fetch</em> phase but carry their own guards, and every job numbered
+        13 and above is deliberately offline &mdash; they read banked stores and refuse a live
+        fallback, which is what stops a value job silently repricing off the wire.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Depth is bounded by memory, not time</h3>
+      <p>
+        The MI01 backward depth pass stops when Excel reaches its ceiling. Measured on the first
+        production run: <strong>1,664 bond-weeks, 1.15M rows, stopped at 64% of the time budget</strong>
+        &mdash; about 0.96 MB of Excel per bond-week, so a year of depth for the 403 alive bonds is
+        roughly 13 runs.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Known ragged edges</h3>
+      <p>
+        97 far-dated swaption expiries are unbuildable (no complete expiry x tenor rectangle
+        survives the offset axis). The iShares holdings gap over 2017-01-03..2017-07-05 is the
+        vendor's, re-confirmed empty on 2026-08-21, and nothing this cron does will fill it.
+      </p>
+    </div>
+  </div>
+</section>
+
+<p class="foot">
+  Read from scripts/daily_cache_warmer.py at 26786935 &middot; durations from the 2026-08-18 run
+  &middot; job order enforced at import, not by convention
+</p>
+</div>

@@ -338,3 +338,71 @@ def test_the_preflight_reaches_the_liveness_probe(warmer, monkeypatch):
     assert sup.calls == ["wait_for_addin"], (
         "the pre-flight passed a healthy memory reading and never asked whether the "
         f"add-in answers; saw {sup.calls}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# The GS Quant job priced nothing for at least four nights and reported OK
+# each time -- "OK (68.6s, 0 rows x 0 cols)". These pin the two halves of
+# the fix: the store is warmed BEFORE pricing, and an empty frame is not a
+# success.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _gs_stub(warmer, monkeypatch, frame, calls):
+    """Stub the store warm, the MDP and the TB so the job's own logic is what is tested.
+
+    Patched at the SOURCE modules, not on the warmer. ``warm_gsquant_ois_eod`` does its
+    imports inside the function body, so every name it uses is re-resolved from its own
+    module on each call and an attribute set on the warmer is simply never consulted --
+    which is how the first version of these tests failed while the code was correct.
+    """
+    import scripts.warm_gsquant_curve_store as W
+    import MDP.IRSwaps.IRSwapsMDP as MDPMOD
+    import TB.IRSwapsTB as TBMOD
+    import TB.TimeseriesBuilder as TBB
+
+    monkeypatch.setattr(W, "warm", lambda **kw: calls.append(kw) or {})
+    monkeypatch.setattr(MDPMOD, "IRSwapsMDP", lambda **kw: object())
+    monkeypatch.setattr(TBMOD, "IRSwapsTB", lambda *a, **k: object())
+
+    class _TB:
+        def get_timeseries(self, **kw):
+            calls.append("priced")
+            return frame
+
+    monkeypatch.setattr(TBB, "TimeseriesBuilder", lambda *a, **k: _TB())
+
+
+def test_an_empty_gsquant_frame_is_not_a_success(warmer, monkeypatch):
+    """A value job that priced nothing must read FAILED, not green.
+
+    The runner prints whatever shape it is handed. With no guard, four consecutive
+    nights of an empty read were reported as OK and nobody looked.
+    """
+    import datetime
+    import pandas as pd
+
+    calls = []
+    _gs_stub(warmer, monkeypatch, pd.DataFrame(), calls)
+    d = datetime.date(2026, 8, 20)
+
+    with pytest.raises(RuntimeError, match="priced NOTHING"):
+        warmer.warm_gsquant_ois_eod(d, d)
+
+
+def test_the_curve_store_is_warmed_before_pricing(warmer, monkeypatch):
+    """Order is the whole fix: the fast path READS the store and returns {} on a miss,
+    so pricing first would find nothing to read."""
+    import datetime
+    import pandas as pd
+
+    calls = []
+    _gs_stub(warmer, monkeypatch, pd.DataFrame({"USD-OIS 10Y RATE": [4.3]}), calls)
+    d = datetime.date(2026, 8, 20)
+
+    out = warmer.warm_gsquant_ois_eod(d, d)
+    assert len(out.columns) == 1
+    assert calls and calls[-1] == "priced", "pricing must be the LAST thing that happens"
+    assert isinstance(calls[0], dict), "the store warm must run FIRST"
+    assert tuple(calls[0]["curves"]) == tuple(warmer._GSQUANT_CURVES), (
+        "the warm must cover exactly the curves the job is about to price")
