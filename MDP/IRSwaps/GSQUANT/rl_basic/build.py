@@ -75,8 +75,10 @@ GSQUANT_CURVE_MAP = {
     # 30Y outrights and 10y20y forwards the nightly asks for.
     #
     # 28/28 base tenors and 14/14 knots verified present as "CME Cleared" in
-    # IR_SWAP_RATES_V1_STANDARD_COVERAGE.xlsx. History starts 2018-04-27 against
-    # LCH's earlier start, which is SOFR's own age rather than a coverage gap.
+    # IR_SWAP_RATES_V1_STANDARD_COVERAGE.xlsx. BUILDABLE FROM 2018-08-02, measured
+    # by backfilling it -- which is the LATEST leg start, not the earliest
+    # (2018-04-27). A curve needs every leg, so the last instrument to appear sets
+    # the boundary; quoting the earliest overstates the history by three months.
     "USD-SOFR-1D-CME": {
         "rl_basic": {
             "base_tenors": [

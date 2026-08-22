@@ -217,9 +217,15 @@ _CITIVELO_INTRADAY_FREQ = "15min"
 #:   * The OIS STIR curves carry 28 legs against SOFR's 33. GS publishes no sub-1y
 #:     SPOT-STARTING OIS swaps, so the five ``0b to 1m/2m/3m/6m/9m`` legs are absent for
 #:     OIS at both houses. Every FOMC (frb) and IMM leg is present.
-#:   * CME SOFR history starts 2018-04-27, because SOFR began that year. CME Fed Funds
-#:     OIS reaches back to 2010-01-04 like LCH -- so the Fed Funds LCH/CME basis is
-#:     measurable across the whole sample and SOFR's is not.
+#:   * The BUILDABLE start of a curve is the LATEST history start among its legs, not
+#:     the earliest -- a curve needs all of them. Measured after the backfill:
+#:       USD-OIS          2005-10-24     USD-OIS-CME           2010-01-04
+#:       USD-SOFR-1D      2018-08-01     USD-SOFR-1D-CME       2018-08-02
+#:       ...-STIR-LCH     2018-08-01     ...-STIR-CME          2018-08-02
+#:       USD-OIS-STIR-LCH 2018-08-01     USD-OIS-STIR-CME      2019-04-09
+#:     So only the Fed Funds 30y pair spans the whole sample; everything else starts in
+#:     2018 or later. Quoting the earliest leg start (2018-04-27 for CME SOFR) overstates
+#:     it by three months and I did exactly that before measuring.
 
 #: The STIR grid. Ends at 3y, inside every STIR curve's support, and no further because
 #: none of them extrapolates.
