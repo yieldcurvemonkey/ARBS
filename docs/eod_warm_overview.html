@@ -110,7 +110,12 @@ section { display:flex; flex-direction:column; }
 .flow span { font-size:13.5px; color:var(--ink-2); }
 
 .scroller { overflow-x:auto; }
-table { border-collapse:collapse; width:100%; font-size:13.5px; }
+/* Scroll the table as a UNIT rather than letting five columns squeeze. Without the
+   min-width the "written by" cell wraps to four lines in a 90px column and the row
+   grows a tall empty gap beside its neighbours -- it reads as a rendering fault, which
+   is worse than a scrollbar. */
+table { border-collapse:collapse; width:100%; min-width:700px; font-size:13.5px; }
+td:last-child { min-width:190px; }
 th,td { text-align:left; padding:8px 14px 8px 0; border-bottom:1px solid var(--rule-2); vertical-align:top; }
 th { font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
      color:var(--ink-3); font-weight:500; }
@@ -127,7 +132,7 @@ strong { font-weight:700; color:var(--ink); }
 <div class="wrap">
 
 <header>
-  <p class="eyebrow">ARBS &middot; daily_cache_warmer.py &middot; 18 jobs</p>
+  <p class="eyebrow">ARBS &middot; daily_cache_warmer.py &middot; 18 jobs &middot; rev 2026-08-22</p>
   <h1>The Nightly Warm</h1>
   <p class="stand">
     What actually gets priced and banked between 18:15 and roughly 21:00 each weekday &mdash;
@@ -203,7 +208,7 @@ strong { font-weight:700; color:var(--ink); }
            end (30y) and the front end (3y STIR, on FOMC and IMM legs). 160 queries over
            eight curves. Each curve gets only the tenors it can answer &mdash; the STIR curves
            carry no extrapolation, so a request past 3y fails rather than inventing one.</p>
-        <span class="src">IRSwapsMDP(source="GSQUANT-RL") &rarr; computed TS</span></div>
+        <span class="src">warm_gsquant_curve_store.py &rarr; CurveStore, THEN IRSwapsMDP("GSQUANT-RL") &rarr; computed TS</span></div>
       <span class="dur">89s<i class="bar" style="width:4%"></i></span></div>
 
     <div class="job"><span class="n">2</span>
@@ -394,6 +399,20 @@ strong { font-weight:700; color:var(--ink); }
       </p>
     </div>
     <div class="card">
+      <h3>Some value jobs read a store nothing warms</h3>
+      <p>
+        <code>IRSwapsMDP</code> opts <code>GSQUANT-RL</code> into the CurveStore raw-curve and
+        analytics fast paths, and the TB's loader <strong>reads</strong> that store and returns
+        <code>{}</code> on a miss &mdash; it never builds. Job 1 warmed nothing from 2026-08-03
+        and reported <code>OK (0 rows x 0 cols)</code> for a month, because its only curve's
+        partitions had run out and the runner prints the shape it is handed.
+      </p>
+      <p>
+        Fixed by warming the store first and by refusing to call an empty frame a success.
+        Worth checking for any other value job whose provider is a store rather than a wire.
+      </p>
+    </div>
+    <div class="card">
       <h3>Depth is bounded by memory, not time</h3>
       <p>
         The MI01 backward depth pass stops when Excel reaches its ceiling. Measured on the first
@@ -413,8 +432,20 @@ strong { font-weight:700; color:var(--ink); }
   </div>
 </section>
 
+<section>
+  <h2>Where it stood on 2026-08-22</h2>
+  <p class="sub">The 2026-08-21 run, the first with the Excel pre-flight repairing rather than refusing.</p>
+  <div class="flow">
+    <div><b>Result</b><span><strong>2 of 18 failed</strong>, 2 skipped &mdash; against 6 of 17 the night before</span></div>
+    <div><b>Pre-flight</b><span>368 MB, under the ceiling, <em>and the add-in answers</em> &mdash; no repair needed</span></div>
+    <div><b>Recovered</b><span>swaption cube OK (1,122 s) after two blank nights; UST intraday OK (893 s)</span></div>
+    <div><b>Still failing</b><span>the UST EOD coverage guard, which caught 324 bonds that stopped updating &mdash; working as designed</span></div>
+  </div>
+</section>
+
 <p class="foot">
-  Read from scripts/daily_cache_warmer.py at 26786935 &middot; durations from the 2026-08-18 run
-  &middot; job order enforced at import, not by convention
+  Read from scripts/daily_cache_warmer.py &middot; durations from the 2026-08-18 run &middot;
+  job order enforced at import, not by convention &middot; a companion handover prompt for
+  editing this script lives at docs/daily_cache_warmer_handover.md
 </p>
 </div>
