@@ -271,6 +271,22 @@ def warm_gsquant_ois_eod(start, end):
     from Query.Unified.UnifiedQuery import UnifiedQuery
     from Query.Unified.registry import UnifiedValue
 
+    from scripts.warm_gsquant_curve_store import warm as warm_gsquant_curves
+
+    # THE STORE WARM COMES FIRST, and without it the rest of this job is decoration.
+    #
+    # IRSwapsMDP opts GSQUANT-RL into the CurveStore raw-curve and analytics fast paths,
+    # and _build_irs_curve_store_curve_map READS that store and returns {} on a miss --
+    # it never builds. Nothing in the nightly banked those curves
+    # (import_gsquant_curve_panel.py is a one-off CSV importer), so USD-OIS coasted on a
+    # historical import that ended 2026-08-03 and this job reported
+    # "OK (68.6s, 0 rows x 0 cols)" every night against an empty read.
+    #
+    # Measured for 2026-08-20: with the store warm the frame goes from 0 columns to 160.
+    # Idempotent -- a day already holding both partitions is skipped, so this is a no-op
+    # on a warm store and costs ~18s for eight cold curve-days.
+    warm_gsquant_curves(start=start, end=end, curves=tuple(_GSQUANT_CURVES))
+
     mdp = IRSwapsMDP(source="GSQUANT-RL")
     tb = TimeseriesBuilder()
 
@@ -292,6 +308,22 @@ def warm_gsquant_ois_eod(start, end):
         routers={"IRS": IRSwapsTB(mdp, show_tqdm=True)},
         ignore_cache_miss=True,
     )
+
+    # AN EMPTY FRAME IS NOT A SUCCESS, and treating it as one is what hid the outage.
+    #
+    # The runner reports whatever shape it is handed -- "OK (68.6s, 0 rows x 0 cols)" is
+    # a real line from four consecutive nights. A value job that priced nothing has not
+    # warmed anything, and it should read FAILED so somebody looks, rather than green so
+    # nobody does. This is not the Excel case: no provider was unavailable here, the job
+    # simply produced no numbers, which means something is broken.
+    if df is None or df.empty or not len(df.columns):
+        raise RuntimeError(
+            f"GS Quant EOD priced NOTHING for {start}..{end} across "
+            f"{len(_GSQUANT_CURVES)} curve(s). The curve store warm ran first, so an "
+            "empty frame here means the pricing path found no curves it could read -- "
+            "check the CurveStore partitions for these curve names before re-running."
+        )
+    log.info("  %d series priced across %d curve(s)", len(df.columns), len(_GSQUANT_CURVES))
     return df
 
 
