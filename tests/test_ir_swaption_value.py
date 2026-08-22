@@ -55,7 +55,22 @@ def test_value_enum_metrics_with_deterministic_leg_metrics(monkeypatch):
         },
     }
 
+    # ``_nvols`` (IRSwaptionValue.py) reads ``leg_implied_normal_vol_bps``
+    # DIRECTLY rather than going through ``leg_metrics`` -- a deliberate fast
+    # path added in d2e1a5ac and pinned by
+    # tests/test_ir_swaption_value_fast_path.py, which patches ``leg_metrics``
+    # to RAISE and asserts NVOL still resolves. Stubbing the metrics funnel
+    # alone therefore leaves the NVOL selectors pricing for real, and the bare
+    # ``_DummyContext`` dies on ``context.metadata`` before assertion one.
+    #
+    # Both stubs read the same ``metrics`` table, so they cannot drift apart.
+    # This is the same binding ``_nvols`` resolves (the value module's own
+    # global, imported at IRSwaptionValue.py:14), NOT pricer's -- patching
+    # pricer here would be dead code, since ``leg_metrics`` is stubbed and
+    # pricer's binding is never reached.
     monkeypatch.setattr(value_module, "leg_metrics", lambda _ctx, leg: metrics[leg.label])
+    monkeypatch.setattr(value_module, "leg_implied_normal_vol_bps",
+                        lambda _ctx, leg: metrics[leg.label]["NVOL"])
 
     package = [
         IRSwaptionPricable(
@@ -189,6 +204,8 @@ def test_forward_nvol_midcurve_single_leg_and_two_leg_modes(monkeypatch):
         "LONG": {"NVOL": 100.0},
     }
     monkeypatch.setattr(value_module, "leg_metrics", lambda _ctx, leg: metrics[leg.label])
+    monkeypatch.setattr(value_module, "leg_implied_normal_vol_bps",
+                        lambda _ctx, leg: metrics[leg.label]["NVOL"])
     monkeypatch.setattr(value_module, "leg_forward_rate", lambda _ctx, _leg: 0.02)
 
     def _model_vol(_ctx, leg, strike=None):
