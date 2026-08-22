@@ -183,7 +183,48 @@ def _analytics(curve: str, as_of: dt.date, rl_curve: Any) -> pd.DataFrame:
 
 
 def business_days(start: dt.date, end: dt.date) -> List[dt.date]:
-    return [d.date() for d in pd.bdate_range(start, end)]
+    """US GOVERNMENT BOND business days, not merely weekdays.
+
+    ``pd.bdate_range`` counts market holidays. Measured over 2026-05-20..2026-07-10 that
+    is Memorial Day, Juneteenth and the observed 4th of July -- three days GS has no
+    curve for, which arrived as three "failures" in a 38-day window. A 5% failure rate
+    that is really a calendar is worse than useless: it is a place for a genuine gap to
+    hide. The other jobs in the nightly already filter on this calendar; so does this one.
+    """
+    import QuantLib as ql
+
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    out = [d.date() for d in pd.bdate_range(start, end)
+           if cal.isBusinessDay(ql.Date(d.day, d.month, d.year))]
+    return [d for d in out if d not in _good_fridays(start.year, end.year)]
+
+
+def _good_fridays(y0: int, y1: int) -> set:
+    """Good Friday, which QuantLib's GovernmentBond calendar counts as a business day.
+
+    The US bond market closes and GS serves no curve. Two independent lines of evidence
+    rather than one: the warm reported "GS returned no curve" for 2026-04-03, and the
+    iShares holdings audit found 2026-04-03 and 2023-04-07 -- both Good Fridays -- missing
+    across ALL TWELVE funds. Excluding it is the difference between a summary where every
+    failure is worth reading and one carrying a predictable annual dud.
+    """
+    import datetime as _dt
+
+    out = set()
+    for y in range(y0, y1 + 1):
+        # Anonymous Gregorian computus, then back up two days from Easter Sunday.
+        a, b, c = y % 19, y // 100, y % 100
+        d, e = b // 4, b % 4
+        f = (b + 8) // 25
+        g = (b - f + 1) // 3          # separate statements: g is READ on the next line,
+        h = (19 * a + b - d - g + 15) % 30   # and a tuple assignment binds too late.
+        i, k = c // 4, c % 4
+        u = (32 + 2 * e + 2 * i - h - k) % 7
+        m = (a + 11 * h + 22 * u) // 451
+        month = (h + u - 7 * m + 114) // 31
+        day = ((h + u - 7 * m + 114) % 31) + 1
+        out.add(_dt.date(y, month, day) - _dt.timedelta(days=2))
+    return out
 
 
 def warm(
@@ -233,6 +274,9 @@ def warm(
         for as_of in need:
             got = built.get(as_of)
             if not got:
+                # Never silent. This branch used to increment a counter and move on, so
+                # three holidays and three real outages looked identical in the summary.
+                log.warning("  %-22s %s: GS returned no curve", curve, as_of)
                 stats["failed"] += 1
                 continue
             rl_curve = got[1] if isinstance(got, tuple) else got
