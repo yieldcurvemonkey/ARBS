@@ -196,6 +196,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
 
+from utils import window_ledger  # noqa: E402 - after the sys.path insert above
+
 log = logging.getLogger("citivelo-ust-warm")
 
 #: Environment override for the manifest path, and it exists because of a
@@ -831,10 +833,116 @@ def _save_manifest(man: dict) -> None:
 
 
 def _key(mode: str, start, end, values: Sequence[str]) -> str:
-    """What "already done" means. Widening the window or asking for a value that
-    was not fetched last time must NOT count as done, or a resumed run would
-    silently skip work it never did."""
+    """What "already done" USED to mean, and still means to an older reader.
+
+    Widening the window or asking for a value that was not fetched last time must
+    NOT count as done, or a resumed run would silently skip work it never did.
+    That requirement has not changed - see :func:`_residual_window`, which now
+    enforces it per value instead of by making the whole key move.
+
+    Still written to the manifest beside the ledger, and deliberately: if this
+    change is reverted, an older ``warm()`` reading a ledger-era manifest finds
+    the key it expects. It stamps the window that was requested, so the worst a
+    rollback can do is re-fetch.
+    """
     return f"{start}|{end}|{','.join(sorted(values))}"
+
+
+def _banked(entry: Optional[Mapping], value: str) -> list:
+    """The windows already fetched for one ``(bond, value)``.
+
+    Migrates a pre-ledger entry on read rather than in a separate pass: the old
+    ``key`` asserts exactly "this window, these values, done", so seeding the
+    value's ledger with that one interval is what the old stamp already claimed.
+    A manifest written before this change therefore costs nothing on the first
+    night rather than re-fetching five years.
+    """
+    if not entry:
+        return []
+    windows = (entry.get("windows") or {}).get(value)
+    if windows is not None:
+        return window_ledger.normalize(windows)
+
+    legacy = str(entry.get("key") or "")
+    parts = legacy.split("|")
+    if len(parts) != 3:
+        return []
+    lo, hi, values = parts
+    if value not in values.split(","):
+        return []
+    try:
+        return window_ledger.normalize([(lo, hi)])
+    except Exception:  # noqa: BLE001 - an unreadable stamp means "not banked"
+        return []
+
+
+def _residual_window(entry: Optional[Mapping], values: Sequence[str], start, end):
+    """The window this bond still owes, or ``None`` when it owes nothing.
+
+    Per VALUE, then unioned. Per value because the value set has already grown
+    once - ``INTRADAY_VALUES`` went from two to four when ``CAS_RFR`` and
+    ``YYS_RFR`` were added - and a set-shaped key makes that growth invalidate
+    every banked window for all 877 bonds. Unioned into one span because the
+    wire call is one ``start``/``end`` for a batch of tags: a bond owing
+    different tails for different values is asked for the range covering both,
+    which over-fetches the middle and never under-fetches.
+    """
+    gaps = []
+    for value in values:
+        gaps.extend(window_ledger.subtract(start, end, _banked(entry, value)))
+    return window_ledger.span(gaps)
+
+
+def _record_bond(book: dict, isin: str, *, stamp: str, values: Sequence[str],
+                 fetched, fields: Mapping[str, object]) -> None:
+    """Write one bond's manifest entry, extending its ledger by what was fetched.
+
+    ``fetched`` is the ``(lo, hi)`` this batch actually asked Velocity for, or
+    ``None`` to write the entry without banking anything - which is what a run
+    whose whole window is today does, because :func:`_bankable_end` refuses to
+    call an unsettled session done.
+
+    Values NOT in ``values`` keep whatever they had. A narrower run must never
+    erase a wider ledger: ``--values PRICE`` would otherwise drop the record of
+    every YIELD window ever fetched, and the next full run would look un-warmed
+    while the ledger claimed otherwise.
+    """
+    prior = book.get(isin)
+    windows = dict((prior or {}).get("windows") or {})
+
+    # Migrate the whole legacy key, not just the values this run asked for -
+    # otherwise a narrow run silently discards the old stamp's claim on the rest.
+    legacy = str((prior or {}).get("key") or "").split("|")
+    if not windows and len(legacy) == 3:
+        for value in legacy[2].split(","):
+            if value:
+                windows[value] = window_ledger.to_json(_banked(prior, value))
+
+    for value in values:
+        banked = window_ledger.normalize(windows.get(value) or _banked(prior, value))
+        if fetched is not None:
+            banked = window_ledger.add(banked, fetched[0], fetched[1])
+        windows[value] = window_ledger.to_json(banked)
+
+    book[isin] = {"key": stamp, "windows": windows, **dict(fields)}
+
+
+def _bankable_end(end) -> Optional[datetime.date]:
+    """The latest date this run may RECORD as fetched.
+
+    Never today. Today's session is still moving - an MI01 series grows all day
+    and an EOD print is not final until the close - so banking it would make
+    tomorrow's run skip a day it only half has. The nightly already avoids this
+    by being pointed at the last settled session (``WarmJob.banks_today``); this
+    is what protects a human running the CLI at noon, which nothing else does.
+
+    Returns ``None`` when the whole window is unbankable, which is the correct
+    answer for a run whose window is only today: it fetched, and it records
+    nothing, so tomorrow asks again.
+    """
+    end = end.date() if isinstance(end, datetime.datetime) else end
+    cutoff = datetime.date.today() - datetime.timedelta(days=1)
+    return min(end, cutoff) if end is not None else None
 
 
 def refresh(*, as_of=None, ceiling_mb: float = WORKING_CEILING_MB) -> dict:
@@ -926,27 +1034,58 @@ def warm(
     freq_token = "DAILY" if mode == "eod" else "MI01"
 
     everything = universe()
-    # "already done" means done AT THIS EXACT WINDOW AND VALUE SET. Counting the
-    # whole manifest instead would report a widened window as already warm, which
-    # is the one thing a resume must never do.
-    at_this_window = sum(1 for r in everything if book.get(r.isin, {}).get("key") == stamp)
-    todo = everything if force else [
-        r for r in everything if book.get(r.isin, {}).get("key") != stamp
-    ]
+
+    # WHAT EACH BOND STILL OWES, rather than whether its stamp matches.
+    #
+    # The stamp used to be f"{start}|{end}|{values}", so a nightly window ending
+    # at the last settled session changed it every night and all 877 bonds looked
+    # un-warmed on every run. The requirement it was enforcing has not gone away
+    # - a value never fetched must not count as done - it is now enforced per
+    # value by the ledger, which records the windows actually fetched instead of
+    # the window last asked for. See :func:`_residual_window`.
+    #
+    # Grouped by the residual so the wire call keeps its shape: ``quotes.frame``
+    # takes ONE start/end for a batch of tags, and a banked bond needing the
+    # one-day tail must not be batched with a newly auctioned one needing thirty.
+    owed: Dict[Tuple[datetime.date, datetime.date], List] = {}
+    for r in everything:
+        need = ((start, end) if force
+                else _residual_window(book.get(r.isin), wanted, start, end))
+        if need is not None:
+            owed.setdefault(need, []).append(r)
+
+    todo = [r for group in owed.values() for r in group]
     if limit:
         todo = todo[:limit]
+        kept = {r.isin for r in todo}
+        owed = {w: [r for r in g if r.isin in kept] for w, g in owed.items()}
+        owed = {w: g for w, g in owed.items() if g}
 
     total = len(todo)
+    already = len(everything) - len(todo)
+    # WHAT THE NIGHT COSTS, in the unit that moves: a bond that owes one day and
+    # a bond that owes thirty both read as "to do", and the whole point of the
+    # ledger is the difference between them. Asked-for bond-days against what a
+    # window-keyed resume would have asked for, so a regression here is visible
+    # in the run log rather than only in a wall clock.
+    asked = sum(len(g) * ((w[1] - w[0]).days + 1) for w, g in owed.items())
+    flat = len(everything) * ((end - start).days + 1)
     log.info(
-        "%s warm: %d bonds to do, %d/%d already warm at THIS window, "
-        "%d in the manifest overall; values=%s, %s..%s, Excel %.0f MB, ceiling %.0f",
-        mode, total, at_this_window, len(everything), len(book),
+        "%s warm: %d bonds to do over %d distinct residual window(s), %d/%d owe "
+        "nothing, %d in the manifest overall; %s bond-days asked against %s for "
+        "the whole universe over the whole window (%s); values=%s, %s..%s, "
+        "Excel %.0f MB, ceiling %.0f",
+        mode, total, len(owed), already, len(everything), len(book),
+        f"{asked:,}", f"{flat:,}",
+        f"{flat / asked:.0f}x less" if asked else "nothing to ask",
         ",".join(wanted), start, end, mem0, ceiling_mb,
     )
+    for (w_lo, w_hi), group in sorted(owed.items()):
+        log.info("  %d bond(s) owe %s..%s", len(group), w_lo, w_hi)
     if not todo:
-        log.info("  nothing to do — the manifest says this window is fully warm")
-        return {"mode": mode, "done": 0, "already": len(book), "stopped": False,
-                "coverage": {}, "regressed": {}}
+        log.info("  nothing to do — the ledger says this window is fully banked")
+        return {"mode": mode, "done": 0, "of": 0, "already": len(book),
+                "stopped": False, "reason": "", "coverage": {}, "regressed": {}}
 
     from MDP.CitiVelocityExcel.cache import CitiVeloTagCache, default_cache_dir
 
@@ -961,8 +1100,21 @@ def warm(
     stopped_reason = ""
     t_start = time.perf_counter()
     try:
-        for i in range(0, total, batch):
-            chunk = todo[i:i + batch]
+        # One flat list of (fetch window, chunk), so the memory ceiling, the
+        # batch numbering and the manifest all still see a single sequence of
+        # batches - only now each batch carries the window ITS bonds owe.
+        batches = []
+        for _w, _group in sorted(owed.items()):
+            for _i in range(0, len(_group), batch):
+                batches.append((_w[0], _w[1], _group[_i:_i + batch]))
+
+        for bi, (f_start, f_end, chunk) in enumerate(batches):
+            # WHAT THIS BATCH MAY RECORD, which is not always what it fetches.
+            # An unsettled session is fetched (a partial day is better than no
+            # day in the cache) and never banked, so tomorrow asks for it again.
+            _bank_hi = _bankable_end(f_end)
+            banked_to = ((f_start, _bank_hi)
+                         if _bank_hi is not None and _bank_hi >= f_start else None)
             mem = None
             try:
                 from MDP.CitiVelocityExcel.memory_guard import excel_memory_mb
@@ -981,8 +1133,17 @@ def warm(
             plan = fetcher.plan(chunk, values=wanted)
             tags = [t for e in plan.values() for t in e["tags"].values()]
             if not tags:
+                # Recorded, but NOTHING BANKED, and that is deliberate. A bond
+                # that serves none of the requested values costs no wire at all
+                # (there is nothing to ask for), so re-checking it nightly is
+                # free - and it is the only way a value the catalog validates
+                # later ever gets noticed. Banking here would make "serves
+                # nothing" permanent.
                 for r in chunk:
-                    book[r.isin] = {"key": stamp, "tags": 0, "note": "serves none of these values"}
+                    _record_bond(book, r.isin, stamp=stamp, values=wanted,
+                                 fetched=None,
+                                 fields={"tags": 0,
+                                         "note": "serves none of these values"})
                 continue
             # ASK FOR THE REASONS. ``frame`` returns an empty frame and raises
             # nothing whether every tag failed or every tag legitimately held no
@@ -997,28 +1158,29 @@ def warm(
             tag_owner = {str(t): isin for isin, e in plan.items()
                          for t in e["tags"].values()}
             alive_bonds = {isin for isin in plan
-                           if not _retired_before(_maturity_of(plan[isin]), start)}
+                           if not _retired_before(_maturity_of(plan[isin]), f_start)}
             alive_tags = [t for t in tags if tag_owner.get(str(t)) in alive_bonds]
 
             # WHAT DID THIS BATCH ACTUALLY NEED, and what did the sidecars look
             # like before anything was asked for? Both are sampled BEFORE the
             # fetch, because both are the "before" half of a comparison the wire
             # cannot fake. See :func:`_sidecar_state`.
-            need = _tags_needing_data(cover_cache, tags, freq_token, start=start, end=end)
+            need = _tags_needing_data(cover_cache, tags, freq_token,
+                                      start=f_start, end=f_end)
             before = _sidecar_state(cover_cache, tags, freq_token)
 
             reported: Dict[str, str] = {}
             try:
                 if mode == "eod":
-                    frame = quotes.frame(tags, "DAILY", start=start, end=end,
+                    frame = quotes.frame(tags, "DAILY", start=f_start, end=f_end,
                                          failures=reported)
                     rows_held = int(len(frame)) if frame is not None else 0
                 else:
-                    rows_held = _warm_intraday(quotes, tags, start=start, end=end,
+                    rows_held = _warm_intraday(quotes, tags, start=f_start, end=f_end,
                                                failures=reported)
             except Exception as exc:  # noqa: BLE001 - one bad batch must not lose the rest
                 stopped_reason = f"{type(exc).__name__}: {exc}"
-                log.warning("STOPPING at batch %d: %s", i // batch, stopped_reason[:200])
+                log.warning("STOPPING at batch %d: %s", bi, stopped_reason[:200])
                 break
 
             after = _sidecar_state(cover_cache, tags, freq_token)
@@ -1026,7 +1188,7 @@ def warm(
             log.debug(
                 "  batch %d: %d/%d tag(s) needed data, %d sidecar(s) moved, "
                 "the cache holds %d row(s) in the window",
-                i // batch, len(need), len(tags), len(persisted), rows_held,
+                bi, len(need), len(tags), len(persisted), rows_held,
             )
 
             # DID THE TRANSPORT ANSWER? Asked first, and asked per tag rather
@@ -1063,9 +1225,9 @@ def warm(
                     and len(alive_failed_bonds) >= MIN_ALIVE_BONDS_FOR_OUTAGE):
                 shown = ", ".join(f"{t} ({why})" for t, why in sorted(faults.items())[:5])
                 stopped_reason = (
-                    f"batch {i // batch}: Velocity FAILED every tag of all "
+                    f"batch {bi}: Velocity FAILED every tag of all "
                     f"{len(alive_failed_bonds)} bond(s) in it that were alive on "
-                    f"{start} - {shown}"
+                    f"{f_start} - {shown}"
                     f"{f' and {len(faults) - 5} more' if len(faults) > 5 else ''}. "
                     f"A matured bond cannot explain that: these bonds had not "
                     f"redeemed, so the window is one Velocity should be able to "
@@ -1081,7 +1243,7 @@ def warm(
                 log.warning(
                     "  batch %d: %d of %d tag(s) failed on %d bond(s) - recorded, "
                     "not fatal (%s)",
-                    i // batch, len(faults), len(tags), len(failed_bonds),
+                    bi, len(faults), len(tags), len(failed_bonds),
                     ", ".join(f"{t} ({why})" for t, why in sorted(faults.items())[:3]),
                 )
 
@@ -1102,7 +1264,7 @@ def warm(
             # handled below as coverage, not as a fault.
             if need and not persisted and not reported:
                 stopped_reason = (
-                    f"batch {i // batch} asked Velocity for {len(need)} of "
+                    f"batch {bi} asked Velocity for {len(need)} of "
                     f"{len(tags)} tag(s), was told nothing at all, and moved no "
                     f"sidecar in the {freq_token} cache — the transport is not "
                     f"writing to the tag cache. This is the fault that let an "
@@ -1124,6 +1286,10 @@ def warm(
             # once at the end of the run. See :func:`tag_states`.
             covers = {
                 r.isin: tag_states(
+                    # start..end, NOT the residual. Coverage is a question
+                    # about the DATA and the cache is cumulative, so judging it
+                    # on the tail this batch happened to fetch would make the
+                    # regression alarm mean something different every night.
                     freq_token, plan[r.isin]["tags"], start=start, end=end,
                     maturity=_maturity_of(plan[r.isin]), cache=cover_cache,
                 )
@@ -1185,38 +1351,48 @@ def warm(
                 log.info(
                     "  batch %d served no rows for %d tags (%s) — recorded and "
                     "skipped, not treated as a fault",
-                    i // batch, len(tags), ", ".join(why),
+                    bi, len(tags), ", ".join(why),
                 )
+                # BANKED, unlike the branch above. Velocity was asked for this
+                # window and answered that there is nothing in it - which for an
+                # MI01 request against a bond that redeemed in 2016 is the
+                # correct and permanent answer. 528 of the 877 catalogued bonds
+                # have matured; re-asking them every night is the largest single
+                # piece of waste this ledger removes.
                 for r in chunk:
                     if r.isin in unstamped:
                         continue
-                    book[r.isin] = {
-                        "key": stamp,
-                        "tags": 0,
-                        "note": "no rows in this window",
-                        "why": ", ".join(why),
-                        "at": datetime.datetime.now().isoformat(timespec="seconds"),
-                        **records[r.isin],
-                    }
+                    _record_bond(
+                        book, r.isin, stamp=stamp, values=wanted, fetched=banked_to,
+                        fields={
+                            "tags": 0,
+                            "note": "no rows in this window",
+                            "why": ", ".join(why),
+                            "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                            **records[r.isin],
+                        },
+                    )
                 _save_manifest(man)
                 continue
 
             for r in chunk:
                 if r.isin in unstamped:
                     continue
-                book[r.isin] = {
-                    "key": stamp,
-                    "tags": len(plan[r.isin]["tags"]),
-                    "at": datetime.datetime.now().isoformat(timespec="seconds"),
-                    # The MEASUREMENT, not a boolean. "Done" used to mean only
-                    # "this batch did not abort" - true of a night that fetched
-                    # nothing new for a third of the universe.
-                    **records[r.isin],
-                }
+                _record_bond(
+                    book, r.isin, stamp=stamp, values=wanted, fetched=banked_to,
+                    fields={
+                        "tags": len(plan[r.isin]["tags"]),
+                        "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                        # The MEASUREMENT, not a boolean. "Done" used to mean
+                        # only "this batch did not abort" - true of a night that
+                        # fetched nothing new for a third of the universe.
+                        **records[r.isin],
+                    },
+                )
             done += len(chunk) - len(unstamped & {r.isin for r in chunk})
             tags_done += len(tags)
             _save_manifest(man)          # after EVERY batch: a stop costs one batch
-            if (i // batch) % 5 == 0 or done >= total:
+            if (bi) % 5 == 0 or done >= total:
                 log.info("  %d/%d bonds, %d tags, Excel %.0f MB, %.0fs",
                          done, total, tags_done, mem, time.perf_counter() - t_start)
     finally:
