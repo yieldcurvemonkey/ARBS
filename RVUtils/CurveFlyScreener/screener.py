@@ -5,10 +5,13 @@ See ``docs/curvefly/DESIGN.md``. The short version:
 
 * carry-and-roll uses the **static-curve** convention via the aged-rate identity
   ``CR = R(aged structure | today's curve) - R(structure | today's curve)``.
-  Ageing moves the start closer by the horizon and leaves the maturity fixed, so
-  a spot ``T``y becomes ``h x (T-h)`` and a forward ``f x T`` becomes ``(f-h) x T``.
+  Ageing gives the trade ``h`` less time to run on the SAME curve, so a spot
+  ``T``y becomes ``0 x (T-h)`` -- the shorter SPOT rate -- and a forward
+  ``f x T`` becomes ``(f-h) x T``. See ``age()``; the spot row is the one that is
+  easy to get wrong.
 * the forwards-realised convention is deliberately NOT used: it is identically
-  zero for a par swap, so it ranks nothing.
+  zero for a par swap, so it ranks nothing. Comparing a spot leg against the
+  ``h x (T-h)`` forward is that convention in disguise.
 * ``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` is reported for comparison only. It
   correlates -0.136 with the published bank screen this is graded against.
 
@@ -70,10 +73,21 @@ class Structure:
 
 # --------------------------------------------------------------------- pricing
 
-def par_rate_bp(pricer: Any, leg: Leg) -> float:
-    """Par swap rate in bp for ``leg`` on the pricer's curve."""
+def par_rate_bp(pricer: Any, leg: Leg, cache: Optional[Dict] = None) -> float:
+    """Par swap rate in bp for ``leg`` on the pricer's curve.
+
+    ``cache`` memoises by (fwd, tenor). A 1,000-structure screen touches only
+    ~70 distinct legs today and ~70 aged, so without it the same handful of
+    swaps get rebuilt and repriced thousands of times.
+    """
+    key = (leg.fwd, leg.tenor)
+    if cache is not None and key in cache:
+        return cache[key]
     swap = pricer.build_irswap(fwd=f"{leg.fwd:g}Y", tenor=f"{leg.tenor:g}Y", notional=1.0)
-    return float(pricer.fair_rate(swap)) * 1e4
+    val = float(pricer.fair_rate(swap)) * 1e4
+    if cache is not None:
+        cache[key] = val
+    return val
 
 
 def dv01_bp(pricer: Any, leg: Leg, h_bp: float = 1.0) -> float:
@@ -120,11 +134,12 @@ def age(leg: Leg, horizon_y: float) -> Leg:
     return Leg(0.0, new_tenor)
 
 
-def structure_rate_bp(pricer: Any, s: Structure) -> float:
-    return float(sum(w * par_rate_bp(pricer, l) for l, w in zip(s.legs, s.weights)))
+def structure_rate_bp(pricer: Any, s: Structure, cache: Optional[Dict] = None) -> float:
+    return float(sum(w * par_rate_bp(pricer, l, cache) for l, w in zip(s.legs, s.weights)))
 
 
-def carry_roll_bp(pricer: Any, s: Structure, horizon_y: float = 1.0) -> float:
+def carry_roll_bp(pricer: Any, s: Structure, horizon_y: float = 1.0,
+                  cache: Optional[Dict] = None) -> float:
     """Static-curve carry-and-roll of ``s`` over ``horizon_y``, in bp of structure.
 
     The aged-rate identity. Sign convention: positive means the structure's own
@@ -132,7 +147,7 @@ def carry_roll_bp(pricer: Any, s: Structure, horizon_y: float = 1.0) -> float:
     spread earns it.
     """
     aged = Structure(s.label, tuple(age(l, horizon_y) for l in s.legs), s.weights, s.kind)
-    return structure_rate_bp(pricer, aged) - structure_rate_bp(pricer, s)
+    return structure_rate_bp(pricer, aged, cache) - structure_rate_bp(pricer, s, cache)
 
 
 def neutral_weights(pricer: Any, legs: Sequence[Leg], belly: int = 1) -> Tuple[float, ...]:
@@ -209,13 +224,14 @@ def screen(
     the screen never silently substitutes a constant volatility.
     """
     rows = []
+    cache: Dict = {}
     for s in structures:
         try:
             if dv01_neutral:
                 w = neutral_weights(pricer, s.legs)
                 s = dataclasses.replace(s, weights=w)
-            lvl = structure_rate_bp(pricer, s)
-            cr = carry_roll_bp(pricer, s, horizon_y)
+            lvl = structure_rate_bp(pricer, s, cache)
+            cr = carry_roll_bp(pricer, s, horizon_y, cache)
         except Exception as exc:            # a leg the curve cannot express
             rows.append(dict(label=s.label, kind=s.kind, level_bp=np.nan,
                              cr_bp=np.nan, error=str(exc)[:80]))
@@ -237,3 +253,79 @@ def screen(
     ann = df["rlzd_vol_bp"] * math.sqrt(business_days)
     df["rac"] = np.where(ann > 0, df["cr_bp"] / ann, np.nan)
     return df.sort_values("rac", ascending=False, na_position="last").reset_index(drop=True)
+
+
+# ------------------------------------------------------- history composition
+
+def compose_levels(leg_hist: pd.DataFrame,
+                   structures: Sequence[Structure]) -> pd.DataFrame:
+    """Structure level histories, composed linearly from a LEG history.
+
+    ``leg_hist`` is dates x leg-label in bp. A structure's level is
+    ``sum(w_i * r_i)``, so one leg warm serves every curve and fly without a
+    second fetch. A structure whose legs are not all present is dropped rather
+    than returned part-composed -- a fly missing a wing is not a fly.
+    """
+    out: Dict[str, pd.Series] = {}
+    have = set(leg_hist.columns)
+    for s in structures:
+        labels = [f"{l.fwd:g}y{l.tenor:g}y" if l.fwd else f"{l.tenor:g}y" for l in s.legs]
+        if not all(x in have for x in labels):
+            continue
+        acc = None
+        for lab, w in zip(labels, s.weights):
+            term = leg_hist[lab] * w
+            acc = term if acc is None else acc + term
+        out[s.label] = acc
+    return pd.DataFrame(out)
+
+
+def add_risk_adjustment(df: pd.DataFrame, levels: pd.DataFrame, *,
+                        business_days: float = BUSINESS_DAYS,
+                        min_obs: int = 100) -> pd.DataFrame:
+    """Attach realised vol, z-scores and ``rac`` from composed level histories.
+
+    ``rac = cr_bp / (rlzd_daily_vol_bp * sqrt(business_days))`` -- carry over the
+    horizon divided by annualised realised volatility of the structure's own
+    level. Structures with fewer than ``min_obs`` observations get NaN rather
+    than a z-score computed off a handful of points.
+    """
+    d = levels.diff()
+    n = levels.notna().sum()
+    vol = d.std()
+    vol[n < min_obs] = np.nan
+    mu, sd = levels.mean(), levels.std()
+    last = levels.ffill().iloc[-1] if len(levels) else pd.Series(dtype=float)
+
+    df = df.copy()
+    df["n_obs"] = df.label.map(n)
+    df["rlzd_vol_bp"] = df.label.map(vol)
+    df["level_hist_bp"] = df.label.map(last)
+    df["zs"] = df.label.map((last - mu) / sd.replace(0.0, np.nan))
+    ann = df["rlzd_vol_bp"] * math.sqrt(business_days)
+    df["rac"] = np.where(ann > 0, df["cr_bp"] / ann, np.nan)
+    return df
+
+
+def breakeven_daily_bp(carry_bp: float, gamma_bp_per_bp2: float,
+                       business_days: float = BUSINESS_DAYS) -> float:
+    """Daily move at which convexity exactly offsets carry, in bp.
+
+    Over ``business_days`` moves of size ``s`` a DV01-neutral package accumulates
+    ``business_days * 0.5 * gamma * s^2`` from its curvature, against ``carry_bp``
+    of carry-and-roll. Setting them equal:
+
+        s* = sqrt(2 * |carry| / (business_days * |gamma|))
+
+    Read it in the direction of the trade. For a **flattener** (negative carry,
+    positive curvature) ``s*`` is the vol you must realise to pay for the carry:
+    realised above ``s*`` means the curve is cheap gamma. For a **steepener**
+    (positive carry, negative curvature) it is the vol at which your concavity
+    eats the carry: realised BELOW ``s*`` means the carry is worth collecting.
+    Same number, opposite reading.
+    """
+    if not np.isfinite(carry_bp) or not np.isfinite(gamma_bp_per_bp2):
+        return float("nan")
+    if abs(gamma_bp_per_bp2) < 1e-12:
+        return float("inf")
+    return math.sqrt(2.0 * abs(carry_bp) / (business_days * abs(gamma_bp_per_bp2)))
