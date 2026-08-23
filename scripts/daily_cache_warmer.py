@@ -1173,6 +1173,8 @@ def _describe_step_failure(f):
     """
     if f.returncode == "TIMEOUT":
         head = f"{f.label} timed out"
+    elif f.returncode == "COVERAGE":
+        head = f"{f.label} thinned"
     elif f.returncode == "NOT RUN":
         head = f"{f.label} was not run"
     else:
@@ -2019,7 +2021,7 @@ def warm_citivelo_ust_universe_eod(start, end):
             f"UST universe EOD warm stopped after {out['done']}/{out['of']} bonds: "
             f"{out['reason']}. Progress is in the manifest; re-run to continue."
         )
-    _raise_on_coverage_regression(out, "EOD")
+    _report_coverage_regression(out, "EOD")
     return None
 
 
@@ -2038,18 +2040,71 @@ def warm_citivelo_ust_universe_eod(start, end):
 #: condition nobody can act on, which is precisely the always-failing exit code
 #: this warmer's docstring says trains an operator to stop reading exit codes.
 #: The level goes to the log and to ``status``.
-def _raise_on_coverage_regression(out, label):
+#: What share of the universe has to go quiet before a coverage regression is a
+#: FAILURE rather than a report. See :func:`_report_coverage_regression`.
+_CV_COVERAGE_FAIL_FRACTION = float(
+    os.environ.get("ARBS_WARM_COVERAGE_FAIL_FRACTION", "0.25")
+)
+
+
+def _report_coverage_regression(out, label):
+    """Record newly-quiet tags. Only an OUTAGE-sized one fails the job.
+
+    RAISING WAS TOO BLUNT, and it cost more than it caught. This is a STORE
+    job, so the runner marks its asset blocking when it fails and skips every
+    consumer - and the thing being reported is that the warm COMPLETED and Citi
+    served less than last night. The tag cache is cumulative; its consumers can
+    still run against what is banked. Failing here throws away thousands of
+    seconds of downstream work to report that a vendor got thinner.
+
+    Measured on the 2026-08-23 catch-up: **7 bonds of 877**, all of them losing
+    ``ASW_4_GBP`` / ``ASW_4_CHF`` / ``ASW_4_EUR`` - the cross-currency
+    asset-swap matrix, which is the thinnest family Citi publishes. That is
+    vendor noise, and on the strength of it both UST value jobs were skipped.
+
+    So the default is: record it as a SKIPPED STEP. It is named in SUMMARY, it
+    moves the run to exit 2, and it does NOT disown the store asset - which is
+    exactly the distinction the runner already draws between a job that failed
+    (may have written half a partition) and one that was skipped (wrote
+    nothing). A completed warm reporting thinner coverage is the third case and
+    belongs with the second.
+
+    A genuinely big regression still fails, because at some size it stops being
+    noise and starts being an outage - and the consumers building OFFLINE would
+    write empty columns that look like days Citi served nothing. A quarter of
+    the universe is the line; 7/877 is 0.8%, and the 324/877 false alarm this
+    branch fixed would have been 37%.
+    """
     regressed = out.get("regressed") or {}
     if not regressed:
         return
+    universe = int(out.get("of") or 0)
     shown = ", ".join(
         f"{isin}: {', '.join(vals)}" for isin, vals in sorted(regressed.items())[:5]
     )
     more = f" and {len(regressed) - 5} more" if len(regressed) > 5 else ""
-    raise RuntimeError(
-        f"UST universe {label} warm: {len(regressed)} bond(s) newly stopped updating "
-        f"since the last run ({shown}{more}). The warm itself completed - this is a "
-        f"coverage regression, not a partial run, so re-running will not clear it."
+    share = (len(regressed) / universe) if universe else 1.0
+    detail = (
+        f"{len(regressed)} of {universe or '?'} bond(s) newly stopped updating "
+        f"since the last run ({shown}{more})"
+    )
+
+    if share >= _CV_COVERAGE_FAIL_FRACTION:
+        raise RuntimeError(
+            f"UST universe {label} warm: {detail}. That is {share:.0%} of the "
+            "universe, past the point where this reads as vendor noise - the "
+            "consumers build OFFLINE, so a gap this wide becomes empty columns "
+            "that look like days Citi served nothing."
+        )
+
+    log.warning(
+        "  UST universe %s warm: %s. The warm COMPLETED - this is coverage, not a "
+        "partial run, so re-running will not clear it and the consumers still have "
+        "a cumulative tag cache to read.",
+        label, detail,
+    )
+    _SUBPROCESS_SKIPS.append(
+        _StepFailure(f"UST universe {label} coverage", "COVERAGE", detail)
     )
 
 
@@ -2128,7 +2183,7 @@ def warm_citivelo_ust_universe_intraday(start, end):
         # no cron job connected). Left to propagate, the runner's
         # ``except excel_errors`` would label the WHOLE job SKIPPED, disowning a
         # forward warm that had already succeeded, and
-        # ``_raise_on_coverage_regression`` below would never run - silencing the
+        # ``_report_coverage_regression`` below would never run - silencing the
         # alarm that exists precisely to notice a bond that stopped updating.
         #
         # Depth is the optional half of this job. It may cost the run an exit
@@ -2166,7 +2221,7 @@ def warm_citivelo_ust_universe_intraday(start, end):
                              f"{type(exc).__name__}: {exc}")
             )
 
-    _raise_on_coverage_regression(out, "intraday")
+    _report_coverage_regression(out, "intraday")
     return None
 
 

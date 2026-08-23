@@ -410,8 +410,13 @@ def test_excel_dying_between_the_forward_warm_and_the_depth_pass_keeps_the_alarm
     seconds between the forward warm's last between-batch check and the depth
     call. Left to propagate, the runner's ``except excel_errors`` labels the
     WHOLE job SKIPPED — disowning a forward warm that already succeeded — and
-    ``_raise_on_coverage_regression`` never runs, which silences the alarm that
+    ``_report_coverage_regression`` never runs, which silences the alarm that
     exists to notice a bond that stopped updating.
+
+    The alarm no longer RAISES for a thin regression - one bond of 877 is vendor
+    noise, and raising from a STORE job disowns its asset and skips every
+    consumer. It is recorded as a COVERAGE step instead. What this test pins is
+    unchanged: the depth pass must not stop the alarm being reached.
     """
     import datetime
 
@@ -431,11 +436,11 @@ def test_excel_dying_between_the_forward_warm_and_the_depth_pass_keeps_the_alarm
 
     before = len(warmer._SUBPROCESS_SKIPS)
     try:
-        with pytest.raises(RuntimeError, match="newly stopped updating"):
-            warmer.warm_citivelo_ust_universe_intraday(None, datetime.date(2026, 8, 20))
-        assert len(warmer._SUBPROCESS_SKIPS) == before + 1, (
-            "the depth pass vanished without a trace"
-        )
+        warmer.warm_citivelo_ust_universe_intraday(None, datetime.date(2026, 8, 20))
+        added = warmer._SUBPROCESS_SKIPS[before:]
+        kinds = [s.returncode for s in added]
+        assert "NOT RUN" in kinds, "the depth pass vanished without a trace"
+        assert "COVERAGE" in kinds, "the coverage alarm was swallowed by the depth pass"
     finally:
         del warmer._SUBPROCESS_SKIPS[before:]
 
@@ -466,12 +471,13 @@ def test_a_defect_in_the_depth_pass_is_a_failure_and_still_keeps_the_alarm(
     before_f = len(warmer._SUBPROCESS_FAILURES)
     before_s = len(warmer._SUBPROCESS_SKIPS)
     try:
-        with pytest.raises(RuntimeError, match="newly stopped updating"):
-            warmer.warm_citivelo_ust_universe_intraday(None, datetime.date(2026, 8, 20))
+        warmer.warm_citivelo_ust_universe_intraday(None, datetime.date(2026, 8, 20))
         assert len(warmer._SUBPROCESS_FAILURES) == before_f + 1
-        assert len(warmer._SUBPROCESS_SKIPS) == before_s, (
+        added = warmer._SUBPROCESS_SKIPS[before_s:]
+        assert [s.returncode for s in added] == ["COVERAGE"], (
             "a defect was filed as a skip; SKIPPED means 'run the thing the "
-            "message names', and nobody can act on a ValueError at 18:15"
+            "message names', and nobody can act on a ValueError at 18:15 - the "
+            "only skip here should be the coverage report"
         )
     finally:
         del warmer._SUBPROCESS_FAILURES[before_f:]
