@@ -2466,6 +2466,60 @@ _CV_BOND_INTRADAY_OPEN = datetime.time(8, 0)
 _CV_BOND_INTRADAY_CLOSE = datetime.time(17, 0)
 
 
+def _report_citivelo_bond_coverage(aliases, as_of):
+    """Say WHICH aliases Citi cannot quote, once, before pricing hides it.
+
+    A bond outside Citi's committed universe does not raise here - the value
+    jobs drop it and return a shorter frame - and a shorter frame is exactly
+    what a quiet market looks like. The per-bond ``BondNotQuotedError`` goes to
+    the log at INFO from inside a pricing loop, one line per (bond, reference
+    point), which on a 37-stamp intraday run means the same three bonds
+    reported 111 times among thousands of tqdm updates.
+
+    The bonds this misses are not the obscure ones. Measured 2026-08-21 on this
+    machine, the three aliases that failed were CT3, CT10 and CT30 - the current
+    ON-THE-RUNS - because the committed harvest predates their auction. Citi's
+    universe moves in both directions (Treasury auctions weekly; 24 of the 349
+    bonds Citi carries mature during 2026), and the newest issues are both the
+    most traded and the ones a stale catalog is guaranteed to be missing.
+
+    The fix is a universe refresh, which needs Excel, so this names the command
+    rather than trying to do it: ``citivelo_ust_universe_warm.warm`` already
+    calls ``refresh()`` first when it can connect.
+    """
+    try:
+        from MDP.CitiVelocityExcel.bonds.resolution import resolve_bonds
+        from MDP.FixedRateBonds.FixedRateBondsMDP import (
+            FixedRateBondsMDP, _filter_and_rank_ref_df,
+        )
+        from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import (
+            update_reference_data,
+        )
+
+        mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL", offline=True)
+        ref_df = _filter_and_rank_ref_df(update_reference_data(source="fiscaldata"), as_of)
+        alias_to_cusip, _ = mdp._resolve_aliases_bulk(list(aliases), as_of, ref_df=ref_df)
+        _, failures = resolve_bonds(list(alias_to_cusip.values()), strict=False)
+    except Exception as exc:  # noqa: BLE001 - a report must not fail the warm
+        log.warning("  could not check Citi bond coverage (%s)", exc)
+        return
+
+    if not failures:
+        log.info("  Citi quotes all %d alias(es)", len(aliases))
+        return
+
+    by_cusip = {cusip: alias for alias, cusip in alias_to_cusip.items()}
+    unquoted = sorted(by_cusip.get(c, c) for c in failures)
+    log.warning(
+        "  Citi does not quote %d of %d alias(es): %s. These become MISSING "
+        "COLUMNS, not zeros - a shorter frame that reads like a quiet market. "
+        "The committed bond universe predates their auction; the fix is the "
+        "universe refresh inside 'CITIVELO UST universe tags EOD', which needs "
+        "a usable Excel: python scripts/citivelo_ust_universe_warm.py eod --years 1",
+        len(unquoted), len(aliases), ", ".join(unquoted),
+    )
+
+
 def warm_citivelo_ust_intraday_values(start, end):
     """Job [VALUE]: UST bond values at MI01, off the banked minute tags.
 
@@ -2508,6 +2562,8 @@ def warm_citivelo_ust_intraday_values(start, end):
     if not days:
         log.info("  no business days in range")
         return None
+
+    _report_citivelo_bond_coverage(_CV_BOND_ALIASES, end)
 
     mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL", offline=True)
     tb = TimeseriesBuilder()

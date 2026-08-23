@@ -122,6 +122,36 @@ class SnapshotPolicy:
         return cls()
 
     @classmethod
+    def today_live(cls, *, minutes: float = 20.0) -> "SnapshotPolicy":
+        """For an intraday request whose date is TODAY: bounded, and soft on miss.
+
+        The minute store is filled by a POST-CLOSE batch, so during a session
+        today's minutes are not in it yet. Under :meth:`legacy` that is not a
+        miss - the window is ``(date, -1, +1)`` and nearest-in-either-direction
+        will happily answer with YESTERDAY. Measured 2026-08-08: a request for
+        11:00 today returned a curve from 2026-08-07 14:07, in 2 ms, from cache,
+        with ``snapshot_lag_seconds = 75180`` (20.9 h) and no error anywhere. The
+        object is internally consistent - reference date and fixings follow the
+        SERVED snapshot - which is what makes it hard to notice.
+
+        Bounding the lag turns that into a miss, and ``on_miss="none"`` is what
+        makes the miss useful rather than fatal: the caller falls through to the
+        live path, which for an intraday request reads ``MI01`` bounded above by
+        the requested instant - today's minutes, off the same ``CVTSHIST``
+        transport the store was built from.
+
+        Twenty minutes is the tolerance because a warm store is not the enemy
+        here: if today's minutes HAVE been banked (a mid-session warm, a
+        re-run), the store still answers and nothing goes to the wire. Only a
+        genuinely absent tail escalates.
+
+        Backward-only, because ``allow_future`` is what let a request for 11:00
+        be answered from 14:07 in the first place.
+        """
+        return cls(method="asof", max_lag=datetime.timedelta(minutes=minutes),
+                   allow_future=False, on_miss="none")
+
+    @classmethod
     def strict(
         cls,
         *,
