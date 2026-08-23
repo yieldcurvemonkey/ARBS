@@ -54,6 +54,22 @@ if g["diff"].abs().max() > 3.0:
 print(g.reindex(g["diff"].abs().sort_values(ascending=False).index).head(4).round(2).to_string(index=False))
 
 df = add_risk_adjustment(df, levels)
+
+# ---- GATE: curve-interpolation degeneracy. Legs read off the same curve nodes
+# move in lockstep, so a structure spanning no node has a level that is nearly
+# constant by construction -- and a near-zero denominator makes rac explode.
+# These are the highest-ranked rows if you do not remove them, and they are not
+# trades. (ConvexityRV hit the same thing: "a control can be structurally blind".)
+VOL_FLOOR = 0.25
+deg = df[df.rlzd_vol_bp < VOL_FLOOR]
+print(f"\n=== GATE degeneracy: {len(deg)} structures under {VOL_FLOOR}bp/day of "
+      f"realised vol, excluded ===")
+if len(deg):
+    print("  worst offenders by the rac they would have scored:")
+    print(deg.reindex(deg.rac.abs().sort_values(ascending=False).index)
+          .head(5)[["label", "level_bp", "cr_bp", "rlzd_vol_bp", "rac"]]
+          .round(3).to_string(index=False))
+df = df[df.rlzd_vol_bp >= VOL_FLOOR].copy()
 df.to_csv(REPO / "docs" / "curvefly" / "screen_full_2026-08-21.csv", index=False)
 
 named = ["10y10y/20y10y", "15y5y/20y5y", "20y5y/25y5y", "5s10s30s", "2s7s20s",
