@@ -1135,6 +1135,36 @@ _EXCEPTION_LINE = re.compile(
 )
 
 
+def _job_status(elapsed, result):
+    """The SUMMARY line for a job that returned, including what it SAID.
+
+    A frame reports its shape, as it always did - and an EMPTY frame still
+    reports ``0 rows x 0 cols`` rather than a bare OK, because that exact line
+    is what hid the GS Quant outage for a month and it has to stay visible.
+
+    What is new is that a job returning a STRING is no longer ignored. Three do,
+    and each one is reporting its own coverage:
+
+        warm_stirf_cme_session   -> "STIRF backfill: 5 days x 3 curves"
+        warm_stirfo_eod          -> "STIRFO EOD: 5 days, 60 snapshots, 60 smiles"
+        warm_ustf_invoice_caches -> "UST futures warm: 5 day(s)"
+
+    On the 2026-08-23 catch-up, STIRFO returned in 0.2 s and the log said
+    ``OK (0.2s)`` - indistinguishable from a job that did nothing, which is the
+    single shape this warm keeps being bitten by. The string said
+    ``5 days, 60 snapshots, 60 smiles``, which is the difference between "it ran"
+    and "it covered the week", and it was being dropped on the floor.
+    """
+    shape = getattr(result, "shape", None)
+    status = f"OK ({elapsed:.1f}s"
+    if shape:
+        status += f", {shape[0]} rows x {shape[1]} cols"
+    status += ")"
+    if isinstance(result, str) and result.strip():
+        status += f" {_clip(result.strip())}"
+    return status
+
+
 def _describe_step_failure(f):
     """One SUMMARY-ready phrase for a lost step, whatever kind of loss it was.
 
@@ -2974,11 +3004,7 @@ def main():
                     unmet.setdefault(asset, (True, f"{job.name!r} failed"))
                 log.error("  %s", status)
             else:
-                shape = getattr(result, "shape", None)
-                status = f"OK ({elapsed:.1f}s"
-                if shape:
-                    status += f", {shape[0]} rows x {shape[1]} cols"
-                status += ")"
+                status = _job_status(elapsed, result)
                 log.info("  %s", status)
             if waived:
                 # Appended to whatever the job's own status is, so a job that did
