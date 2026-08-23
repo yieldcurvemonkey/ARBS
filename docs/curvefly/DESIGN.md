@@ -18,29 +18,41 @@ The forwards-realised case is worth stating explicitly because it is the common
 trap: if the forward curve is realised, carry-and-roll over the life of a par
 swap is exactly zero by construction, so a screener built on it ranks nothing.
 
-Under the static-curve convention there is a clean identity (the Nordea note
-formulation): **carry-and-roll over horizon `h` is the rate of the aged structure,
-seen from today, minus the structure's rate today.**
+Under the static-curve convention the measure is: **carry-and-roll over horizon `h`
+is the aged structure's rate, read off today's curve, minus the structure's rate
+today.**
 
     CR(structure, h) = R(aged structure | today's curve) - R(structure | today's curve)
 
-Ageing moves the start closer by `h` and leaves the maturity fixed:
+"Aged" means the trade has `h` less time to run and is read off the *same* curve,
+so both the start and the remaining life shift toward zero:
 
-| structure | today | aged by `h` |
-|---|---|---|
-| spot `T`y swap | `0y x T` | `h x (T-h)` |
-| forward `f x T` | `f x T` | `(f-h) x T` |
+| structure | today | aged by `h` | comparison point |
+|---|---|---|---|
+| spot `T`y swap | `0y x T` | `0y x (T-h)` | the **shorter spot** rate |
+| forward `f x T` | `f x T` | `(f-h) x T` | the **nearer forward** rate |
 
-Nordea's worked example is the spot case: a 5y swap at 1.023% against a 6m-forward
-4.5y at 1.10% gives CR = +7.7bp, which is what their DV01 route also produces.
-The identity subsumes both components — a spot swap's accrued-coupon carry and its
-roll down the curve — so it needs no carry/roll split, which is the part every
-published treatment disagrees about.
+### The spot row is the one that is easy to get wrong
+
+Comparing a struck `T`y swap against the **`h x (T-h)` forward** instead of the
+`(T-h)` spot silently implements the *forwards-realised* convention — under which
+carry-and-roll is identically zero, so the screen ranks nothing. The first cut of
+`age()` did exactly this and gates G1/G3 rejected it: on an upward-sloping curve it
+reported a paid 10y swap rolling **up** +4.34bp, when a payer struck at 433bp facing
+a 9y spot of ~431bp a year later is plainly losing.
+
+Nordea's note *does* use the forward comparison (a 5y at 1.023% against a 6m-forward
+4.5y at 1.10%, giving 7.7bp) — but it is quoting carry-and-roll **inclusive of
+financing**, which is a different and also-valid number. The two differ by exactly
+the accrued floating coupon. This screener ranks on pure static-curve roll; the
+carry-inclusive measure is a documented follow-up, not the default, because mixing
+the two across spot and forward structures makes the ranking incomparable.
 
 A consequence worth flagging on the output: **forward-starting structures have no
 carry, only roll**, because no floating coupon is fixed at inception. Measured in
-`ConvexityRV`, forward packages carry ~0 (+0.006bp on 2022-09-13). So on the
-forward flies the `cr_1y_bp` column is pure roll-down and will be small.
+`ConvexityRV`, forward packages carry ~0 (+0.006bp on 2022-09-13). So on the forward
+flies the two measures coincide — which is why G1 can tie the forward legs to an
+independent repricing exactly, and cannot do so for the spot legs.
 
 ### What this is NOT
 
@@ -87,8 +99,11 @@ fractional-tenor parsing is involved.
 
 Nothing is reported until these pass.
 
-* **G1 identity** — CR from the aged-rate identity must equal an independent
-  repricing of the aged package for the same structure.
+* **G1 forward** — on FORWARD legs the static-curve roll must equal an independent
+  repricing of the same calendar swap on a rolled curve, since a forward swap has
+  no carry and the two measures coincide there. Spot legs are deliberately *not*
+  gated this way: rateslib's aged repricing also books the accrued floating coupon,
+  which is carry, not roll, and the gap between them is that coupon.
 * **G2 reduction** — a fly with the back wing weighted 0 must reproduce the
   two-leg curve CR exactly.
 * **G3 sign** — on an upward-sloping curve a *paid* spot swap must show negative
