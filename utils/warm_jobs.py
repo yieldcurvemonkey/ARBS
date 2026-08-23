@@ -122,10 +122,17 @@ class WarmJob:
         and it is flagged rather than special-cased because a second field whose
         only effect is identical would be worse: the swaption value warm reads
         the INTERSECTION of CurveStore and CubeStore coverage, and today's cube
-        is not built when it runs. It failed with "No common CurveStore/CubeStore
-        EOD dates" on five consecutive nights (2026-08-17 through 08-21) asking
-        for a day whose inputs did not exist yet. Read the flag as "today is a
-        usable target for this job", which is what the runner acts on.
+        is never built when it runs. Read the flag as "today is a usable target
+        for this job", which is what the runner acts on.
+
+        THAT JOB IS STILL BROKEN AND THE FLAG DOES NOT FIX IT. Checked rather
+        than assumed: run offline against 2026-08-21, 08-20 and 08-19 it raises
+        "No common CurveStore/CubeStore EOD dates" on all three. The CubeStore
+        holds no recent day at all - the cube build reported "0 written, 2708
+        already present, 97 unbuildable" on 2026-08-21, the fifth consecutive
+        night of zero output - so its consumer has nothing to intersect with
+        whichever day it asks for. This flag removes one of two causes; the
+        other lives in the cube warm and is not touched here.
     """
 
     name: str
