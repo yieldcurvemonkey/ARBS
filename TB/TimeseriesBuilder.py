@@ -378,6 +378,28 @@ def _count_fully_covered_reference_points(
     )
 
 
+#: Products already warned about this process. One line per product, not per
+#: call: a warm passes the flag on every query in every batch.
+_IGNORE_CACHE_MISS_WARNED: set = set()
+
+
+def _warn_ignore_cache_miss_dropped(product: str) -> None:
+    """Say once that ``ignore_cache_miss`` does nothing on this route."""
+    key = str(product or "?").upper()
+    if key in _IGNORE_CACHE_MISS_WARNED:
+        return
+    _IGNORE_CACHE_MISS_WARNED.add(key)
+    _LOGGER.warning(
+        "ignore_cache_miss=True was passed for product %s, which does not "
+        "implement it - only the IRS route does. It is being DROPPED, so it is "
+        "not what stops this request reaching a live vendor on a cache miss. For "
+        "FixedRateBonds that guarantee comes from constructing the MDP with "
+        "offline=True; there is no per-request equivalent, because "
+        "FixedRateBondsTB forwards a fixed kwarg set.",
+        key,
+    )
+
+
 @dataclass(frozen=True)
 class _ProductTimeseriesPlan:
     product: str
@@ -777,6 +799,20 @@ class TimeseriesBuilder:
             }
             if canonical_product == "IRS" and ignore_cache_miss:
                 route_kwargs["ignore_cache_miss"] = True
+            elif ignore_cache_miss:
+                # SAID, NOT SWALLOWED. Only the IRS route understands this flag;
+                # every other product silently drops it here, and it reads like a
+                # guarantee - "do not go live on a miss" - that it does not give.
+                #
+                # Three warm jobs pass it on FRB routes and get nothing from it.
+                # They are in fact protected, but by a different mechanism
+                # entirely: FixedRateBondsMDP(offline=True) read off the
+                # CONSTRUCTOR, because FixedRateBondsTB.bulk_get_data forwards a
+                # fixed kwarg set and nothing product-specific. A caller who
+                # believed the flag was doing that work would be right about the
+                # outcome and wrong about the reason, which is the kind of
+                # correct-by-accident that stops being correct quietly.
+                _warn_ignore_cache_miss_dropped(canonical_product)
             if prefetched_rows_by_symbol and canonical_product in {"IRS", "FRB", "USTFUTURE"}:
                 route_kwargs["_prefetched_ts_rows_by_symbol"] = prefetched_rows_by_symbol
             return tb.get_timeseries(  # type: ignore[attr-defined]
