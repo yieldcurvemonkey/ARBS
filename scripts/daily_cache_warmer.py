@@ -172,6 +172,110 @@ _FRB_CUSIPS = (
     *[f"OOO{t}" for t in _FRB_TENORS],
 )
 
+#: Whether the FedInvest warm covers the whole off-the-run curve or only the 28
+#: constant-maturity ranks. Set to 0 to go back to the old behaviour.
+_FRB_FULL_UNIVERSE = os.environ.get("ARBS_WARM_FRB_UNIVERSE", "full").strip().lower() != "ranks"
+
+#: How much of the requested symbol set must actually price before the day is
+#: believed. See :func:`warm_frb_fedinvest_eod` for the measurement.
+_FRB_MIN_COVERAGE = float(os.environ.get("ARBS_WARM_FRB_MIN_COVERAGE", "0.60"))
+
+
+def _frb_universe_symbols(as_of):
+    """Every nominal UST alive on ``as_of``, addressed by its MATURITY alias.
+
+    The 28 constant-maturity ranks come along unchanged; what this adds is the
+    rest of the curve - 349 bonds on 2026-08-21 against the 28 the warm used to
+    price, and the other 321 are the off-the-runs a relative-value book actually
+    trades.
+
+    WHY MMYY-oi RATHER THAN THE CUSIP, and why not the bare MMYY
+    ------------------------------------------------------------
+    The computed-timeseries symbol is a sha1 of the cusip token AS TYPED
+    (``TB/FixedRateBondsTB.py::_ts_symbol_for_query``), not of the CUSIP it
+    resolves to. So the token chosen here IS the series key, permanently:
+
+    * ``CT10`` is one series whose underlying bond changes every quarter. That
+      is right for a constant-maturity study and wrong for everything else.
+    * ``912810SP4`` names one bond forever but is unreadable and is not what
+      anybody types.
+    * ``0850`` - the alias grammar this repo already speaks, and already emits
+      from the SDR trade tape (``tape_label_ust_alias``) and accepts in the
+      IRSwaps adapter - names the bond maturing August 2050. One bond, one
+      series, in the tokens the notebooks use.
+
+    The ``-oi`` suffix is not decoration and the bare form is not a synonym. A
+    bare ``MMYY`` means "the bond maturing that month" and stays unambiguous
+    only until Treasury issues a second one. Measured on this machine's own
+    reference data: ``0245`` resolved to the 30y ``912810RK6`` as-of 2020, 2022
+    AND 2024, then became ambiguous in 2026 once the 20y ``912810UJ5`` maturing
+    02/2045 existed. ``0245-30`` is ``912810RK6`` throughout and ``0245-20`` is
+    the 20y. So the DURABLE key is always ``MMYY-oi``, and every bond gets one.
+
+    The bare form is emitted TOO, but only where it is currently unambiguous
+    (76 of the 170 distinct MMYY keys on 2026-08-21). That is not redundancy for
+    its own sake: a human types ``0850``, and a query token that was not warmed
+    under that exact spelling misses the cache and reprices. It costs one extra
+    row per bond per day. If such a key later becomes ambiguous it simply stops
+    being emitted - the oi-qualified series carries on, and the bare one has a
+    visible end rather than a silent change of meaning.
+
+    COVERAGE, measured on the cached reference frame
+    ------------------------------------------------
+    349 live rows on 2026-08-21 -> 170 distinct MMYY keys, 76 unambiguous,
+    94 ambiguous splitting into 273 oi-buckets, and ZERO buckets still holding
+    more than one CUSIP. 76 + 273 = 349, i.e. ``MMYY-oi`` addresses the entire
+    live universe uniquely. The frame is nominal coupon Notes and Bonds only -
+    fiscaldata excludes TIPS, bills and FRNs server-side - so nothing here has
+    to filter them out.
+
+    WHAT IT COSTS: essentially nothing, and that is the point.
+    FedInvest is a WHOLE-FILE DAILY download - the POST carries only the price
+    date, no CUSIP list - and the fetch cache is keyed by DATE ALONE. Widening
+    the symbol set therefore adds ZERO fetches; 4,182 days are already banked
+    locally (2006-01-31..2026-08-21) and the day's table already holds 352
+    nominal coupon rows, covering all 349. The marginal cost is CPU: 1.39 ms per
+    pricer construct + ytm, i.e. about +0.45 s per date for 28 -> 349 symbols.
+    """
+    from MDP.FixedRateBonds.FixedRateBondsMDP import _filter_and_rank_ref_df
+    from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import (
+        update_reference_data,
+    )
+
+    ref = _filter_and_rank_ref_df(update_reference_data(source="fiscaldata"), as_of)
+
+    import pandas as pd
+
+    mats = pd.to_datetime(ref["maturity_date"], errors="coerce")
+    keys = mats.dt.strftime("%m%y")
+
+    def _oi_num(value):
+        m = re.search(r"(\d+)", str(value))
+        return m.group(1) if m else str(value).strip()
+
+    ois = ref["oi"].map(_oi_num)
+
+    symbols = list(_FRB_CUSIPS)
+    seen = set(symbols)
+    per_key = {}
+    for key, oi in zip(keys, ois):
+        if not isinstance(key, str) or not key:
+            continue
+        per_key.setdefault(key, set()).add(oi)
+
+    for key, buckets in sorted(per_key.items()):
+        for oi in sorted(buckets):
+            token = f"{key}-{oi}"
+            if token not in seen:
+                seen.add(token)
+                symbols.append(token)
+        # The bare spelling only while it still names one bond. See above.
+        if len(buckets) == 1 and key not in seen:
+            seen.add(key)
+            symbols.append(key)
+
+    return tuple(symbols)
+
 # ── Citi Velocity ────────────────────────────────────────────────────
 #
 # The five majors that are warmed in the CurveStore. The other fifteen Citi
@@ -406,20 +510,62 @@ def warm_eris_eod(start, end):
 
 
 def warm_frb_fedinvest_eod(start, end):
-    """Job 3: FedInvest UST YTMs for on-the-run CUSIPs."""
+    """Job 3: FedInvest UST YTMs across the whole nominal coupon curve.
+
+    Used to be the 28 constant-maturity ranks. It is now every bond alive on the
+    day, each under its own maturity alias, because FedInvest is a whole-file
+    daily download whose cache is keyed by DATE ALONE - so the off-the-runs cost
+    no extra fetches at all, only ~0.45 s of pricing per date. See
+    :func:`_frb_universe_symbols` for the token grammar and why it is
+    ``MMYY-oi``.
+
+    Two guards, and each one is here because of a measured incident rather than
+    to be thorough:
+
+    An EMPTY FRAME IS NOT A SUCCESS. The runner reports the shape it is handed,
+    so a job that priced nothing reads ``OK (0 rows x 0 cols)`` - a real line
+    from four consecutive nights of the GS Quant job, which is how that outage
+    survived a month. Copied from there deliberately.
+
+    A DAY WHERE MOST BONDS VANISH IS NOT A DAY. On nine days in 2026-07/08
+    (07-09, 07-10, 07-13, 07-17, 07-20, 07-24, 07-27, 08-07, 08-10) FedInvest
+    served ``eod_price = 0.00`` for ALL 463 bonds while bid and offer stayed
+    good. Zero is a sentinel, so ``notna()`` and every required-column
+    assertion pass; the pricer solved yields of 605%-5,408% from it and a
+    butterfly book marked on those days reached $178 trillion. The MDP's own
+    ``50.0 <= clean_price <= 250.0`` band does catch a zero and drops the bond -
+    which turns a corrupt tape into a nearly EMPTY FRAME rather than a wrong
+    one. That is the shape this looks for. Widening the warm from 28 symbols to
+    349 makes the check worth having: at 28 symbols a corrupt day is an
+    annoyance, at 349 it is a poisoned store.
+
+    The floor is 60% of the requested symbols and is deliberately loose, because
+    the union is taken over the whole window and historical coverage is real:
+    349/349 present on 2026-08-21, 309/309 on 2020-08-20, 256/261 on
+    2012-08-20. A day that loses 40% of the curve is not a quiet auction week.
+    """
     from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
     from TB.FixedRateBondsTB import FixedRateBondsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
     from Query.Unified.UnifiedQuery import UnifiedQuery
     from Query.Unified.registry import UnifiedValue
 
+    if _FRB_FULL_UNIVERSE:
+        symbols = _frb_universe_symbols(end)
+        log.info(
+            "  %d symbols: %d constant-maturity ranks + %d maturity aliases",
+            len(symbols), len(_FRB_CUSIPS), len(symbols) - len(_FRB_CUSIPS),
+        )
+    else:
+        symbols = _FRB_CUSIPS
+        log.info("  %d CUSIPs (ranks only): %s", len(symbols), ", ".join(symbols))
+
     usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
     tb = TimeseriesBuilder()
     queries = [
         UnifiedQuery(cusip=c, value=UnifiedValue.FRB_YTM)
-        for c in _FRB_CUSIPS
+        for c in symbols
     ]
-    log.info("  %d CUSIPs: %s", len(_FRB_CUSIPS), ", ".join(_FRB_CUSIPS))
 
     df = tb.get_timeseries(
         start=start,
@@ -428,6 +574,25 @@ def warm_frb_fedinvest_eod(start, end):
         n_jobs=N_JOBS,
         routers={"FRB": FixedRateBondsTB(usts_mdp, show_tqdm=True)},
     )
+
+    if df is None or df.empty or not len(df.columns):
+        raise RuntimeError(
+            f"FedInvest priced NOTHING for {start}..{end} across {len(symbols)} "
+            "symbol(s). FedInvest serves a whole-day table and the fetch is cached "
+            "by date, so an empty frame here is the tape, not the request - check "
+            "whether the day's eod_price column is all zeros before re-running."
+        )
+
+    covered = len(df.columns) / float(len(symbols))
+    if covered < _FRB_MIN_COVERAGE:
+        raise RuntimeError(
+            f"FedInvest priced only {len(df.columns)} of {len(symbols)} symbol(s) "
+            f"({covered:.0%}) for {start}..{end}, under the {_FRB_MIN_COVERAGE:.0%} "
+            "floor. The MDP drops any bond outside a 50..250 clean price, so a tape "
+            "serving eod_price=0.00 arrives here as missing columns rather than as "
+            "absurd yields - which is what nine days in 2026-07/08 did."
+        )
+    log.info("  %d of %d symbol(s) priced (%.0f%%)", len(df.columns), len(symbols), covered * 100)
     return df
 
 
