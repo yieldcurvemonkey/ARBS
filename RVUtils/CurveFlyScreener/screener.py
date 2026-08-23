@@ -304,6 +304,15 @@ def add_risk_adjustment(df: pd.DataFrame, levels: pd.DataFrame, *,
     df["zs"] = df.label.map((last - mu) / sd.replace(0.0, np.nan))
     ann = df["rlzd_vol_bp"] * math.sqrt(business_days)
     df["rac"] = np.where(ann > 0, df["cr_bp"] / ann, np.nan)
+
+    # Carry and entry level are NOT independent: measured across this screen
+    # corr(cr_bp, zs) = +0.61, so ranking on carry alone systematically surfaces
+    # structures that are already rich, and the carry is partly compensation for
+    # a level that has historically reverted. cr_net_rev charges the position for
+    # full reversion to the sample mean over the horizon; rac_net ranks on that.
+    df["rev_drag_bp"] = df.label.map(mu) - df["level_hist_bp"]
+    df["cr_net_rev"] = df["cr_bp"] + df["rev_drag_bp"]
+    df["rac_net"] = np.where(ann > 0, df["cr_net_rev"] / ann, np.nan)
     return df
 
 

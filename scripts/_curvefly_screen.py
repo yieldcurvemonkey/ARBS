@@ -76,8 +76,14 @@ named = ["10y10y/20y10y", "15y5y/20y5y", "20y5y/25y5y", "5s10s30s", "2s7s20s",
          "5s30s", "2s10s", "10y10y/15y10y", "5y10y/10y10y"]
 print("\n=== the structures the desk names ===")
 print(df[df.label.isin(named)][["label", "kind", "level_bp", "cr_bp",
-                                "rlzd_vol_bp", "zs", "rac", "n_obs"]]
+                                "rlzd_vol_bp", "zs", "rac",
+                                "rev_drag_bp", "cr_net_rev", "rac_net"]]
       .round(2).to_string(index=False))
+import numpy as _np
+_ok = df.dropna(subset=["cr_bp", "zs"])
+print(f"\nCONFOUND: corr(carry, level z) = "
+      f"{float(_np.corrcoef(_ok.cr_bp, _ok.zs)[0,1]):+.3f} over {len(_ok)} structures")
+print("  carry and richness are largely the same fact; rank on rac_net too, not rac alone")
 
 ok = df[df.rac.notna()]
 print(f"\n{len(ok)} of {len(df)} structures have a usable rac "
@@ -87,8 +93,8 @@ for kind in ["curve_spot", "curve_fwd_start", "curve_fwd_tenor", "fly_spot", "fl
     if sub.empty:
         continue
     print(f"\n=== {kind}: top 5 by rac (carry per unit of realised vol) ===")
-    print(sub.head(5)[["label", "level_bp", "cr_bp", "rlzd_vol_bp", "zs", "rac"]]
-          .round(2).to_string(index=False))
+    print(sub.head(5)[["label", "level_bp", "cr_bp", "rlzd_vol_bp", "zs",
+                       "rac", "rac_net"]].round(2).to_string(index=False))
     print(f"    bottom 3: " + " | ".join(
         f"{r.label} {r.rac:+.2f}" for _, r in sub.tail(3).iterrows()))
 

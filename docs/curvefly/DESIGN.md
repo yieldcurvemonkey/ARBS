@@ -110,3 +110,31 @@ Nothing is reported until these pass.
   carry-and-roll.
 * **G4 tie-out** — the pair CR for `10Yx10Y/20Yx10Y` must reproduce the value the
   `ConvexityRV` screen reports for the same date.
+
+## 6. Carry and entry level are not independent
+
+Measured on this screen: **`corr(cr_bp, zs) = +0.61`** across all 1,019 surviving
+structures, and **+0.57** within the forward-curve-same-tenor family alone.
+
+That is a property of the measure, not a coincidence. Carry-and-roll here *is*
+the aged level minus the level, so a structure sitting at an extreme of its own
+range tends to show large roll for the same reason it looks rich. Ranking on
+carry alone therefore systematically surfaces structures that have already run,
+and reports as "carry" what is partly compensation for a level that reverts.
+
+The measured cost of ignoring this, on the desk's own trade: `10y10y/20y10y`
+carries +9.13bp/yr and sits 10.79bp above its 2-year mean with an AR(1) half-life
+of **3.1 months**. Full reversion inside the year nets **-1.66bp** -- the carry and
+the entry approximately cancel, well inside a 3-6 month horizon.
+
+So the screen reports three columns, and they must be read together:
+
+| column | meaning |
+|---|---|
+| `rac` | carry per unit of realised vol -- ignores where the level sits |
+| `rev_drag_bp` | distance to the sample mean, i.e. what full reversion costs |
+| `rac_net` | `(carry + rev_drag) / annualised vol` -- carry charged for reversion |
+
+`rac` alone is the number that flatters. `rac_net` is the conservative bound
+(it assumes full reversion within the horizon, which is pessimistic for a
+half-life longer than the holding period). Neither is the answer on its own.
