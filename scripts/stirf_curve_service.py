@@ -1342,6 +1342,50 @@ def _explicit_imm_pair_tenors(*, as_of: dt.date, horizon_count: int, spans: Sequ
     return tenors
 
 
+def _resolvable_fomc_ranks(curve_name: str, anchor_date: dt.date) -> int:
+    """How many ranked FOMC tenors the published calendar can actually answer.
+
+    ``_MIXED_STIRT_FOMC_COUNT`` is 12 and the FOMC calendar does not always
+    reach twelve meetings ahead. ``resolve_central_bank_tenor`` RAISES past the
+    end of it, and the pricing loop catches that per (tenor, timestamp) — so the
+    grid asked for a tenor it could never have, once per session minute.
+
+    Measured on the 2026-08-21 run: **1,381 pricing failures**, all of them
+    ``fomc_12``, one per minute of the session, on
+    ``USD-OIS-Q12xM12STIRT-SERFFX-MIX23``. The curve then reported
+    ``ts_cols=44 ts_failed=0`` — the failures never reached the summary, so this
+    had been running nightly and looked clean.
+
+    Asking the resolver rather than reimplementing its arithmetic: it is the same
+    function the pricer will call, so the count cannot disagree with it. Ranks
+    are contiguous (rank N is the Nth meeting at or after ``as_of``), so the
+    first failure ends the walk.
+
+    The anchor is the run's, not the trade date's, and that direction is safe:
+    an earlier trade date has MORE meetings ahead of it, never fewer.
+    """
+    from Query.IRSwaps._CENTRAL_BANK_DATES import resolve_central_bank_tenor
+
+    curve_id = _curve_reference_id(curve_name)
+    usable = 0
+    for rank in range(1, _MIXED_STIRT_FOMC_COUNT + 1):
+        try:
+            if resolve_central_bank_tenor(curve_id, f"fomc_{rank}", as_of=anchor_date) is None:
+                break
+        except Exception:  # noqa: BLE001 - the resolver raises past the calendar
+            break
+        usable = rank
+    if usable < _MIXED_STIRT_FOMC_COUNT:
+        # Module logger: this helper is called from tenor resolution, which has
+        # no `logger` parameter threaded through it.
+        logging.getLogger(__name__).info(
+            "FOMC grid for %s capped at %d of %d as of %s: the published calendar "
+            "reaches no further, and the ranks past it fail once per session minute.",
+            curve_name, usable, _MIXED_STIRT_FOMC_COUNT, anchor_date.isoformat(),
+        )
+    return usable
+
+
 def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = None) -> list[str]:
     from Query.IRSwaps._CENTRAL_BANK_DATES import central_bank_for_curve
 
@@ -1351,7 +1395,10 @@ def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = 
     base = list(_BASE_OUTRIGHT_TENORS)
     if _is_mixed_stirt_curve(curve_name):
         tenors = list(_STIRT_DEFAULT_RELATIVE_IMM_TENORS)
-        tenors.extend(f"fomc_{rank}" for rank in range(1, _MIXED_STIRT_FOMC_COUNT + 1))
+        tenors.extend(
+            f"fomc_{rank}"
+            for rank in range(1, _resolvable_fomc_ranks(curve_name, anchor_date) + 1)
+        )
         tenors.extend(_MIXED_STIRT_SPOT_TENORS)
         tenors.extend(_MIXED_STIRT_FORWARD_TENORS)
         return _dedupe_preserve_order(tenors)
@@ -2035,6 +2082,17 @@ def _build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--timezone", default=DEFAULT_TIMEZONE, help="IANA timezone for non-CME bucket timestamps.")
     backfill.add_argument("--fail-fast", action="store_true")
     backfill.add_argument(
+        "--reprice-timeseries", action="store_true",
+        help=(
+            "Re-price every minute of every requested day even when the computed "
+            "timeseries store already covers it. Off by default: a settled day is "
+            "not repriced, which is what stopped a five-day catch-up from spending "
+            "3,600 s re-doing warm days and losing the MIX23 curve to its own cap. "
+            "Today is always repriced regardless, because today's session is still "
+            "moving."
+        ),
+    )
+    backfill.add_argument(
         "--backfill-only",
         action="store_true",
         help="Only push existing local CurveStore days in range to Supabase; skip calibration and timeseries warming.",
@@ -2221,7 +2279,33 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
                     n_jobs=int(args.n_jobs),
                     calibration_executor=str(args.calibration_executor),
                     curve_ignore_cache=False,
-                    timeseries_ignore_cache=True,
+                    # A SETTLED DAY IS NOT REPRICED, and this used to be an
+                    # unconditional True.
+                    #
+                    # The RAW half of this loop already filters its timestamps
+                    # against the CurveStore, three lines up. The TIMESERIES half
+                    # was handed the full 1,381-minute grid with
+                    # ignore_cache=True - "refetch AND persist" - so every
+                    # backfilled day re-priced every minute of every tenor
+                    # whether or not the computed store already held it.
+                    #
+                    # Measured on the 2026-08-15 Saturday run, backfilling
+                    # 08-10..08-14 when all five nights had already been warmed
+                    # by their own nightly: Q12STIRT 133 s, Q16STIRT 109 s, and
+                    # then USD-OIS-Q12xM12STIRT-SERFFX-MIX23 hit the 3,600 s
+                    # per-curve cap and was LOST. Job total 3,842.2 s, FAILED -
+                    # a job that failed because it insisted on redoing work it
+                    # had already done.
+                    #
+                    # TODAY still reprices, because today's session is still
+                    # moving and its partial values SHOULD be refreshed on a
+                    # re-run. That is the case the True was written for; it was
+                    # simply never bounded to it. ``--reprice-timeseries`` forces
+                    # the old behaviour for a deliberate repair.
+                    timeseries_ignore_cache=(
+                        bool(getattr(args, "reprice_timeseries", False))
+                        or trade_date >= dt.date.today()
+                    ),
                     show_tqdm=bool(args.show_tqdm),
                     auto_prime_bulk=bool(args.auto_prime_bulk),
                     stirf_fetch_max_workers=args.stirf_fetch_max_workers,

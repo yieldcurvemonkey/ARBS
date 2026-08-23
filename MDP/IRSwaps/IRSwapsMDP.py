@@ -3160,6 +3160,86 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         )
         return None
 
+    #: Whether an intraday request for TODAY may bypass a stale minute store and
+    #: go to the live Citi wire. ``0`` restores the old behaviour exactly.
+    _TODAY_LIVE_ENV = "ARBS_CITIVELO_TODAY_LIVE"
+
+    def _policy_for_current_session(self, policy, *, asset, wanted, local_zone):
+        """Upgrade the DEFAULT policy when the request is for today's session.
+
+        THE PROBLEM THIS SOLVES IS NOT AN ERROR, IT IS A WRONG ANSWER.
+
+        The minute store is filled by a post-close batch (the 18:15 nightly), so
+        during a session today's minutes are not in it. The default policy is
+        nearest-in-either-direction over a ``(date, -1, +1)`` window with no lag
+        bound at all, and ``None`` is returned only when ALL THREE days are
+        empty - so one present neighbour answers anything. A request for 11:00
+        today is served from yesterday afternoon, in 2 ms, from cache, with no
+        Excel and no warning: measured 2026-08-08, an 11:00 request returned a
+        curve stamped 2026-08-07 14:07, ``snapshot_lag_seconds = 75180``. The
+        curve's reference date and fixings follow the SERVED snapshot, so the
+        object is entirely and consistently yesterday's, which is what makes it
+        hard to see. ``snapshot_lag_seconds`` is the only signal and the
+        contract is explicit that holding it to a tolerance is the caller's job.
+        Nothing on the notebook path does.
+
+        So: for TODAY, bound the lag. A bounded miss is soft
+        (``on_miss="none"``), which is the whole mechanism - the existing live
+        path takes over and, for an intraday request, reads ``MI01`` bounded
+        above by the requested instant. That is today's minutes off the same
+        ``CVTSHIST`` transport the store itself is built from, so this is a
+        routing change to an existing source rather than a new one.
+
+        FOUR THINGS IT REFUSES TO DO, each deliberate:
+
+        * **It does not touch an EXPLICIT policy.** A caller that passed
+          ``strict`` or ``legacy`` said something; only the default is upgraded.
+          The default is recognised by value, so a caller passing ``legacy()``
+          verbatim is treated as not having chosen - stated here because it is
+          the one case this cannot distinguish.
+        * **It does not touch a past date.** Yesterday's session is complete and
+          banked; there is nothing live to prefer.
+        * **It does not fire when the caller is OFFLINE.** ``offline`` and
+          ``ignore_cache_miss`` mean "never reach for Excel", and turning a store
+          hit into a miss under them would replace a stale number with no number.
+          The nightly sets both, and after the settled-session change it does not
+          ask for today at all - two independent reasons this is inert on a
+          scheduled task, which is what it must be: an unattended job opening
+          workbooks against an add-in only a human restart shrinks is the failure
+          this whole subsystem is built around.
+        * **It is not silent.** Once per (asset, day), at WARNING.
+
+        ``ARBS_CITIVELO_TODAY_LIVE=0`` restores the previous behaviour exactly.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotPolicy, warn_once
+
+        if policy != SnapshotPolicy.legacy():
+            return policy
+        if os.environ.get(self._TODAY_LIVE_ENV, "1").strip().lower() in {
+            "0", "false", "f", "no", "n", "off",
+        }:
+            return policy
+        if bool(self.config.get("offline")):
+            return policy
+        try:
+            local_today = datetime.datetime.now(local_zone).date()
+            if wanted.astimezone(local_zone).date() != local_today:
+                return policy
+        except Exception:  # noqa: BLE001 - a zone problem must not break the read
+            return policy
+
+        upgraded = SnapshotPolicy.today_live()
+        warn_once(
+            (asset, "today_live", str(local_today)),
+            f"citivelo_excel: {asset} was asked for an instant in TODAY'S session. "
+            f"The minute store is warmed after the close, so a hit here would be "
+            f"yesterday's curve wearing today's request (measured: a 20.9 h lag "
+            f"served in 2 ms with no warning). Requiring a snapshot within "
+            f"{upgraded.max_lag} instead; a miss falls through to the live Citi "
+            f"wire. Set {self._TODAY_LIVE_ENV}=0 to restore the old behaviour.",
+        )
+        return upgraded
+
     def _load_citivelo_excel_minute_store_point(
         self,
         *,
@@ -3237,6 +3317,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 ),
             )
         wanted = from_wire_naive(resolved.wire_instant)
+        policy = self._policy_for_current_session(
+            policy, asset=asset, wanted=wanted, local_zone=local_zone,
+        )
 
         # The store partitions by the curve's LOCAL trading date. Check the
         # neighbouring days too: a session running to 19:59 local straddles the

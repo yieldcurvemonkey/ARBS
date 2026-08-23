@@ -67,13 +67,35 @@ hole nobody can attribute rather than a hole.
 
 import argparse
 import datetime
+import faulthandler
 import logging
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from typing import NamedTuple
+
+# THE SUPABASE L2 SWITCH, AND IT HAS TO BE HERE - above every other import in
+# this file and before anything under ``Caching`` is reachable.
+#
+# ``Caching.supabase_engine`` reads the flag ONCE, at import, into a module
+# global (``SUPABASE_ENABLED = _env_enabled("ARBS_SUPABASE_ENABLED", True)``),
+# so a setting applied after the first import of that package is inert. Every
+# Citi script in this repo already opens with this exact line for that reason.
+#
+# The default is ENABLED, and the credentials are not an env var anybody forgot
+# to set - they are hard-coded module constants pointing at the production
+# pooler (``supabase_engine.DEFAULT_DB_HOST/USER/PASSWORD``). Neither scheduled
+# task sets the flag. So the unattended nightly has been opening connections to
+# prod and pushing a whole-day Parquet blob per computed symbol, on background
+# threads nobody waits for or reads the result of, all night, every night.
+#
+# ``setdefault`` rather than an assignment: a human who exports
+# ``ARBS_SUPABASE_ENABLED=1`` deliberately - to refresh what the laptop pulls -
+# still gets it.
+os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(REPO_ROOT)
@@ -150,6 +172,110 @@ _FRB_CUSIPS = (
     *[f"OOO{t}" for t in _FRB_TENORS],
 )
 
+#: Whether the FedInvest warm covers the whole off-the-run curve or only the 28
+#: constant-maturity ranks. Set to 0 to go back to the old behaviour.
+_FRB_FULL_UNIVERSE = os.environ.get("ARBS_WARM_FRB_UNIVERSE", "full").strip().lower() != "ranks"
+
+#: How much of the requested symbol set must actually price before the day is
+#: believed. See :func:`warm_frb_fedinvest_eod` for the measurement.
+_FRB_MIN_COVERAGE = float(os.environ.get("ARBS_WARM_FRB_MIN_COVERAGE", "0.60"))
+
+
+def _frb_universe_symbols(as_of):
+    """Every nominal UST alive on ``as_of``, addressed by its MATURITY alias.
+
+    The 28 constant-maturity ranks come along unchanged; what this adds is the
+    rest of the curve - 349 bonds on 2026-08-21 against the 28 the warm used to
+    price, and the other 321 are the off-the-runs a relative-value book actually
+    trades.
+
+    WHY MMYY-oi RATHER THAN THE CUSIP, and why not the bare MMYY
+    ------------------------------------------------------------
+    The computed-timeseries symbol is a sha1 of the cusip token AS TYPED
+    (``TB/FixedRateBondsTB.py::_ts_symbol_for_query``), not of the CUSIP it
+    resolves to. So the token chosen here IS the series key, permanently:
+
+    * ``CT10`` is one series whose underlying bond changes every quarter. That
+      is right for a constant-maturity study and wrong for everything else.
+    * ``912810SP4`` names one bond forever but is unreadable and is not what
+      anybody types.
+    * ``0850`` - the alias grammar this repo already speaks, and already emits
+      from the SDR trade tape (``tape_label_ust_alias``) and accepts in the
+      IRSwaps adapter - names the bond maturing August 2050. One bond, one
+      series, in the tokens the notebooks use.
+
+    The ``-oi`` suffix is not decoration and the bare form is not a synonym. A
+    bare ``MMYY`` means "the bond maturing that month" and stays unambiguous
+    only until Treasury issues a second one. Measured on this machine's own
+    reference data: ``0245`` resolved to the 30y ``912810RK6`` as-of 2020, 2022
+    AND 2024, then became ambiguous in 2026 once the 20y ``912810UJ5`` maturing
+    02/2045 existed. ``0245-30`` is ``912810RK6`` throughout and ``0245-20`` is
+    the 20y. So the DURABLE key is always ``MMYY-oi``, and every bond gets one.
+
+    The bare form is emitted TOO, but only where it is currently unambiguous
+    (76 of the 170 distinct MMYY keys on 2026-08-21). That is not redundancy for
+    its own sake: a human types ``0850``, and a query token that was not warmed
+    under that exact spelling misses the cache and reprices. It costs one extra
+    row per bond per day. If such a key later becomes ambiguous it simply stops
+    being emitted - the oi-qualified series carries on, and the bare one has a
+    visible end rather than a silent change of meaning.
+
+    COVERAGE, measured on the cached reference frame
+    ------------------------------------------------
+    349 live rows on 2026-08-21 -> 170 distinct MMYY keys, 76 unambiguous,
+    94 ambiguous splitting into 273 oi-buckets, and ZERO buckets still holding
+    more than one CUSIP. 76 + 273 = 349, i.e. ``MMYY-oi`` addresses the entire
+    live universe uniquely. The frame is nominal coupon Notes and Bonds only -
+    fiscaldata excludes TIPS, bills and FRNs server-side - so nothing here has
+    to filter them out.
+
+    WHAT IT COSTS: essentially nothing, and that is the point.
+    FedInvest is a WHOLE-FILE DAILY download - the POST carries only the price
+    date, no CUSIP list - and the fetch cache is keyed by DATE ALONE. Widening
+    the symbol set therefore adds ZERO fetches; 4,182 days are already banked
+    locally (2006-01-31..2026-08-21) and the day's table already holds 352
+    nominal coupon rows, covering all 349. The marginal cost is CPU: 1.39 ms per
+    pricer construct + ytm, i.e. about +0.45 s per date for 28 -> 349 symbols.
+    """
+    from MDP.FixedRateBonds.FixedRateBondsMDP import _filter_and_rank_ref_df
+    from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import (
+        update_reference_data,
+    )
+
+    ref = _filter_and_rank_ref_df(update_reference_data(source="fiscaldata"), as_of)
+
+    import pandas as pd
+
+    mats = pd.to_datetime(ref["maturity_date"], errors="coerce")
+    keys = mats.dt.strftime("%m%y")
+
+    def _oi_num(value):
+        m = re.search(r"(\d+)", str(value))
+        return m.group(1) if m else str(value).strip()
+
+    ois = ref["oi"].map(_oi_num)
+
+    symbols = list(_FRB_CUSIPS)
+    seen = set(symbols)
+    per_key = {}
+    for key, oi in zip(keys, ois):
+        if not isinstance(key, str) or not key:
+            continue
+        per_key.setdefault(key, set()).add(oi)
+
+    for key, buckets in sorted(per_key.items()):
+        for oi in sorted(buckets):
+            token = f"{key}-{oi}"
+            if token not in seen:
+                seen.add(token)
+                symbols.append(token)
+        # The bare spelling only while it still names one bond. See above.
+        if len(buckets) == 1 and key not in seen:
+            seen.add(key)
+            symbols.append(key)
+
+    return tuple(symbols)
+
 # ── Citi Velocity ────────────────────────────────────────────────────
 #
 # The five majors that are warmed in the CurveStore. The other fifteen Citi
@@ -163,32 +289,150 @@ _CITIVELO_CURVES = (
     "JPY-TONAR-1D-LCH",
 )
 
-# EOD tenors, same shape as the ERIS job. Capped at 30Y: Citi serves out to 50Y
-# but the long end is thin in the non-USD currencies.
+# ── The Citi Velocity swap grid ──────────────────────────────────────
+#
+# SPELLING IS PART OF THE GRID and is deliberately left ALONE.
+#
+# The computed-timeseries symbol is a sha1 of the tenor string AS TYPED
+# (``TB/IRSwapsTB._query_fingerprint``). '5y5y', '5yx5y' and '5Y5Y' price
+# identically and hash to three DIFFERENT series. So the spelling a warm uses is
+# that series' permanent identity, and changing it does not migrate the history -
+# it orphans it and starts a new series beside it. Every tenor added below
+# therefore follows the convention already in the file (UPPERCASE spot
+# outrights, lowercase concatenated forwards, lowercase packages) rather than
+# imposing a tidier one.
+#
+# Worth knowing while reading this, because it looks like it should matter and
+# does not: ``IRSwapsTB`` carries a cache-synthesis shortcut that builds a
+# cached 'a/b/c' out of cached outright legs, and it looks legs up by the
+# VERBATIM substring of the package tenor - so a package spelled '2y/10y' asks
+# for legs '2y' and '10y' while this grid banks '2Y' and '10Y'. That mismatch
+# costs nothing, because the branch is UNREACHABLE anyway: its guard skips any
+# query carrying ``structure_kwargs['notional']`` and ``IRSwapQuery`` populates
+# that with 1,000,000 on every query ever constructed. Verified rather than
+# taken from the comment that says so - both a direct ``IRSwapQuery`` and one
+# built through ``UnifiedQuery`` come back with ``notional=1000000``. Packages
+# price off the curve, which is cheap; see the measurement on the intraday block.
+#
+# Capped at 30Y: Citi serves out to 50Y but the long end is thin in the non-USD
+# currencies, and the EOD warm already accepts days with as few as 20 of 44
+# tenors.
+
+#: Spot outrights. UPPERCASE, as they have always been banked.
 _CITIVELO_EOD_OUTRIGHTS = (
-    "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y",
-)
-_CITIVELO_EOD_FORWARDS = (
-    "1y1y", "1y5y", "2y5y", "5y5y", "5y10y", "10y10y",
-)
-# The old grid could synthesize common packages only when every primitive leg
-# happened to be present. In particular it omitted 1Y30Y, so the research fly
-# 1Y5Y/1Y10Y/1Y30Y priced from scratch on every day. Keep the non-USD grid
-# bounded, but make the USD-SOFR 1Y-forward strip package-complete through 30Y.
-_CITIVELO_USD_SOFR_EOD_FORWARDS = tuple(dict.fromkeys((
-    *_CITIVELO_EOD_FORWARDS,
-    "1y2y", "1y3y", "1y7y", "1y10y", "1y15y", "1y20y", "1y30y",
-)))
-_CITIVELO_EOD_SPREADS = (
-    "2y/5y", "2y/10y", "5y/10y", "10y/30y", "2y/5y/10y", "5y/10y/30y",
+    "1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y",
 )
 
-# Intraday is deliberately a SUBSET. The minute store holds ~1,100 points per
-# curve per day, so pricing the full EOD grid on a 15-minute stride would be
-# 5 curves x 33 tenors x 33 points a day, every day, for numbers nobody has
-# asked for. These are the ones that get looked at intraday.
-_CITIVELO_INTRADAY_TENORS = ("2Y", "5Y", "10Y", "30Y", "2y/10y", "5y/10y/30y")
+#: Forward-start outrights for the four non-USD curves. Bounded deliberately -
+#: these curves are thinner and nobody reads a 20y10y ESTR intraday.
+_CITIVELO_EOD_FORWARDS = (
+    "1y1y", "1y5y", "1y10y", "2y5y", "5y5y", "5y10y", "10y10y",
+)
+
+#: USD-SOFR gets the full forward surface an RV book works in: the 1y strip
+#: through 30y, the 2y/3y/5y strips, and the long forwards. Every one of these
+#: is a leg of at least one package below, and the closure check enforces the
+#: converse.
+_CITIVELO_USD_SOFR_EOD_FORWARDS = tuple(dict.fromkeys((
+    *_CITIVELO_EOD_FORWARDS,
+    # front strip -- what a front-end RV book reads off the meeting grid
+    "3m3m", "3m6m", "6m3m", "6m6m", "9m3m", "1y3m", "1y6m",
+    # 1y-forward strip, package-complete through 30y
+    "1y2y", "1y3y", "1y4y", "1y7y", "1y15y", "1y20y", "1y30y",
+    # 2y and 3y forward strips
+    "2y1y", "2y2y", "2y3y", "2y7y", "2y10y", "2y20y",
+    "3y2y", "3y5y", "3y7y",
+    # long forwards
+    "5y15y", "5y20y", "5y25y", "10y20y", "15y15y", "20y10y", "30y10y",
+)))
+
+#: SPOT curves and flies. Legs must appear in ``_CITIVELO_EOD_OUTRIGHTS``.
+_CITIVELO_EOD_SPREADS = (
+    # curves
+    "2y/5y", "2y/10y", "2y/30y", "3y/7y", "5y/10y", "5y/30y", "7y/10y",
+    "10y/20y", "10y/30y", "20y/30y",
+    # flies
+    "1y/2y/3y", "2y/3y/5y", "2y/5y/10y", "3y/5y/7y", "5y/7y/10y",
+    "5y/10y/30y", "2y/10y/30y", "10y/20y/30y", "5y/10y/20y",
+)
+
+#: FORWARD curves and flies - the ones this repo's own research code types, plus
+#: the standard rolldown structures. Legs must appear in the USD forward tuple.
+#:
+#: These are USD-SOFR only. A forward fly on a curve whose 20y is a single thin
+#: quote is a number with no market behind it, and the non-USD EOD warm already
+#: tolerates days serving less than half its tenors.
+_CITIVELO_USD_SOFR_EOD_FWD_PACKAGES = (
+    # forward curves
+    "1y1y/2y1y", "2y1y/3y2y", "1y2y/1y5y", "1y5y/1y10y", "1y10y/1y30y",
+    "2y2y/5y5y", "5y5y/10y10y", "10y10y/20y10y", "5y5y/5y25y",
+    "3m3m/6m3m", "6m3m/9m3m", "1y1y/1y5y",
+    # forward flies
+    "1y2y/1y5y/1y10y", "1y5y/1y10y/1y30y", "1y1y/2y1y/3y2y",
+    "2y2y/5y5y/10y10y", "5y5y/10y10y/20y10y", "3m3m/6m3m/9m3m",
+    "1y1y/1y5y/1y10y", "2y5y/5y5y/10y10y",
+)
+
+
+def _assert_packages_are_closed():
+    """Refuse a package whose legs are not themselves warmed series.
+
+    NOT for the synthesis shortcut - that branch is unreachable, see the grid
+    header. This is a COVERAGE property, and it is the one a reader of these
+    numbers actually needs: a fly is only interpretable next to its legs. A grid
+    warming ``1y5y/1y10y/1y30y`` but not ``1y30y`` hands a PM a spread they
+    cannot decompose, and nothing about the missing leg is visible from the
+    frame - it is simply a column nobody asked for.
+
+    Same discipline as
+    ``scripts/citivelo_intraday_ts_warm._assert_universe_is_closed``, and run at
+    import for the same reason: a grid edit is a one-line change that otherwise
+    fails silently.
+    """
+    problems = []
+    for label, legs_pool, packages in (
+        ("non-USD", set(_CITIVELO_EOD_OUTRIGHTS) | set(_CITIVELO_EOD_FORWARDS),
+         _CITIVELO_EOD_SPREADS),
+        ("USD-SOFR", set(_CITIVELO_EOD_OUTRIGHTS) | set(_CITIVELO_USD_SOFR_EOD_FORWARDS),
+         _CITIVELO_EOD_SPREADS + _CITIVELO_USD_SOFR_EOD_FWD_PACKAGES),
+        ("intraday", set(_CITIVELO_INTRADAY_OUTRIGHTS), _CITIVELO_INTRADAY_PACKAGES),
+    ):
+        # Case-insensitive ON PURPOSE. Spot outrights are banked UPPERCASE and
+        # package legs are written lowercase; both spellings are history that
+        # must not be renamed, and the two name the same swap.
+        pool = {leg.upper() for leg in legs_pool}
+        for package in packages:
+            missing = [leg for leg in package.split("/") if leg.upper() not in pool]
+            if missing:
+                problems.append(f"  {label}: {package!r} needs unwarmed leg(s) {missing}")
+    if problems:
+        raise AssertionError(
+            "Citi warm grid is not package-closed - these packages name a leg the "
+            "warm does not price as a series of its own:\n" + "\n".join(problems)
+        )
+
+
+# Intraday is deliberately a SUBSET of EOD. The minute store holds ~1,100 points
+# per curve per day and the nightly prices a 15-minute stride, so every tenor
+# here is 61 pricings per curve per day rather than one.
+#
+# It is no longer six. Measured on 2026-08-21 against the warmed minute store,
+# one tenor over five stamps costs 0.02-0.57 s and triggers ZERO curve builds -
+# curve acquisition is amortised across every tenor at the same instant
+# (``IRSwapsTB`` calls ``bulk_get_data`` once per curve for all missing points,
+# then re-uses the object), so tenors are close to free and timestamps are not.
+# That is the opposite of the assumption the old six-tenor comment encoded.
+_CITIVELO_INTRADAY_OUTRIGHTS = (
+    "2Y", "5Y", "10Y", "30Y", "1y1y", "2y1y", "1y5y", "5y5y", "10y10y",
+)
+_CITIVELO_INTRADAY_PACKAGES = (
+    "2y/10y", "5y/10y", "5y/10y/30y", "2y/5y/10y",
+    "1y1y/2y1y", "5y5y/10y10y",
+)
+_CITIVELO_INTRADAY_TENORS = (*_CITIVELO_INTRADAY_OUTRIGHTS, *_CITIVELO_INTRADAY_PACKAGES)
 _CITIVELO_INTRADAY_FREQ = "15min"
+
+_assert_packages_are_closed()
 
 # USD-OIS uses the same outrights + a subset of forwards (max 30Y)
 #: The USD curves warmed from GS Quant: SOFR and Fed Funds OIS, at BOTH clearing
@@ -256,13 +500,20 @@ _OIS_FORWARD_TENORS = (
 
 
 def _citivelo_eod_tenors(curve: str):
-    """Canonical EOD primitive/package grid for one warmed Citi curve."""
-    forwards = (
-        _CITIVELO_USD_SOFR_EOD_FORWARDS
-        if str(curve).upper() == "USD-SOFR-1D"
-        else _CITIVELO_EOD_FORWARDS
-    )
-    return (*_CITIVELO_EOD_OUTRIGHTS, *forwards, *_CITIVELO_EOD_SPREADS)
+    """Canonical EOD primitive/package grid for one warmed Citi curve.
+
+    USD-SOFR gets the forward surface and the forward packages; the four
+    non-USD curves get the bounded forward set and spot packages only. See the
+    grid block above for why the spelling is uniform.
+    """
+    if str(curve).upper() == "USD-SOFR-1D":
+        return (
+            *_CITIVELO_EOD_OUTRIGHTS,
+            *_CITIVELO_USD_SOFR_EOD_FORWARDS,
+            *_CITIVELO_EOD_SPREADS,
+            *_CITIVELO_USD_SOFR_EOD_FWD_PACKAGES,
+        )
+    return (*_CITIVELO_EOD_OUTRIGHTS, *_CITIVELO_EOD_FORWARDS, *_CITIVELO_EOD_SPREADS)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -384,20 +635,62 @@ def warm_eris_eod(start, end):
 
 
 def warm_frb_fedinvest_eod(start, end):
-    """Job 3: FedInvest UST YTMs for on-the-run CUSIPs."""
+    """Job 3: FedInvest UST YTMs across the whole nominal coupon curve.
+
+    Used to be the 28 constant-maturity ranks. It is now every bond alive on the
+    day, each under its own maturity alias, because FedInvest is a whole-file
+    daily download whose cache is keyed by DATE ALONE - so the off-the-runs cost
+    no extra fetches at all, only ~0.45 s of pricing per date. See
+    :func:`_frb_universe_symbols` for the token grammar and why it is
+    ``MMYY-oi``.
+
+    Two guards, and each one is here because of a measured incident rather than
+    to be thorough:
+
+    An EMPTY FRAME IS NOT A SUCCESS. The runner reports the shape it is handed,
+    so a job that priced nothing reads ``OK (0 rows x 0 cols)`` - a real line
+    from four consecutive nights of the GS Quant job, which is how that outage
+    survived a month. Copied from there deliberately.
+
+    A DAY WHERE MOST BONDS VANISH IS NOT A DAY. On nine days in 2026-07/08
+    (07-09, 07-10, 07-13, 07-17, 07-20, 07-24, 07-27, 08-07, 08-10) FedInvest
+    served ``eod_price = 0.00`` for ALL 463 bonds while bid and offer stayed
+    good. Zero is a sentinel, so ``notna()`` and every required-column
+    assertion pass; the pricer solved yields of 605%-5,408% from it and a
+    butterfly book marked on those days reached $178 trillion. The MDP's own
+    ``50.0 <= clean_price <= 250.0`` band does catch a zero and drops the bond -
+    which turns a corrupt tape into a nearly EMPTY FRAME rather than a wrong
+    one. That is the shape this looks for. Widening the warm from 28 symbols to
+    349 makes the check worth having: at 28 symbols a corrupt day is an
+    annoyance, at 349 it is a poisoned store.
+
+    The floor is 60% of the requested symbols and is deliberately loose, because
+    the union is taken over the whole window and historical coverage is real:
+    349/349 present on 2026-08-21, 309/309 on 2020-08-20, 256/261 on
+    2012-08-20. A day that loses 40% of the curve is not a quiet auction week.
+    """
     from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
     from TB.FixedRateBondsTB import FixedRateBondsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
     from Query.Unified.UnifiedQuery import UnifiedQuery
     from Query.Unified.registry import UnifiedValue
 
+    if _FRB_FULL_UNIVERSE:
+        symbols = _frb_universe_symbols(end)
+        log.info(
+            "  %d symbols: %d constant-maturity ranks + %d maturity aliases",
+            len(symbols), len(_FRB_CUSIPS), len(symbols) - len(_FRB_CUSIPS),
+        )
+    else:
+        symbols = _FRB_CUSIPS
+        log.info("  %d CUSIPs (ranks only): %s", len(symbols), ", ".join(symbols))
+
     usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
     tb = TimeseriesBuilder()
     queries = [
         UnifiedQuery(cusip=c, value=UnifiedValue.FRB_YTM)
-        for c in _FRB_CUSIPS
+        for c in symbols
     ]
-    log.info("  %d CUSIPs: %s", len(_FRB_CUSIPS), ", ".join(_FRB_CUSIPS))
 
     df = tb.get_timeseries(
         start=start,
@@ -406,6 +699,25 @@ def warm_frb_fedinvest_eod(start, end):
         n_jobs=N_JOBS,
         routers={"FRB": FixedRateBondsTB(usts_mdp, show_tqdm=True)},
     )
+
+    if df is None or df.empty or not len(df.columns):
+        raise RuntimeError(
+            f"FedInvest priced NOTHING for {start}..{end} across {len(symbols)} "
+            "symbol(s). FedInvest serves a whole-day table and the fetch is cached "
+            "by date, so an empty frame here is the tape, not the request - check "
+            "whether the day's eod_price column is all zeros before re-running."
+        )
+
+    covered = len(df.columns) / float(len(symbols))
+    if covered < _FRB_MIN_COVERAGE:
+        raise RuntimeError(
+            f"FedInvest priced only {len(df.columns)} of {len(symbols)} symbol(s) "
+            f"({covered:.0%}) for {start}..{end}, under the {_FRB_MIN_COVERAGE:.0%} "
+            "floor. The MDP drops any bond outside a 50..250 clean price, so a tape "
+            "serving eod_price=0.00 arrives here as missing columns rather than as "
+            "absurd yields - which is what nine days in 2026-07/08 did."
+        )
+    log.info("  %d of %d symbol(s) priced (%.0f%%)", len(df.columns), len(symbols), covered * 100)
     return df
 
 
@@ -586,6 +898,82 @@ def _business_days(start, end):
     return [d.date() for d in pd.bdate_range(start, end)]
 
 
+def _last_settled_session(on_or_before=None):
+    """The most recent US government-bond session that is over and banked.
+
+    "Over" is the whole point: a job whose writer refuses rows stamped today
+    (see ``WarmJob.banks_today``) must be pointed at a day whose rows it will
+    actually keep, and that is the previous session, not today's - however far
+    past the close the warm happens to run.
+
+    ``pd.bdate_range`` alone is not enough, and the mistake it makes is the one
+    this repo has recorded twice: it counts market holidays as business days, so
+    a Tuesday after a Monday holiday would be told to warm the Monday, find
+    nothing, and report an outage. Filtered on the same
+    ``ql.UnitedStates.GovernmentBond`` calendar the other jobs use, plus Good
+    Friday, which that calendar treats as a business day while the bond market
+    closes and every vendor here serves nothing - measured independently from GS
+    (no curve) and from twelve scraped iShares ETFs (no holdings) on 2026-04-03
+    and 2023-04-07.
+    """
+    import QuantLib as ql
+
+    today = datetime.date.today()
+    day = min(on_or_before or today, today) - datetime.timedelta(days=1)
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    for _ in range(30):
+        qd = ql.Date(day.day, day.month, day.year)
+        if cal.isBusinessDay(qd) and not _is_good_friday(day):
+            return day
+        day -= datetime.timedelta(days=1)
+    # Thirty calendar days without a session is not a holiday, it is a broken
+    # calendar. Say so rather than silently warming a month ago.
+    raise RuntimeError(
+        f"no US government-bond session found in the 30 days before "
+        f"{on_or_before or today}; the QuantLib calendar is not answering"
+    )
+
+
+def _is_good_friday(day):
+    """Good Friday, which the GovernmentBond calendar calls a business day."""
+    if day.weekday() != 4:  # Friday
+        return False
+    return day == _easter_sunday(day.year) - datetime.timedelta(days=2)
+
+
+def _easter_sunday(year):
+    """Anonymous Gregorian computus. Pure arithmetic, no calendar dependency."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    lam = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * lam) // 451
+    month, dayn = divmod(h + lam - 7 * m + 114, 31)
+    return datetime.date(year, month, dayn + 1)
+
+
+def _window_for(job, start, end):
+    """The date window this job is actually run over.
+
+    A job that banks today gets exactly what the caller asked for. A job whose
+    writer drops today's rows gets a window ending at the last settled session,
+    because otherwise it computes numbers nothing keeps - which is what the
+    weekday warm did every night, measured on partition mtimes rather than
+    argued. See :attr:`utils.warm_jobs.WarmJob.banks_today`.
+
+    ``start`` is clamped rather than shifted with ``end``: a ``--backfill 7``
+    should still cover the whole week, just stopping at the last settled day.
+    """
+    if job.banks_today or end < datetime.date.today():
+        return start, end
+    settled = _last_settled_session(end)
+    return min(start, settled), settled
+
+
 class _StepFailure(NamedTuple):
     """One non-zero subprocess exit, with the child's own last word attached.
 
@@ -642,9 +1030,100 @@ _DETAIL_MAX = 300
 #: Longest ONE STIRF curve may run. Left where the original measurement put it.
 _STIRF_CURVE_TIMEOUT_S = 3600
 
+#: Longest any ONE job may run before the process gives up on the whole night.
+#:
+#: The subprocess jobs have always had deadlines; the IN-PROCESS ones had none
+#: at all, and on 2026-08-22 that cost a full run and then some. The Saturday
+#: backfill deadlocked inside job 2 and was still alive 24 hours later: two
+#: ``frb-mdp`` worker threads each wedged in ``asyncio.run`` ->
+#: ``ProactorEventLoop._poll`` under ``FedInvestFetcher.runner``, 306 threads,
+#: CPU flat at 159.1 s across a 40-minute gap between two ``py-spy`` dumps with
+#: byte-identical stacks. Sixteen of eighteen jobs never started, and the
+#: process went on holding the Excel it had launched at 10:00 that morning.
+#:
+#: Only the multi-date runs reach it: ``_process_one`` is dispatched per
+#: timestamp into a thread pool and each worker calls ``asyncio.run`` on its own
+#: event loop, so ``--backfill 7`` opens eight of them concurrently and the
+#: weekday single-day run opens one. That is why this is a Saturday failure.
+#:
+#: Two hours because the longest measured job is the UST universe tag warm at
+#: 3,466 s (2026-08-21) and the STIRF job carries its own 5,400 s budget - so
+#: this has to sit ABOVE the honest worst case or it becomes the thing that
+#: breaks the night. 7,200 s is 2.1x the worst real job, and the STIRF job is
+#: given its own longer budget below rather than being killed by this.
+_JOB_DEADLINE_S = float(os.environ.get("ARBS_WARM_JOB_DEADLINE_S", "7200"))
+
+def _arm_job_watchdog(job_name, results, budget_s):
+    """Kill the process if one job runs past its budget, saying which and why.
+
+    A Python thread cannot be interrupted from outside, so there is no way to
+    abandon a wedged in-process job and carry on with the next one. The choice
+    is between ending the night with a diagnosis and holding the machine
+    indefinitely without one, and 2026-08-22 settled which of those is worse.
+
+    Before exiting it dumps every thread's stack through :mod:`faulthandler`,
+    which is the same picture ``py-spy dump`` gave for that incident and the
+    only thing that made it diagnosable. Then it writes what the run had
+    achieved so far, so the log is not truncated mid-job the way that one was.
+
+    Returns a canceller. Nothing here runs on the happy path.
+    """
+    if budget_s <= 0:
+        return lambda: None
+
+    def _fire():
+        log.error("=" * 60)
+        log.error(
+            "DEADLINE: job %r has run for %.0fs without returning. Every thread's "
+            "stack follows; the last one that is NOT idle in the run loop is the "
+            "job. Ending the run so the machine is not held overnight.",
+            job_name, budget_s,
+        )
+        for handler in logging.getLogger().handlers:
+            try:
+                handler.flush()
+            except Exception:  # noqa: BLE001 - we are already dying
+                pass
+        try:
+            stream = open(_CHILD_LOG_PATH, "a", encoding="utf-8") if _CHILD_LOG_PATH else sys.stderr
+            stream.write(f"\n{'=' * 70}\nDEADLINE in {job_name!r} after {budget_s:.0f}s\n{'=' * 70}\n")
+            faulthandler.dump_traceback(file=stream, all_threads=True)
+            stream.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        log.error("=" * 60)
+        log.error("SUMMARY (run ended by the job deadline)")
+        log.error("=" * 60)
+        for name, status in results:
+            log.error("  %-30s %s", name, status)
+        log.error("  %-30s %s", job_name, f"DEADLINE ({budget_s:.0f}s)")
+        for handler in logging.getLogger().handlers:
+            try:
+                handler.flush()
+            except Exception:  # noqa: BLE001
+                pass
+        # os._exit, not sys.exit: the run loop is on another thread and a
+        # SystemExit raised here would be swallowed by this timer thread. The
+        # deadlocked threads are daemon-less pool workers that would keep the
+        # interpreter alive through a normal shutdown - which is exactly the
+        # 24-hour state this exists to end.
+        os._exit(1)
+
+    timer = threading.Timer(budget_s, _fire)
+    timer.daemon = True
+    timer.start()
+    return timer.cancel
+
 #: Longest the STIRF job may run across ALL its curves. See
 #: :func:`warm_stirf_cme_session` for the measurements behind the number.
 _STIRF_TOTAL_BUDGET_S = 5400
+
+#: Per-job deadline overrides. The STIRF job carries its own 5,400 s budget and
+#: may legitimately approach it, so the run-level watchdog has to sit above that
+#: rather than becoming the thing that kills a job doing its job.
+_JOB_DEADLINE_OVERRIDES = {
+    "STIRF CME Session": _STIRF_TOTAL_BUDGET_S + 1800.0,
+}
 
 #: Where this run's full child output goes. Set by :func:`_start_run_log`.
 _CHILD_LOG_PATH: str | None = None
@@ -656,6 +1135,36 @@ _EXCEPTION_LINE = re.compile(
 )
 
 
+def _job_status(elapsed, result):
+    """The SUMMARY line for a job that returned, including what it SAID.
+
+    A frame reports its shape, as it always did - and an EMPTY frame still
+    reports ``0 rows x 0 cols`` rather than a bare OK, because that exact line
+    is what hid the GS Quant outage for a month and it has to stay visible.
+
+    What is new is that a job returning a STRING is no longer ignored. Three do,
+    and each one is reporting its own coverage:
+
+        warm_stirf_cme_session   -> "STIRF backfill: 5 days x 3 curves"
+        warm_stirfo_eod          -> "STIRFO EOD: 5 days, 60 snapshots, 60 smiles"
+        warm_ustf_invoice_caches -> "UST futures warm: 5 day(s)"
+
+    On the 2026-08-23 catch-up, STIRFO returned in 0.2 s and the log said
+    ``OK (0.2s)`` - indistinguishable from a job that did nothing, which is the
+    single shape this warm keeps being bitten by. The string said
+    ``5 days, 60 snapshots, 60 smiles``, which is the difference between "it ran"
+    and "it covered the week", and it was being dropped on the floor.
+    """
+    shape = getattr(result, "shape", None)
+    status = f"OK ({elapsed:.1f}s"
+    if shape:
+        status += f", {shape[0]} rows x {shape[1]} cols"
+    status += ")"
+    if isinstance(result, str) and result.strip():
+        status += f" {_clip(result.strip())}"
+    return status
+
+
 def _describe_step_failure(f):
     """One SUMMARY-ready phrase for a lost step, whatever kind of loss it was.
 
@@ -664,6 +1173,8 @@ def _describe_step_failure(f):
     """
     if f.returncode == "TIMEOUT":
         head = f"{f.label} timed out"
+    elif f.returncode == "COVERAGE":
+        head = f"{f.label} thinned"
     elif f.returncode == "NOT RUN":
         head = f"{f.label} was not run"
     else:
@@ -1044,8 +1555,23 @@ def warm_citivelo_timeseries_intraday(start, end):
 _CV_BOND_TAGS = "CITIVELO-TAGS-RATES.BOND"
 _CV_BOND_TAGS_MI01 = "CITIVELO-TAGS-RATES.BOND-MI01"
 _CV_SWAP_SPREAD_TAGS = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD"
+#: The MI01 twin of the swap-spread asset. A SEPARATE key, not a flag on the
+#: same one, because the two are separate directories in the tag cache and
+#: because ``assert_unique_providers`` would otherwise see two jobs writing one
+#: asset - which is the hazard it exists to catch, since ``write_day`` replaces a
+#: whole partition rather than merging into it.
+_CV_SWAP_SPREAD_TAGS_MI01 = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD-MI01"
 
 #: Stop below this. See utils/warm_jobs.py and the 2026-08-07 wedge.
+#:
+#: This is the HARD ceiling - the one above which nothing may connect at all.
+#: The UST universe warms are handed ``citivelo_ust_universe_warm``'s own
+#: ``WORKING_CEILING_MB`` (3,500) instead, which is what that script's between-
+#: batch check is sized for: its comment reads "leave headroom below the hard
+#: 3,800 MB ceiling so a batch in flight cannot cross it. One intraday batch is
+#: ~14 MB, so 300 MB is ~20 batches of slack." Passing the hard number spent
+#: that headroom, which is the point at which a batch in flight is what crosses
+#: the line rather than the check that stops before it.
 _CV_MEMORY_CEILING_MB = 3800.0
 
 #: Whether the nightly may START Excel and wait for the add-in to sign itself in.
@@ -1475,7 +2001,7 @@ def warm_citivelo_ust_universe_eod(start, end):
     Resumable: ``citivelo_ust_universe_warm`` records progress per batch, so a
     run that stops at the memory ceiling resumes tomorrow rather than restarting.
     """
-    from scripts.citivelo_ust_universe_warm import warm
+    from scripts.citivelo_ust_universe_warm import WORKING_CEILING_MB, warm
 
     # A ROLLING window, not the full history, and the reason is the resume key:
     # it includes the end date, so `end = today` changes every night and the whole
@@ -1489,13 +2015,13 @@ def warm_citivelo_ust_universe_eod(start, end):
     # CITIVELO_UST_EOD_DAYS when a longer nightly window is actually wanted.
     days = int(os.environ.get("CITIVELO_UST_EOD_DAYS", "30"))
     out = warm("eod", start=end - datetime.timedelta(days=days), end=end,
-               ceiling_mb=_CV_MEMORY_CEILING_MB)
+               ceiling_mb=WORKING_CEILING_MB)
     if out.get("stopped"):
         raise RuntimeError(
             f"UST universe EOD warm stopped after {out['done']}/{out['of']} bonds: "
             f"{out['reason']}. Progress is in the manifest; re-run to continue."
         )
-    _raise_on_coverage_regression(out, "EOD")
+    _report_coverage_regression(out, "EOD")
     return None
 
 
@@ -1514,31 +2040,100 @@ def warm_citivelo_ust_universe_eod(start, end):
 #: condition nobody can act on, which is precisely the always-failing exit code
 #: this warmer's docstring says trains an operator to stop reading exit codes.
 #: The level goes to the log and to ``status``.
-def _raise_on_coverage_regression(out, label):
+#: What share of the universe has to go quiet before a coverage regression is a
+#: FAILURE rather than a report. See :func:`_report_coverage_regression`.
+_CV_COVERAGE_FAIL_FRACTION = float(
+    os.environ.get("ARBS_WARM_COVERAGE_FAIL_FRACTION", "0.25")
+)
+
+
+def _report_coverage_regression(out, label):
+    """Record newly-quiet tags. Only an OUTAGE-sized one fails the job.
+
+    RAISING WAS TOO BLUNT, and it cost more than it caught. This is a STORE
+    job, so the runner marks its asset blocking when it fails and skips every
+    consumer - and the thing being reported is that the warm COMPLETED and Citi
+    served less than last night. The tag cache is cumulative; its consumers can
+    still run against what is banked. Failing here throws away thousands of
+    seconds of downstream work to report that a vendor got thinner.
+
+    Measured on the 2026-08-23 catch-up: **7 bonds of 877**, all of them losing
+    ``ASW_4_GBP`` / ``ASW_4_CHF`` / ``ASW_4_EUR`` - the cross-currency
+    asset-swap matrix, which is the thinnest family Citi publishes. That is
+    vendor noise, and on the strength of it both UST value jobs were skipped.
+
+    So the default is: record it as a SKIPPED STEP. It is named in SUMMARY, it
+    moves the run to exit 2, and it does NOT disown the store asset - which is
+    exactly the distinction the runner already draws between a job that failed
+    (may have written half a partition) and one that was skipped (wrote
+    nothing). A completed warm reporting thinner coverage is the third case and
+    belongs with the second.
+
+    A genuinely big regression still fails, because at some size it stops being
+    noise and starts being an outage - and the consumers building OFFLINE would
+    write empty columns that look like days Citi served nothing. A quarter of
+    the universe is the line; 7/877 is 0.8%, and the 324/877 false alarm this
+    branch fixed would have been 37%.
+    """
     regressed = out.get("regressed") or {}
     if not regressed:
         return
+    universe = int(out.get("of") or 0)
     shown = ", ".join(
         f"{isin}: {', '.join(vals)}" for isin, vals in sorted(regressed.items())[:5]
     )
     more = f" and {len(regressed) - 5} more" if len(regressed) > 5 else ""
-    raise RuntimeError(
-        f"UST universe {label} warm: {len(regressed)} bond(s) newly stopped updating "
-        f"since the last run ({shown}{more}). The warm itself completed - this is a "
-        f"coverage regression, not a partial run, so re-running will not clear it."
+    share = (len(regressed) / universe) if universe else 1.0
+    detail = (
+        f"{len(regressed)} of {universe or '?'} bond(s) newly stopped updating "
+        f"since the last run ({shown}{more})"
+    )
+
+    if share >= _CV_COVERAGE_FAIL_FRACTION:
+        raise RuntimeError(
+            f"UST universe {label} warm: {detail}. That is {share:.0%} of the "
+            "universe, past the point where this reads as vendor noise - the "
+            "consumers build OFFLINE, so a gap this wide becomes empty columns "
+            "that look like days Citi served nothing."
+        )
+
+    log.warning(
+        "  UST universe %s warm: %s. The warm COMPLETED - this is coverage, not a "
+        "partial run, so re-running will not clear it and the consumers still have "
+        "a cumulative tag cache to read.",
+        label, detail,
+    )
+    _SUBPROCESS_SKIPS.append(
+        _StepFailure(f"UST universe {label} coverage", "COVERAGE", detail)
     )
 
 
 def warm_citivelo_ust_universe_intraday(start, end):
     """Job 8 [STORE]: the WHOLE Citi UST universe at MI01, into the tag cache.
 
-    ``PRICE`` and ``YIELD`` only, and that is a measured budget rather than a
-    preference: intraday costs ~1.7 MB of Excel per tag, so these two across 349
-    bonds are 698 tags and about 170 MB, while the full seven-value set would be
-    2,302 tags and ~3.9 GB - over the ceiling, in a process only a human restart
-    can shrink. Widen with ``--values`` when someone is watching.
+    Four values - ``PRICE``, ``YIELD``, ``CAS_RFR`` and ``YYS_RFR`` - and the
+    number is a measured budget rather than a preference. The set lives in
+    ``citivelo_ust_universe_warm.INTRADAY_VALUES``; widen it with ``--values``
+    when someone is watching.
 
-    Measured 2026-08-08: 349 bonds, 698 tags, 48 s, Excel +170 MB.
+    THE COST MODEL THIS DOCSTRING USED TO QUOTE WAS THE WRONG TRANSPORT'S.
+    "~1.7 MB of Excel per tag" is ``fetch_windowed``, a sheet-per-window path
+    this warm deliberately does not use (see the note on ``_warm_intraday``).
+    What it does use, ``CitiVeloQuotes.frame`` through ``windowed.warm_windows``,
+    measured **0.24 MB per tag** - and the very next clause here, "698 tags and
+    about 170 MB", is that 0.24 number rather than the 1.7 it had just claimed.
+    Sized off the wrong one, two extra values project to +1.2 GB against a
+    3,800 MB ceiling and look impossible; sized off the measured one they are
+    +58 MB.
+
+    They are also fewer tags than they look. ``CitiVeloBondFetcher.plan`` drops
+    any value a bond is not validated for, and only 120 of the 877 catalogued
+    ISINs carry CAS_RFR/YYS_RFR - so the marginal cost is 240 tags, taking the
+    warm from 1,754 to 1,994.
+
+    Measured 2026-08-08 at two values: 349 bonds, 698 tags, 48 s, Excel +170 MB.
+    The universe is 877 bonds now, not 349; both numbers appear in older
+    comments and only the first was ever measured.
 
     Note this deliberately drives ``CitiVeloQuotes.frame`` in sub-cliff windows
     rather than ``CitiVeloBondFetcher.fetch``. The fetcher is the right way to
@@ -1547,12 +2142,12 @@ def warm_citivelo_ust_universe_intraday(start, end):
     349 bonds and left zero MI01 files on disk. See ``_warm_intraday``.
     """
     from scripts.citivelo_ust_universe_warm import (
-        DEPTH_BUDGET_S, DEPTH_TARGET_DAYS, backfill_depth, warm,
+        DEPTH_BUDGET_S, DEPTH_TARGET_DAYS, WORKING_CEILING_MB, backfill_depth, warm,
     )
 
     days = int(os.environ.get("CITIVELO_UST_INTRADAY_DAYS", "2"))
     out = warm("intraday", start=end - datetime.timedelta(days=days), end=end,
-               ceiling_mb=_CV_MEMORY_CEILING_MB)
+               ceiling_mb=WORKING_CEILING_MB)
     if out.get("stopped"):
         raise RuntimeError(
             f"UST universe intraday warm stopped after {out['done']}/{out['of']} bonds: "
@@ -1588,14 +2183,14 @@ def warm_citivelo_ust_universe_intraday(start, end):
         # no cron job connected). Left to propagate, the runner's
         # ``except excel_errors`` would label the WHOLE job SKIPPED, disowning a
         # forward warm that had already succeeded, and
-        # ``_raise_on_coverage_regression`` below would never run - silencing the
+        # ``_report_coverage_regression`` below would never run - silencing the
         # alarm that exists precisely to notice a bond that stopped updating.
         #
         # Depth is the optional half of this job. It may cost the run an exit
         # code; it may not cost it the forward warm's result or its alarm.
         try:
             deep = backfill_depth(end=end, depth_days=depth_days, budget_s=budget,
-                                  ceiling_mb=_CV_MEMORY_CEILING_MB)
+                                  ceiling_mb=WORKING_CEILING_MB)
             log.info(
                 "  depth: %d bond-week(s) over %d pass(es), deepest %s, target %s%s",
                 deep["weeks"], deep["passes"], deep.get("deepest"), deep.get("target"),
@@ -1626,7 +2221,7 @@ def warm_citivelo_ust_universe_intraday(start, end):
                              f"{type(exc).__name__}: {exc}")
             )
 
-    _raise_on_coverage_regression(out, "intraday")
+    _report_coverage_regression(out, "intraday")
     return None
 
 
@@ -1652,6 +2247,163 @@ def warm_citivelo_swap_spread_tags(start, end):
         return frame
     finally:
         quotes.close()
+
+
+#: The intraday swap-spread window, in the curve's own zone.
+#:
+#: 08:00-17:00 keeps every reference point INSIDE Citi's USD publishing session,
+#: and that is a cost control rather than tidiness. Citi publishes SWAP_SPREAD
+#: only during its session while the minute CurveStore holds the Sunday-evening
+#: open and the small hours, so a Monday 01:44 curve exists whose newest spread
+#: print is the previous Friday 17:59 - 55.8 h against a 12 h limit.
+#: ``_resolve_one`` then raises ``StaleCurveError`` per (tenor, minute) and
+#: ``IRSwapsTB`` logs a full traceback for each: measured at roughly 4,000
+#: tracebacks on a Monday, costing more than the pricing they replace.
+_CV_SWAP_SPREAD_INTRADAY_OPEN = datetime.time(8, 0)
+_CV_SWAP_SPREAD_INTRADAY_CLOSE = datetime.time(17, 0)
+_CV_SWAP_SPREAD_INTRADAY_FREQ = "15min"
+
+
+def warm_citivelo_swap_spread_tags_intraday(start, end):
+    """Job [STORE]: USD_SOFR ``SWAP_SPREAD`` at MI01, into the tag cache.
+
+    USD-SOFR only, and that is the whole scope. Of the twenty Citi indices only
+    thirteen carry a ``SWAP_SPREAD`` sub-type at all, the axis is ragged per
+    index, and USD is the one anybody reads at minute resolution.
+
+    Distinct from the DAILY sibling by the cache key, not by the tag: the tag
+    path ``RATES.OIS.USD_SOFR.SWAP_SPREAD.<tenor>`` carries no frequency
+    segment, and ``CitiVeloTagCache`` stores MI01 and DAILY under separate
+    directories. So the same eleven tags serve both and neither can overwrite
+    the other - which is why this declares its own asset key.
+
+    It is cheap on a warm cache and that is by construction:
+    ``_intraday_history_frame`` chunks the request under the measured six-day
+    MI01 downsampling cliff and passes ``force_refresh=not cached`` per chunk,
+    so a window the cache already covers costs no Excel round trip at all. The
+    trailing window is small for the same reason the DAILY one is.
+
+    Measured on this machine's own cache: all eleven USD_SOFR tenors already
+    hold MI01 from 2022-08-24 to 2026-08-21, ~1.27M rows and 13-17 MB each,
+    ~161 MB in total - four years, already banked. This job keeps the head of
+    that current rather than building it.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads import (
+        swap_spread_history, swap_spread_tenors,
+    )
+
+    # A TRAILING window, not [today, today], and the reason is that the tag
+    # cache's coverage model is a single [first, last] interval. It cannot see a
+    # hole INSIDE that interval, and a hole does not raise - the as-of search
+    # serves the previous print and a whole session silently inherits the day
+    # before. One missed night with a [today, today] window would therefore
+    # leave a permanent, invisible gap. Overlapping every run is what closes it.
+    days = int(os.environ.get("CITIVELO_SWAP_SPREAD_MI01_DAYS", "4"))
+    window_start = end - datetime.timedelta(days=days)
+
+    quotes, client = _citivelo_excel_guard()
+    try:
+        tenors = swap_spread_tenors(_CV_SWAP_SPREAD_INDEX)
+        log.info("  %s MI01: %d tenors, %s..%s",
+                 _CV_SWAP_SPREAD_INDEX, len(tenors), window_start, end)
+        frame = swap_spread_history(
+            _CV_SWAP_SPREAD_INDEX, tenors,
+            start=window_start, end=end, freq="MI01", quotes=quotes,
+        )
+        log.info("  served %d/%d tenors, %d minute row(s); Excel at %.0f MB after",
+                 len(frame.columns), len(tenors), len(frame), client.excel_memory_mb())
+        if not len(frame.columns):
+            raise RuntimeError(
+                f"{_CV_SWAP_SPREAD_INDEX} MI01 swap spreads returned NO tenors for "
+                f"{window_start}..{end}. All eleven have four years of banked MI01, "
+                "so an empty axis here is the wire or the window, not the market."
+            )
+        return frame
+    finally:
+        quotes.close()
+
+
+def warm_citivelo_swap_spread_values_intraday(start, end):
+    """Job [VALUE]: Citi's published swap spread at a 15-minute stride.
+
+    The same value as the EOD job - ``IRS_CITIVELO_SWAP_SPREAD``, Citi's OWN
+    published number rather than the repo's computed MMSS/SPREADOVER - read at
+    intraday instants instead of at a close.
+
+    Nothing routes it here explicitly: mode dispatch is
+    ``timestamps.resolve_request``, and a datetime carrying a time IS the
+    intraday mode, which reads MI01. A bare date, or a midnight timestamp, is
+    EOD. So the only difference between this job and its EOD sibling is the
+    reference points.
+
+    OFFLINE is forced through the module seam rather than through the query, and
+    that distinction is load-bearing. ``quotes=`` and ``offline=`` ARE accepted
+    in ``value_kwargs``, but ``value_kwargs`` is hashed into the
+    computed-timeseries symbol - so a warm that passed them there would bank
+    every value under a symbol no plain user query will ever read. It would look
+    like a working warm and serve nobody. ``set_force_offline`` is the
+    process-wide seam that exists for exactly this, and it is restored
+    afterwards so the setting cannot leak into a later job.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL import swap_spreads
+    from MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads import swap_spread_tenors
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    from TB.IRSwapsTB import IRSwapsTB
+    from TB.TimeseriesBuilder import TimeseriesBuilder
+
+    import pytz
+
+    nyc = pytz.timezone("America/New_York")
+    days = _business_days(start, end)
+    if not days:
+        log.info("  no business days in range")
+        return None
+
+    tenors = swap_spread_tenors(_CV_SWAP_SPREAD_INDEX)
+    mdp = IRSwapsMDP(source="CITIVELO_EXCEL-RL")
+    tb = TimeseriesBuilder()
+    queries = [
+        UnifiedQuery(curve="USD-SOFR-1D", tenor=t,
+                     value=UnifiedValue.IRS_CITIVELO_SWAP_SPREAD)
+        for t in tenors
+    ]
+    log.info("  %d tenors x %d day(s) at %s, in-session only (%s-%s ET)",
+             len(tenors), len(days), _CV_SWAP_SPREAD_INTRADAY_FREQ,
+             _CV_SWAP_SPREAD_INTRADAY_OPEN, _CV_SWAP_SPREAD_INTRADAY_CLOSE)
+
+    frames = []
+    swap_spreads.set_force_offline(True)
+    try:
+        for day in days:
+            try:
+                frame = tb.get_timeseries(
+                    start=nyc.localize(datetime.datetime.combine(
+                        day, _CV_SWAP_SPREAD_INTRADAY_OPEN)),
+                    end=nyc.localize(datetime.datetime.combine(
+                        day, _CV_SWAP_SPREAD_INTRADAY_CLOSE)),
+                    queries=queries,
+                    freq=_CV_SWAP_SPREAD_INTRADAY_FREQ,
+                    n_jobs=N_JOBS,
+                    routers={"IRS": IRSwapsTB(mdp, show_tqdm=True)},
+                    ignore_cache_miss=True,
+                )
+                if frame is not None and len(frame):
+                    frames.append(frame)
+            except Exception as exc:  # one bad day must not end the job
+                log.warning("  %s failed: %s: %s", day, type(exc).__name__, exc)
+    finally:
+        swap_spreads.set_force_offline(None)
+
+    if not frames:
+        return None
+
+    import pandas as pd
+
+    out = pd.concat(frames).sort_index()
+    log.info("  %d rows x %d cols", len(out), len(out.columns))
+    return out
 
 
 def warm_citivelo_frb_values(start, end):
@@ -1784,6 +2536,168 @@ def warm_citivelo_ust_timeseries(start, end):
     return None
 
 
+#: The intraday stride for UST bond values, and it is a HARD CONSTRAINT rather
+#: than a taste.
+#:
+#: ``FixedRateBondsTB`` disables the computed-timeseries cache entirely - read
+#: AND write - for any intraday request over 50 reference points
+#: (``_skip_ts_cache = is_intraday and len(ref_points) > 50``). Past that line
+#: the job would price a full session and persist NONE of it, reporting a frame
+#: and writing nothing, which is the same shape as the today-guard defect one
+#: layer up. 08:00-17:00 ET at 15 minutes is 37 points, comfortably inside it;
+#: 10 minutes would be 55 and silently outside.
+_CV_BOND_INTRADAY_FREQ = "15min"
+_CV_BOND_INTRADAY_OPEN = datetime.time(8, 0)
+_CV_BOND_INTRADAY_CLOSE = datetime.time(17, 0)
+
+
+def _report_citivelo_bond_coverage(aliases, as_of):
+    """Say WHICH aliases Citi cannot quote, once, before pricing hides it.
+
+    A bond outside Citi's committed universe does not raise here - the value
+    jobs drop it and return a shorter frame - and a shorter frame is exactly
+    what a quiet market looks like. The per-bond ``BondNotQuotedError`` goes to
+    the log at INFO from inside a pricing loop, one line per (bond, reference
+    point), which on a 37-stamp intraday run means the same three bonds
+    reported 111 times among thousands of tqdm updates.
+
+    The bonds this misses are not the obscure ones. Measured 2026-08-21 on this
+    machine, the three aliases that failed were CT3, CT10 and CT30 - the current
+    ON-THE-RUNS - because the committed harvest predates their auction. Citi's
+    universe moves in both directions (Treasury auctions weekly; 24 of the 349
+    bonds Citi carries mature during 2026), and the newest issues are both the
+    most traded and the ones a stale catalog is guaranteed to be missing.
+
+    The fix is a universe refresh, which needs Excel, so this names the command
+    rather than trying to do it: ``citivelo_ust_universe_warm.warm`` already
+    calls ``refresh()`` first when it can connect.
+    """
+    try:
+        from MDP.CitiVelocityExcel.bonds.resolution import resolve_bonds
+        from MDP.FixedRateBonds.FixedRateBondsMDP import (
+            FixedRateBondsMDP, _filter_and_rank_ref_df,
+        )
+        from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import (
+            update_reference_data,
+        )
+
+        mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL", offline=True)
+        ref_df = _filter_and_rank_ref_df(update_reference_data(source="fiscaldata"), as_of)
+        alias_to_cusip, _ = mdp._resolve_aliases_bulk(list(aliases), as_of, ref_df=ref_df)
+        _, failures = resolve_bonds(list(alias_to_cusip.values()), strict=False)
+    except Exception as exc:  # noqa: BLE001 - a report must not fail the warm
+        log.warning("  could not check Citi bond coverage (%s)", exc)
+        return
+
+    if not failures:
+        log.info("  Citi quotes all %d alias(es)", len(aliases))
+        return
+
+    by_cusip = {cusip: alias for alias, cusip in alias_to_cusip.items()}
+    unquoted = sorted(by_cusip.get(c, c) for c in failures)
+    log.warning(
+        "  Citi does not quote %d of %d alias(es): %s. These become MISSING "
+        "COLUMNS, not zeros - a shorter frame that reads like a quiet market. "
+        "The committed bond universe predates their auction; the fix is the "
+        "universe refresh inside 'CITIVELO UST universe tags EOD', which needs "
+        "a usable Excel: python scripts/citivelo_ust_universe_warm.py eod --years 1",
+        len(unquoted), len(aliases), ", ".join(unquoted),
+    )
+
+
+def warm_citivelo_ust_intraday_values(start, end):
+    """Job [VALUE]: UST bond values at MI01, off the banked minute tags.
+
+    THE MI01 BOND STORE HAD NO READER. "CITIVELO UST universe tags INTRADAY"
+    has been banking minute quotes nightly - 806 tags over 403 bonds, 993 MB,
+    some series back to 2021-01-24 - and ``CITIVELO-TAGS-RATES.BOND-MI01`` was
+    declared in ``provides`` by that job and in ``requires`` by nobody. Both UST
+    value jobs read the DAILY asset. So the whole intraday half of that warm was
+    write-only: a store that costs Excel memory every night and answers no
+    question anybody asks through the Query/MDP path.
+
+    This is the reader. It is deliberately narrow where the tag warm is broad:
+
+    * **14 aliases, not 403 bonds.** CT and O across 2/3/5/7/10/20/30 - the
+      benchmarks somebody actually watches move during a session. 403 bonds at
+      37 stamps would be ~30,000 cells a night for numbers nobody reads.
+    * **Two values.** ``FRB_YTM`` and ``FRB_CLEAN_PRICE``, both of which SOLVE
+      from the banked ``PRICE``/``YIELD``. The quote-only values (SPREAD_TSY,
+      CITI_DURATION, CITI_DV01) are not in ``INTRADAY_VALUES`` and would come
+      back as empty columns - a hole that looks like a day Citi served nothing.
+    * **A 15-minute stride**, for the 50-point reason above.
+    * **``offline=True``**, so a tag the cache does not hold is an empty column
+      rather than a live workbook opened from a scheduled task. That is the same
+      trade "CITIVELO FRB values EOD" makes and for the same reason, and it is
+      only sound BECAUSE the tag warm runs first - which is what ``requires``
+      declares.
+
+    One day per call, and the frames concatenated, so one bad day costs a day.
+    """
+    import pytz
+
+    from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    from TB.FixedRateBondsTB import FixedRateBondsTB
+    from TB.TimeseriesBuilder import TimeseriesBuilder
+
+    nyc = pytz.timezone("America/New_York")
+    days = _business_days(start, end)
+    if not days:
+        log.info("  no business days in range")
+        return None
+
+    _report_citivelo_bond_coverage(_CV_BOND_ALIASES, end)
+
+    mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL", offline=True)
+    tb = TimeseriesBuilder()
+    wanted = (UnifiedValue.FRB_YTM, UnifiedValue.FRB_CLEAN_PRICE)
+    queries = [
+        UnifiedQuery(cusip=alias, value=value)
+        for alias in _CV_BOND_ALIASES
+        for value in wanted
+    ]
+    log.info(
+        "  %d queries (%d aliases x %d values) x %d day(s) at %s, offline",
+        len(queries), len(_CV_BOND_ALIASES), len(wanted), len(days),
+        _CV_BOND_INTRADAY_FREQ,
+    )
+
+    frames = []
+    for day in days:
+        try:
+            frame = tb.get_timeseries(
+                start=nyc.localize(datetime.datetime.combine(day, _CV_BOND_INTRADAY_OPEN)),
+                end=nyc.localize(datetime.datetime.combine(day, _CV_BOND_INTRADAY_CLOSE)),
+                queries=queries,
+                freq=_CV_BOND_INTRADAY_FREQ,
+                n_jobs=N_JOBS,
+                routers={"FRB": FixedRateBondsTB(mdp, show_tqdm=True)},
+            )
+            if frame is not None and len(frame):
+                frames.append(frame)
+        except Exception as exc:  # one bad day must not end the job
+            log.warning("  %s failed: %s: %s", day, type(exc).__name__, exc)
+
+    if not frames:
+        # Not a silent None. This job exists because the store it reads had no
+        # reader; a run that reads nothing from it is the same state wearing a
+        # different face, and it should be visible in SUMMARY.
+        raise RuntimeError(
+            f"UST intraday values priced NOTHING for {start}..{end} across "
+            f"{len(_CV_BOND_ALIASES)} alias(es). The MDP is offline, so this means "
+            "the MI01 tag cache holds nothing for these bonds in this window - "
+            "check 'CITIVELO UST universe tags INTRADAY' ran."
+        )
+
+    import pandas as pd
+
+    out = pd.concat(frames).sort_index()
+    log.info("  %d rows x %d cols", len(out), len(out.columns))
+    return out
+
+
 def warm_citivelo_swap_spread_values(start, end):
     """Job 10 [VALUE]: Citi's published swap spreads, into the computed TS cache.
 
@@ -1837,9 +2751,10 @@ _CV_CURVE_STORE = "CITIVELO-CURVESTORE"
 _CV_SWAPTION_CUBE = "CITIVELO-SWAPTION-CUBE"
 
 WARM_JOBS = [
-    WarmJob("GSQUANT USD SOFR+OIS EOD (LCH+CME, 30y+STIR)", warm_gsquant_ois_eod),
-    WarmJob("ERIS USD-SOFR-1D EOD", warm_eris_eod),
-    WarmJob("FRB FedInvest EOD", warm_frb_fedinvest_eod),
+    WarmJob("GSQUANT USD SOFR+OIS EOD (LCH+CME, 30y+STIR)", warm_gsquant_ois_eod,
+            banks_today=False),
+    WarmJob("ERIS USD-SOFR-1D EOD", warm_eris_eod, banks_today=False),
+    WarmJob("FRB FedInvest EOD", warm_frb_fedinvest_eod, banks_today=False),
     WarmJob("SR3 EOD settles (depth 20)", warm_sr3_settles_eod),
     WarmJob("STIRF CME Session", warm_stirf_cme_session),
     WarmJob("UST Futures Invoice Caches", warm_ustf_invoice_caches),
@@ -1862,24 +2777,37 @@ WARM_JOBS = [
             kind=STORE, provides=(_CV_BOND_TAGS_MI01,), needs_excel=True),
     WarmJob("CITIVELO swap-spread tags (store)", warm_citivelo_swap_spread_tags,
             kind=STORE, provides=(_CV_SWAP_SPREAD_TAGS,), needs_excel=True),
+    # The MI01 twin. Same eleven tags, a different cache directory, its own
+    # asset key. Cheap on a warm cache - four years are already banked and the
+    # chunked reader only connects for a window the cache does not cover.
+    WarmJob("CITIVELO swap-spread tags MI01 (store)", warm_citivelo_swap_spread_tags_intraday,
+            kind=STORE, provides=(_CV_SWAP_SPREAD_TAGS_MI01,), needs_excel=True),
 
     # -- then the value jobs that read them --
     WarmJob("CitiVelo EOD timeseries", warm_citivelo_timeseries_eod,
-            requires=(_CV_CURVE_STORE,)),
+            requires=(_CV_CURVE_STORE,), banks_today=False),
     WarmJob("CitiVelo swaption values EOD", warm_citivelo_swaption_timeseries_eod,
-            requires=(_CV_CURVE_STORE, _CV_SWAPTION_CUBE)),
+            requires=(_CV_CURVE_STORE, _CV_SWAPTION_CUBE), banks_today=False),
     WarmJob("CitiVelo intraday timeseries", warm_citivelo_timeseries_intraday,
-            requires=(_CV_CURVE_STORE,)),
+            requires=(_CV_CURVE_STORE,), banks_today=False),
     WarmJob("CITIVELO FRB values EOD", warm_citivelo_frb_values,
-            requires=(_CV_BOND_TAGS,)),
+            requires=(_CV_BOND_TAGS,), banks_today=False),
     # Same requirement, and it is the load-bearing one: this job builds OFFLINE,
     # so a tag the EOD universe warm has not banked comes back as an empty column
     # rather than as a live Excel call. Silent, and it would populate the computed
     # store with holes that look like days Citi served nothing.
     WarmJob("CITIVELO UST timeseries values EOD", warm_citivelo_ust_timeseries,
-            requires=(_CV_BOND_TAGS,)),
+            requires=(_CV_BOND_TAGS,), banks_today=False),
     WarmJob("CITIVELO swap spreads EOD", warm_citivelo_swap_spread_values,
-            requires=(_CV_SWAP_SPREAD_TAGS,)),
+            requires=(_CV_SWAP_SPREAD_TAGS,), banks_today=False),
+    WarmJob("CITIVELO swap spreads INTRADAY", warm_citivelo_swap_spread_values_intraday,
+            requires=(_CV_SWAP_SPREAD_TAGS_MI01,), banks_today=False),
+    # The first reader the MI01 bond store has ever had. It was declared in
+    # `provides` by the tag warm and in `requires` by nobody, so the intraday
+    # half of that job was write-only: 993 MB of minute quotes costing Excel
+    # memory every night and answering nothing through the Query/MDP path.
+    WarmJob("CITIVELO UST timeseries values INTRADAY", warm_citivelo_ust_intraday_values,
+            requires=(_CV_BOND_TAGS_MI01,), banks_today=False),
 ]
 
 check(WARM_JOBS)
@@ -2098,11 +3026,22 @@ def main():
                 "; ".join(unmet[a][1] for a in degraded),
             )
 
+        # The window this job actually gets. A job whose writer refuses today's
+        # rows is pointed at the last settled session instead, so the nightly
+        # keeps what it computes; see WarmJob.banks_today for the mtime evidence
+        # that it previously did not.
+        job_start, job_end = _window_for(job, start, end)
+        if (job_start, job_end) != (start, end):
+            log.info("  window %s..%s (this job does not bank today)", job_start, job_end)
+
         t0 = time.perf_counter()
         before = len(_SUBPROCESS_FAILURES)
         before_skips = len(_SUBPROCESS_SKIPS)
+        cancel_watchdog = _arm_job_watchdog(
+            job.name, results, _JOB_DEADLINE_OVERRIDES.get(job.name, _JOB_DEADLINE_S)
+        )
         try:
-            result = job.fn(start, end)
+            result = job.fn(job_start, job_end)
             elapsed = time.perf_counter() - t0
             # A job that shells out can return normally having lost a step: every
             # caller of _run discards the code on purpose, so the only evidence
@@ -2120,11 +3059,7 @@ def main():
                     unmet.setdefault(asset, (True, f"{job.name!r} failed"))
                 log.error("  %s", status)
             else:
-                shape = getattr(result, "shape", None)
-                status = f"OK ({elapsed:.1f}s"
-                if shape:
-                    status += f", {shape[0]} rows x {shape[1]} cols"
-                status += ")"
+                status = _job_status(elapsed, result)
                 log.info("  %s", status)
             if waived:
                 # Appended to whatever the job's own status is, so a job that did
@@ -2159,6 +3094,8 @@ def main():
             for asset in job.provides:
                 unmet.setdefault(asset, (True, f"{job.name!r} failed"))
             log.exception("  FAILED: %s", e)
+        finally:
+            cancel_watchdog()
 
     # Summary
     log.info("=" * 60)

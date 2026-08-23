@@ -696,14 +696,40 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     cusip = str(hit.iloc[0]["cusip"])
                 else:
                     # Monthly alias (MMYY or MMYY-oi)
-                    try:
-                        resolved = _alias_to_cusip(alias, ref_df)
-                        if resolved:
-                            cusip = resolved
-                    except AssertionError:
-                        # bubble "need oi disambiguation" up unchanged
-                        raise
+                    resolved = _alias_to_cusip(alias, ref_df)
+                    if resolved:
+                        cusip = resolved
 
+            except AssertionError:
+                # "Ambiguous alias '0230'. Multiple original-issue buckets
+                # found: 10, 30. Use an oi-aware alias like 'MMYY-10'."
+                #
+                # THIS USED TO BE SWALLOWED, and the comment claiming otherwise
+                # was inside the try it was caught by: the inner handler
+                # re-raised into the `except Exception` below, which set
+                # `cusip = alias`, which then failed the reference lookup, which
+                # `continue`d. Net effect - the alias vanished from the returned
+                # mapping with no exception and no log line, and the caller got
+                # a shorter dict than it asked for.
+                #
+                # Measured before the fix: `_resolve_aliases_bulk` on
+                # ['CT10','0850','1145','0230','0230-10','912810SP4','ZZZZ']
+                # returned four keys. '1145' and '0230' - the two ambiguous ones
+                # - were gone, silently.
+                #
+                # That matters more than a missing column. A MMYY alias is
+                # supposed to name ONE bond forever, which is its whole
+                # advantage over 'CT10'; ambiguity means the reference data now
+                # holds two bonds maturing that month and nobody can know which
+                # was meant. Measured: '0245' resolved to the 30y 912810RK6
+                # as-of 2020, 2022 and 2024, and became ambiguous in 2026 once
+                # the 20y 912810UJ5 maturing 02/2045 existed. A series that
+                # silently stops updating at that point is worse than one that
+                # says why.
+                #
+                # The WEBULL branch further down this file already splits it
+                # this way; this is that split, applied here.
+                raise
             except Exception:
                 # not an alias we handle -> keep original (CUSIP expected)
                 cusip = alias

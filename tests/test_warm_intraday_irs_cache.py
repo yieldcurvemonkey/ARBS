@@ -299,7 +299,94 @@ def test_safe_warm_timeseries_isolates_bad_tenor():
     assert failed == ["BAD"]
 
 
-def test_backfill_mode_only_warms_missing_raw_and_forces_timeseries_reprice(monkeypatch, tmp_path):
+def _run_backfill_capturing(monkeypatch, tmp_path, trading_date, extra=None):
+    """Drive `_run_backfill_mode` for one day with every side effect stubbed.
+
+    Same stub set as the test below, factored out so the settled/today/override
+    cases differ only in the date and the flags.
+    """
+    timestamps = [
+        dt.datetime(2026, 3, 20, 9, 30, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 3, 20, 9, 31, tzinfo=dt.timezone.utc),
+    ]
+    captured: list[dict] = []
+
+    class _FakeMdp:
+        def __init__(self, source):
+            self.source = source
+            self._store = object()
+
+        def _get_curve_store(self):
+            return self._store
+
+    monkeypatch.setattr(warm_script, "IRSwapsMDP", _FakeMdp)
+    monkeypatch.setattr(warm_script, "_build_timeseries_builder", lambda **kwargs: object())
+    monkeypatch.setattr(warm_script, "count_business_day_buckets", lambda **kwargs: 1)
+    monkeypatch.setattr(
+        warm_script, "inspect_curve_store_sync_status",
+        lambda **kwargs: {
+            "curve_name": kwargs["curve_name"],
+            "start_date": kwargs["start_date"].isoformat(),
+            "end_date": kwargs["end_date"].isoformat(),
+            "local_dates": [], "remote_dates": [],
+            "local_days": 0, "remote_days": 0,
+            "local_only_days": 0, "local_only_dates": [],
+        },
+    )
+    monkeypatch.setattr(
+        warm_script, "backfill_local_curve_store_to_supabase",
+        lambda **kwargs: {"status": "ok", "pushed_days": 0, "failed_days": 0, "queued_days": 0},
+    )
+    monkeypatch.setattr(
+        warm_script, "iter_daily_minute_buckets",
+        lambda **kwargs: iter([(trading_date, timestamps)]),
+    )
+    monkeypatch.setattr(
+        warm_script, "_select_missing_curve_store_timestamps",
+        lambda store, curve_name, timestamps: [timestamps[-1]],
+    )
+    monkeypatch.setattr(warm_script, "_flush_curve_store_pushes", lambda **kwargs: None)
+    monkeypatch.setattr(warm_script, "_flush_computed_ts_pushes", lambda **kwargs: None)
+
+    def _fake_window(**kwargs):
+        captured.append(kwargs)
+        return {
+            "status": "ok", "curve_status": "ok", "timeseries_status": "ok",
+            "curve_requested": len(kwargs["curve_timestamps"]),
+            "curve_ready": len(kwargs["curve_timestamps"]),
+            "curve_failed_timestamps": [],
+            "timeseries_rows": len(kwargs["timeseries_timestamps"]),
+            "timeseries_cols": 12,
+            "timeseries_failed_tenors": [],
+        }
+
+    monkeypatch.setattr(warm_script, "_run_live_service_window", _fake_window)
+
+    args = warm_script.parse_args([
+        "backfill", "--curve", "USD-SOFR-1D-Q12STIRT",
+        "--start-date", trading_date.isoformat(),
+        "--end-date", trading_date.isoformat(),
+        "--perf-log-path", str(tmp_path / "perf.jsonl"),
+        *(extra or []),
+    ])
+    assert warm_script._run_backfill_mode(
+        args, warm_script.logging.getLogger("test_backfill_mode")
+    ) == 0
+    assert len(captured) == 1
+    return captured
+
+
+def test_backfill_mode_only_warms_missing_raw_and_does_not_reprice_a_settled_day(monkeypatch, tmp_path):
+    """The raw half filters; the timeseries half no longer forces a reprice.
+
+    It used to pass `timeseries_ignore_cache=True` unconditionally, so a
+    backfilled day re-priced every minute of every tenor whether or not the
+    computed store held it. Backfilling five already-warm nights on 2026-08-15,
+    the third curve hit the 3,600 s per-curve cap and was LOST.
+
+    The timestamps are still unfiltered -- that half is the TB's job, not this
+    loop's; what changed is only whether it is told to ignore what it finds.
+    """
     trading_date = dt.date(2026, 3, 20)
     timestamps = [
         dt.datetime(2026, 3, 20, 9, 30, tzinfo=dt.timezone.utc),
@@ -396,4 +483,25 @@ def test_backfill_mode_only_warms_missing_raw_and_forces_timeseries_reprice(monk
     assert captured[0]["curve_timestamps"] == [timestamps[-1]]
     assert captured[0]["timeseries_timestamps"] == timestamps
     assert captured[0]["curve_ignore_cache"] is False
+    assert captured[0]["timeseries_ignore_cache"] is False, (
+        "2026-03-20 is settled; re-pricing it is the behaviour that lost a curve"
+    )
+
+
+def test_backfill_mode_still_reprices_today(monkeypatch, tmp_path):
+    """Today's session is still moving, so its partial values SHOULD refresh.
+
+    That is the case the unconditional True was written for; it was simply never
+    bounded to it.
+    """
+    today = dt.date.today()
+    captured = _run_backfill_capturing(monkeypatch, tmp_path, today)
+    assert captured[0]["timeseries_ignore_cache"] is True
+
+
+def test_reprice_timeseries_forces_it_on_a_settled_day(monkeypatch, tmp_path):
+    """The escape hatch, for a deliberate repair."""
+    captured = _run_backfill_capturing(
+        monkeypatch, tmp_path, dt.date(2026, 3, 20), extra=["--reprice-timeseries"]
+    )
     assert captured[0]["timeseries_ignore_cache"] is True

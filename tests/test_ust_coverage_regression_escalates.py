@@ -2,9 +2,13 @@
 
 `citivelo_ust_universe_warm.main` exits 1 when tags newly fall silent, but the
 nightly warmer never goes through `main` -- it calls `warm()` directly and, until
-`_raise_on_coverage_regression` existed, read only `out["stopped"]`. Measured on
+`_report_coverage_regression` existed, read only `out["stopped"]`. Measured on
 the unfixed code: fed a real regression payload the job returned `None`, the
 SUMMARY line printed OK, and the run exited 0.
+
+A thin regression no longer RAISES -- it is recorded as a step, which is still
+seen and still moves the run to exit 2, but does not disown a store asset and
+skip its consumers. An outage-sized one still fails.
 
 That is the same shape as the defect the coverage predicate was written to fix,
 one layer up -- a warm that cannot fail on coverage grounds cannot be trusted to
@@ -61,17 +65,28 @@ def _fake_warm(monkeypatch, payload):
     (W.warm_citivelo_ust_universe_eod, "EOD"),
     (W.warm_citivelo_ust_universe_intraday, "intraday"),
 ])
-def test_a_new_coverage_regression_fails_the_job(monkeypatch, job, label):
+def test_a_new_coverage_regression_reaches_the_scheduler(monkeypatch, job, label):
+    """It must be SEEN. It must no longer take the consumers down with it.
+
+    One bond of 877 is vendor noise, and raising from a STORE job disowns its
+    asset and skips every consumer -- measured on 2026-08-23, where 7 bonds
+    losing the cross-currency ASW matrix skipped both UST value jobs. It is now
+    a recorded step: named in SUMMARY, run exits 2, asset untouched.
+    """
     _fake_warm(monkeypatch, {**CLEAN,
                              "regressed": {"US91282CNG23": ["CAS", "PRICE"]}})
-    with pytest.raises(RuntimeError) as e:
-        job(START, END)
-    msg = str(e.value)
-    assert "US91282CNG23" in msg, "the operator must be told WHICH bond"
-    assert "CAS" in msg
-    assert label in msg
-    # It must not read as a partial run -- re-running will not clear it.
-    assert "re-run" not in msg or "will not clear" in msg
+    before = len(W._SUBPROCESS_SKIPS)
+    try:
+        assert job(START, END) is None, "a thin regression must not raise"
+        added = W._SUBPROCESS_SKIPS[before:]
+        coverage = [s for s in added if s.returncode == "COVERAGE"]
+        assert len(coverage) == 1, [s.returncode for s in added]
+        msg = coverage[0].detail
+        assert "US91282CNG23" in msg, "the operator must be told WHICH bond"
+        assert "CAS" in msg
+        assert label in W._describe_step_failure(coverage[0])
+    finally:
+        del W._SUBPROCESS_SKIPS[before:]
 
 
 @pytest.mark.parametrize("job", [
@@ -99,18 +114,38 @@ def test_a_stopped_run_still_reports_as_a_partial_not_a_regression(monkeypatch, 
 def test_many_regressions_are_summarised_not_dumped():
     """A 500-bond regression must not paste 500 ISINs into the run log."""
     regressed = {f"US{i:010d}": ["CAS"] for i in range(40)}
-    with pytest.raises(RuntimeError) as e:
-        W._raise_on_coverage_regression({"regressed": regressed}, "EOD")
-    msg = str(e.value)
-    assert "40 bond(s)" in msg
-    assert "and 35 more" in msg
-    assert msg.count("US00000000") <= 5
+    before = len(W._SUBPROCESS_SKIPS)
+    try:
+        W._report_coverage_regression({"of": 877, "regressed": regressed}, "EOD")
+        msg = W._SUBPROCESS_SKIPS[-1].detail
+        assert "40 of 877 bond(s)" in msg
+        assert "and 35 more" in msg
+        assert msg.count("US00000000") <= 5
+    finally:
+        del W._SUBPROCESS_SKIPS[before:]
+
+
+def test_an_outage_sized_regression_still_fails_the_job():
+    """At a quarter of the universe it stops being noise.
+
+    The consumers build OFFLINE, so a gap that wide becomes empty columns that
+    read as days the vendor served nothing.
+    """
+    regressed = {f"US{i:010d}": ["CAS"] for i in range(300)}
+    with pytest.raises(RuntimeError, match="past the point"):
+        W._report_coverage_regression({"of": 877, "regressed": regressed}, "EOD")
 
 
 def test_the_level_does_not_escalate_only_the_change():
-    """A standing dead level with no NEW stall must not fail the run.
+    """A standing dead level with no NEW stall must not alarm at all.
 
-    The ten long-dead value families would otherwise exit non-zero every night.
+    The ten long-dead value families would otherwise report every night.
     """
-    assert W._raise_on_coverage_regression(
-        {"coverage": {"stalled": 1854, "sparse": 1025}, "regressed": {}}, "EOD") is None
+    before = len(W._SUBPROCESS_SKIPS)
+    try:
+        assert W._report_coverage_regression(
+            {"coverage": {"stalled": 1854, "sparse": 1025}, "of": 877, "regressed": {}},
+            "EOD") is None
+        assert W._SUBPROCESS_SKIPS[before:] == []
+    finally:
+        del W._SUBPROCESS_SKIPS[before:]

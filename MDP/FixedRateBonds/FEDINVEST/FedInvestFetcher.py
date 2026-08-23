@@ -16,10 +16,18 @@ warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
+import threading
 
 if sys.platform == "win32":
     loop = asyncio.ProactorEventLoop()
     asyncio.set_event_loop(loop)
+
+#: Serialises every ``asyncio.run`` in this module, process-wide.
+#:
+#: ``runner`` is called from a thread pool - one worker per timestamp - and each
+#: call builds its own event loop. Concurrent loops sharing this module's httpx
+#: state deadlocked the 2026-08-22 nightly for 24 hours. See ``runner``.
+_FEDINVEST_LOOP_LOCK = threading.Lock()
 
 
 class BaseFetcher:
@@ -34,16 +42,50 @@ class BaseFetcher:
     ):
         self._global_timeout = global_timeout
         self._proxies = proxies if proxies else {"http": None, "https": None}
-        self._httpx_proxies = {
-            "http://": httpx.AsyncHTTPTransport(proxy=self._proxies["http"]),
-            "https://": httpx.AsyncHTTPTransport(proxy=self._proxies["https"]),
-        }
+        # NOT built here any more, and this is the 2026-08-22 deadlock.
+        #
+        # An ``httpx.AsyncHTTPTransport`` carries an anyio connection pool bound
+        # to the event loop that first drives it. Building them in ``__init__``
+        # and mounting them on every ``AsyncClient`` meant one fetcher instance
+        # shared its transports across every loop that ever used it - and
+        # ``FixedRateBondsMDP._process_one`` is dispatched PER TIMESTAMP into a
+        # thread pool, each worker calling ``asyncio.run`` on a loop of its own.
+        # One date is one loop and fine; ``--backfill 7`` is eight of them on
+        # the same transports.
+        #
+        # It deadlocks. Measured: the Saturday warm of 2026-08-22 was still
+        # alive 24 hours later with two ``frb-mdp`` workers wedged in
+        # ``asyncio.run`` -> ``ProactorEventLoop._poll``, 306 threads, CPU flat
+        # at 159.1 s across a 40-minute gap between two py-spy dumps with
+        # byte-identical stacks. Sixteen of the eighteen jobs never started.
+        # Nothing timed out, because the 10 s httpx timeout is itself scheduled
+        # on the loop that is stuck.
+        #
+        # See :meth:`_build_mounts`, which makes one set per client, and the
+        # lock on :meth:`runner`, which stops two loops existing at once at all.
+        self._httpx_proxies = None
 
         self._debug_verbose = debug_verbose
         self._info_verbose = info_verbose
         self._error_verbose = error_verbose
         self._warning_verbose = warning_verbose
         self._setup_logger()
+
+    def _build_mounts(self):
+        """Fresh transports, for THIS client, on THIS loop.
+
+        An ``AsyncHTTPTransport`` binds its connection pool to the loop that
+        first drives it, so one reused across loops is a deadlock waiting for a
+        second thread. Building them per client costs a socket pool and removes
+        the shared state entirely. Returns ``None`` when no proxy is configured,
+        which is the common case and lets httpx use its own default transport.
+        """
+        if not any(self._proxies.values()):
+            return None
+        return {
+            "http://": httpx.AsyncHTTPTransport(proxy=self._proxies["http"]),
+            "https://": httpx.AsyncHTTPTransport(proxy=self._proxies["https"]),
+        }
 
     def _setup_logger(self):
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -295,7 +337,7 @@ class FedInvestDataFetcher(BaseFetcher, LayeredCacheMixin):
 
         async def run_fetch_all(dates):
             limits = httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_keepalive_connections)
-            async with httpx.AsyncClient(limits=limits, timeout=self._global_timeout, mounts=self._httpx_proxies, verify=False, http2=True) as client:
+            async with httpx.AsyncClient(limits=limits, timeout=self._global_timeout, mounts=self._build_mounts(), verify=False, http2=True) as client:
                 all_data = await build_tasks(client=client, dates=dates)
                 return all_data
 
@@ -319,7 +361,23 @@ class FedInvestDataFetcher(BaseFetcher, LayeredCacheMixin):
             if not dates_to_fetch:
                 return {dt: cache[date_keys[dt]] for dt in dates}
 
-            fetched_dict = dict(asyncio.run(run_fetch_all(dates=dates_to_fetch)))
+            # ONE EVENT LOOP AT A TIME, PROCESS-WIDE.
+            #
+            # Per-client transports (see ``_build_mounts``) remove the shared
+            # pool, and this removes the concurrency that made it reachable:
+            # ``FixedRateBondsMDP._process_one`` calls this once per timestamp
+            # from a thread pool, so a multi-date request opens one
+            # ``asyncio.run`` per worker. Belt and braces on purpose - the
+            # failure it prevents cost a whole nightly run and 24 hours of a
+            # held Excel, and the diagnosis took two py-spy dumps to be sure of.
+            #
+            # It costs almost nothing. FedInvest is a WHOLE-FILE daily download
+            # cached by date, and the cache is consulted above this line - so a
+            # second thread asking for a date the first just fetched never gets
+            # here, and one that asks for a different date waits for a request
+            # measured in seconds.
+            with _FEDINVEST_LOOP_LOCK:
+                fetched_dict = dict(asyncio.run(run_fetch_all(dates=dates_to_fetch)))
             for dt, df in fetched_dict.items():
                 if isinstance(df, pd.DataFrame) and not df.empty:
                     cache[pd.Timestamp(dt.date())] = df
