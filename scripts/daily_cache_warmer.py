@@ -1400,6 +1400,15 @@ _CV_BOND_TAGS_MI01 = "CITIVELO-TAGS-RATES.BOND-MI01"
 _CV_SWAP_SPREAD_TAGS = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD"
 
 #: Stop below this. See utils/warm_jobs.py and the 2026-08-07 wedge.
+#:
+#: This is the HARD ceiling - the one above which nothing may connect at all.
+#: The UST universe warms are handed ``citivelo_ust_universe_warm``'s own
+#: ``WORKING_CEILING_MB`` (3,500) instead, which is what that script's between-
+#: batch check is sized for: its comment reads "leave headroom below the hard
+#: 3,800 MB ceiling so a batch in flight cannot cross it. One intraday batch is
+#: ~14 MB, so 300 MB is ~20 batches of slack." Passing the hard number spent
+#: that headroom, which is the point at which a batch in flight is what crosses
+#: the line rather than the check that stops before it.
 _CV_MEMORY_CEILING_MB = 3800.0
 
 #: Whether the nightly may START Excel and wait for the add-in to sign itself in.
@@ -1829,7 +1838,7 @@ def warm_citivelo_ust_universe_eod(start, end):
     Resumable: ``citivelo_ust_universe_warm`` records progress per batch, so a
     run that stops at the memory ceiling resumes tomorrow rather than restarting.
     """
-    from scripts.citivelo_ust_universe_warm import warm
+    from scripts.citivelo_ust_universe_warm import WORKING_CEILING_MB, warm
 
     # A ROLLING window, not the full history, and the reason is the resume key:
     # it includes the end date, so `end = today` changes every night and the whole
@@ -1843,7 +1852,7 @@ def warm_citivelo_ust_universe_eod(start, end):
     # CITIVELO_UST_EOD_DAYS when a longer nightly window is actually wanted.
     days = int(os.environ.get("CITIVELO_UST_EOD_DAYS", "30"))
     out = warm("eod", start=end - datetime.timedelta(days=days), end=end,
-               ceiling_mb=_CV_MEMORY_CEILING_MB)
+               ceiling_mb=WORKING_CEILING_MB)
     if out.get("stopped"):
         raise RuntimeError(
             f"UST universe EOD warm stopped after {out['done']}/{out['of']} bonds: "
@@ -1886,13 +1895,29 @@ def _raise_on_coverage_regression(out, label):
 def warm_citivelo_ust_universe_intraday(start, end):
     """Job 8 [STORE]: the WHOLE Citi UST universe at MI01, into the tag cache.
 
-    ``PRICE`` and ``YIELD`` only, and that is a measured budget rather than a
-    preference: intraday costs ~1.7 MB of Excel per tag, so these two across 349
-    bonds are 698 tags and about 170 MB, while the full seven-value set would be
-    2,302 tags and ~3.9 GB - over the ceiling, in a process only a human restart
-    can shrink. Widen with ``--values`` when someone is watching.
+    Four values - ``PRICE``, ``YIELD``, ``CAS_RFR`` and ``YYS_RFR`` - and the
+    number is a measured budget rather than a preference. The set lives in
+    ``citivelo_ust_universe_warm.INTRADAY_VALUES``; widen it with ``--values``
+    when someone is watching.
 
-    Measured 2026-08-08: 349 bonds, 698 tags, 48 s, Excel +170 MB.
+    THE COST MODEL THIS DOCSTRING USED TO QUOTE WAS THE WRONG TRANSPORT'S.
+    "~1.7 MB of Excel per tag" is ``fetch_windowed``, a sheet-per-window path
+    this warm deliberately does not use (see the note on ``_warm_intraday``).
+    What it does use, ``CitiVeloQuotes.frame`` through ``windowed.warm_windows``,
+    measured **0.24 MB per tag** - and the very next clause here, "698 tags and
+    about 170 MB", is that 0.24 number rather than the 1.7 it had just claimed.
+    Sized off the wrong one, two extra values project to +1.2 GB against a
+    3,800 MB ceiling and look impossible; sized off the measured one they are
+    +58 MB.
+
+    They are also fewer tags than they look. ``CitiVeloBondFetcher.plan`` drops
+    any value a bond is not validated for, and only 120 of the 877 catalogued
+    ISINs carry CAS_RFR/YYS_RFR - so the marginal cost is 240 tags, taking the
+    warm from 1,754 to 1,994.
+
+    Measured 2026-08-08 at two values: 349 bonds, 698 tags, 48 s, Excel +170 MB.
+    The universe is 877 bonds now, not 349; both numbers appear in older
+    comments and only the first was ever measured.
 
     Note this deliberately drives ``CitiVeloQuotes.frame`` in sub-cliff windows
     rather than ``CitiVeloBondFetcher.fetch``. The fetcher is the right way to
@@ -1901,12 +1926,12 @@ def warm_citivelo_ust_universe_intraday(start, end):
     349 bonds and left zero MI01 files on disk. See ``_warm_intraday``.
     """
     from scripts.citivelo_ust_universe_warm import (
-        DEPTH_BUDGET_S, DEPTH_TARGET_DAYS, backfill_depth, warm,
+        DEPTH_BUDGET_S, DEPTH_TARGET_DAYS, WORKING_CEILING_MB, backfill_depth, warm,
     )
 
     days = int(os.environ.get("CITIVELO_UST_INTRADAY_DAYS", "2"))
     out = warm("intraday", start=end - datetime.timedelta(days=days), end=end,
-               ceiling_mb=_CV_MEMORY_CEILING_MB)
+               ceiling_mb=WORKING_CEILING_MB)
     if out.get("stopped"):
         raise RuntimeError(
             f"UST universe intraday warm stopped after {out['done']}/{out['of']} bonds: "
@@ -1949,7 +1974,7 @@ def warm_citivelo_ust_universe_intraday(start, end):
         # code; it may not cost it the forward warm's result or its alarm.
         try:
             deep = backfill_depth(end=end, depth_days=depth_days, budget_s=budget,
-                                  ceiling_mb=_CV_MEMORY_CEILING_MB)
+                                  ceiling_mb=WORKING_CEILING_MB)
             log.info(
                 "  depth: %d bond-week(s) over %d pass(es), deepest %s, target %s%s",
                 deep["weeks"], deep["passes"], deep.get("deepest"), deep.get("target"),

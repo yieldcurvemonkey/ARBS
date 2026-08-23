@@ -245,7 +245,60 @@ WORKING_CEILING_MB = 3500.0
 #: transport at ~0.24 MB/tag, so 698 tags is ~170 MB; the full 2,302-tag set
 #: projects to ~560 MB and would fit, but has not been run end to end. Two values
 #: is what is measured, so two values is the default.
-INTRADAY_VALUES = ("PRICE", "YIELD")
+INTRADAY_VALUES = ("PRICE", "YIELD", "CAS_RFR", "YYS_RFR")
+
+#: Why four and not two, and why these two.
+#:
+#: PRICE and YIELD are what every bond serves and were the whole intraday set.
+#: CAS_RFR (coupon-adjusted spread vs RFR) and YYS_RFR (yield-yield spread vs
+#: RFR) are the two SPREAD reads a relative-value book watches during a session,
+#: and they are the live successors of the CAS/YYS that Citi retired on
+#: 2025-10-03 (``bonds.values.DISCONTINUED_2025_10_03``) - so a study written
+#: against the old names has nothing to read after that date and this is where
+#: it gets it back.
+#:
+#: THE MARGINAL COST IS 240 TAGS, NOT 1,754, and that is what makes it
+#: affordable. ``CitiVeloBondFetcher.plan`` filters each bond's requested values
+#: against its VALIDATED coverage, and only 120 of the 877 catalogued ISINs
+#: carry CAS_RFR/YYS_RFR (the same 120 for both, and a strict subset of the 877
+#: that carry PRICE). So the tag count goes 1,754 -> 1,994.
+#:
+#: At the transport this script actually uses - ``CitiVeloQuotes.frame`` through
+#: ``windowed.warm_windows``, measured at **0.24 MB of Excel per tag** (349
+#: bonds / 698 tags over a 2-day MI01 window cost 48 s and +170 MB) - that is
+#: about +58 MB. Note the figure quoted in ``daily_cache_warmer``'s own
+#: docstring, ~1.7 MB/tag, belongs to ``fetch_windowed``, a sheet-per-window
+#: transport this warm deliberately does not use; its own arithmetic in the same
+#: sentence (698 tags = 170 MB) is the 0.24 number. Sized off the wrong one, two
+#: extra values look like +1.2 GB against a 3,800 MB ceiling.
+
+def eod_values():
+    """The DAILY value set: the whole vocabulary MINUS the six Citi retired.
+
+    ``DEFAULT_BOND_VALUES`` is every token in ``tags.BOND_VALUES``, and six of
+    them - ASW, ASWNP, CAS, OISS, YYS, ZSPREAD - stopped publishing on
+    2025-10-03. They still VALIDATE, which is the trap: the tag is real and
+    returns four years of rows, so a coverage probe calls it served, and a
+    request for a recent date returns "no rows in the window", which reads as an
+    outage rather than as a retired field.
+
+    Asking for them nightly does two bad things and no good one. It spends 5,262
+    tag-slots (6 x 877 bonds) on a wire that will never answer again, and it
+    guarantees six permanently STALLED tags per bond - which is noise in exactly
+    the channel the coverage alarm listens to. Their ``_RFR`` successors are
+    already in the set and are what serves after that date, so nothing is lost:
+    the retired tags' history is already banked and is not re-fetched by asking
+    for them again.
+
+    Ask for them explicitly with ``--values`` if a historical repair ever needs
+    them.
+    """
+    from MDP.CitiVelocityExcel.bonds.fetcher import DEFAULT_BOND_VALUES
+    from MDP.CitiVelocityExcel.bonds.values import DISCONTINUED_2025_10_03
+
+    retired = set(DISCONTINUED_2025_10_03)
+    return tuple(v for v in DEFAULT_BOND_VALUES if v not in retired)
+
 
 #: Bonds per batch. Small enough that the manifest is fine-grained and a stop
 #: loses little; large enough that per-call overhead is not the cost.
@@ -685,6 +738,40 @@ def tag_states(
     return out
 
 
+def newly_stalled(
+    prior: Optional[Mapping[str, object]],
+    record: Mapping[str, object],
+) -> list:
+    """Tags that went quiet SINCE the last run, or ``[]`` if that is unanswerable.
+
+    ``prior`` is this bond's previous manifest entry, or ``None`` if the
+    manifest has never recorded it.
+
+    A BOND WITH NO PRIOR ENTRY CANNOT HAVE REGRESSED, and treating its absence
+    as "an empty stalled set last night" is what made this alarm fire on 324
+    bonds at once. The catalog grew from 349 to 877 ISINs; every bond added by
+    that growth arrived with no baseline, so every structurally quiet tag it
+    carried - the six fields Citi retired on 2025-10-03, and the
+    CARRY/ROLL/ROLLCARRY family, which lags its own horizon BY CONSTRUCTION -
+    counted as a fresh outage.
+
+    What that cost: on 2026-08-21 the EOD job ran 3,466 s, COMPLETED, and then
+    raised "324 bond(s) newly stopped updating". The runner marks a store asset
+    blocking when its provider fails, so both downstream value jobs were
+    SKIPPED. Same cascade on 08-19 and 08-20. The alarm was built to catch a
+    tag that stops answering; it was firing on tags that had never answered
+    within this manifest's memory.
+
+    The first sighting still WRITES its baseline, so a tag that goes quiet
+    tomorrow is caught tomorrow. Only the sighting that carries no information
+    about change is exempt.
+    """
+    if prior is None:
+        return []
+    known = set(prior.get("stalled") or ())
+    return sorted(set(record.get("stalled") or ()) - known)
+
+
 def coverage_record(
     states: Mapping[str, Tuple[str, Optional[datetime.date]]]
 ) -> Dict[str, object]:
@@ -816,7 +903,7 @@ def warm(
     from MDP.CitiVelocityExcel.memory_guard import ExcelTooLargeError, assert_safe_to_connect
 
     wanted = tuple(values) if values else (
-        INTRADAY_VALUES if mode == "intraday" else DEFAULT_BOND_VALUES
+        INTRADAY_VALUES if mode == "intraday" else eod_values()
     )
     # Gate BEFORE constructing anything that can connect.
     mem0 = assert_safe_to_connect(ceiling_mb, what=f"the UST universe {mode} warm")
@@ -1053,10 +1140,9 @@ def warm(
                 # red every night is a job nobody reads - but a tag that fell
                 # silent since last night is exactly the event nothing here
                 # could see before.
-                known = set(book.get(isin, {}).get("stalled") or ())
-                fresh_stalls = sorted(set(record.get("stalled") or ()) - known)
-                if fresh_stalls:
-                    regressed[isin] = fresh_stalls
+                fresh = newly_stalled(book.get(isin), record)
+                if fresh:
+                    regressed[isin] = fresh
 
             # Bonds one of whose tags the wire refused. Left OUT of the manifest
             # on purpose: stamping them would make a same-night re-run skip the
