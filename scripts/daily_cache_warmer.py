@@ -289,32 +289,150 @@ _CITIVELO_CURVES = (
     "JPY-TONAR-1D-LCH",
 )
 
-# EOD tenors, same shape as the ERIS job. Capped at 30Y: Citi serves out to 50Y
-# but the long end is thin in the non-USD currencies.
+# ── The Citi Velocity swap grid ──────────────────────────────────────
+#
+# SPELLING IS PART OF THE GRID and is deliberately left ALONE.
+#
+# The computed-timeseries symbol is a sha1 of the tenor string AS TYPED
+# (``TB/IRSwapsTB._query_fingerprint``). '5y5y', '5yx5y' and '5Y5Y' price
+# identically and hash to three DIFFERENT series. So the spelling a warm uses is
+# that series' permanent identity, and changing it does not migrate the history -
+# it orphans it and starts a new series beside it. Every tenor added below
+# therefore follows the convention already in the file (UPPERCASE spot
+# outrights, lowercase concatenated forwards, lowercase packages) rather than
+# imposing a tidier one.
+#
+# Worth knowing while reading this, because it looks like it should matter and
+# does not: ``IRSwapsTB`` carries a cache-synthesis shortcut that builds a
+# cached 'a/b/c' out of cached outright legs, and it looks legs up by the
+# VERBATIM substring of the package tenor - so a package spelled '2y/10y' asks
+# for legs '2y' and '10y' while this grid banks '2Y' and '10Y'. That mismatch
+# costs nothing, because the branch is UNREACHABLE anyway: its guard skips any
+# query carrying ``structure_kwargs['notional']`` and ``IRSwapQuery`` populates
+# that with 1,000,000 on every query ever constructed. Verified rather than
+# taken from the comment that says so - both a direct ``IRSwapQuery`` and one
+# built through ``UnifiedQuery`` come back with ``notional=1000000``. Packages
+# price off the curve, which is cheap; see the measurement on the intraday block.
+#
+# Capped at 30Y: Citi serves out to 50Y but the long end is thin in the non-USD
+# currencies, and the EOD warm already accepts days with as few as 20 of 44
+# tenors.
+
+#: Spot outrights. UPPERCASE, as they have always been banked.
 _CITIVELO_EOD_OUTRIGHTS = (
-    "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y",
-)
-_CITIVELO_EOD_FORWARDS = (
-    "1y1y", "1y5y", "2y5y", "5y5y", "5y10y", "10y10y",
-)
-# The old grid could synthesize common packages only when every primitive leg
-# happened to be present. In particular it omitted 1Y30Y, so the research fly
-# 1Y5Y/1Y10Y/1Y30Y priced from scratch on every day. Keep the non-USD grid
-# bounded, but make the USD-SOFR 1Y-forward strip package-complete through 30Y.
-_CITIVELO_USD_SOFR_EOD_FORWARDS = tuple(dict.fromkeys((
-    *_CITIVELO_EOD_FORWARDS,
-    "1y2y", "1y3y", "1y7y", "1y10y", "1y15y", "1y20y", "1y30y",
-)))
-_CITIVELO_EOD_SPREADS = (
-    "2y/5y", "2y/10y", "5y/10y", "10y/30y", "2y/5y/10y", "5y/10y/30y",
+    "1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y",
 )
 
-# Intraday is deliberately a SUBSET. The minute store holds ~1,100 points per
-# curve per day, so pricing the full EOD grid on a 15-minute stride would be
-# 5 curves x 33 tenors x 33 points a day, every day, for numbers nobody has
-# asked for. These are the ones that get looked at intraday.
-_CITIVELO_INTRADAY_TENORS = ("2Y", "5Y", "10Y", "30Y", "2y/10y", "5y/10y/30y")
+#: Forward-start outrights for the four non-USD curves. Bounded deliberately -
+#: these curves are thinner and nobody reads a 20y10y ESTR intraday.
+_CITIVELO_EOD_FORWARDS = (
+    "1y1y", "1y5y", "1y10y", "2y5y", "5y5y", "5y10y", "10y10y",
+)
+
+#: USD-SOFR gets the full forward surface an RV book works in: the 1y strip
+#: through 30y, the 2y/3y/5y strips, and the long forwards. Every one of these
+#: is a leg of at least one package below, and the closure check enforces the
+#: converse.
+_CITIVELO_USD_SOFR_EOD_FORWARDS = tuple(dict.fromkeys((
+    *_CITIVELO_EOD_FORWARDS,
+    # front strip -- what a front-end RV book reads off the meeting grid
+    "3m3m", "3m6m", "6m3m", "6m6m", "9m3m", "1y3m", "1y6m",
+    # 1y-forward strip, package-complete through 30y
+    "1y2y", "1y3y", "1y4y", "1y7y", "1y15y", "1y20y", "1y30y",
+    # 2y and 3y forward strips
+    "2y1y", "2y2y", "2y3y", "2y7y", "2y10y", "2y20y",
+    "3y2y", "3y5y", "3y7y",
+    # long forwards
+    "5y15y", "5y20y", "5y25y", "10y20y", "15y15y", "20y10y", "30y10y",
+)))
+
+#: SPOT curves and flies. Legs must appear in ``_CITIVELO_EOD_OUTRIGHTS``.
+_CITIVELO_EOD_SPREADS = (
+    # curves
+    "2y/5y", "2y/10y", "2y/30y", "3y/7y", "5y/10y", "5y/30y", "7y/10y",
+    "10y/20y", "10y/30y", "20y/30y",
+    # flies
+    "1y/2y/3y", "2y/3y/5y", "2y/5y/10y", "3y/5y/7y", "5y/7y/10y",
+    "5y/10y/30y", "2y/10y/30y", "10y/20y/30y", "5y/10y/20y",
+)
+
+#: FORWARD curves and flies - the ones this repo's own research code types, plus
+#: the standard rolldown structures. Legs must appear in the USD forward tuple.
+#:
+#: These are USD-SOFR only. A forward fly on a curve whose 20y is a single thin
+#: quote is a number with no market behind it, and the non-USD EOD warm already
+#: tolerates days serving less than half its tenors.
+_CITIVELO_USD_SOFR_EOD_FWD_PACKAGES = (
+    # forward curves
+    "1y1y/2y1y", "2y1y/3y2y", "1y2y/1y5y", "1y5y/1y10y", "1y10y/1y30y",
+    "2y2y/5y5y", "5y5y/10y10y", "10y10y/20y10y", "5y5y/5y25y",
+    "3m3m/6m3m", "6m3m/9m3m", "1y1y/1y5y",
+    # forward flies
+    "1y2y/1y5y/1y10y", "1y5y/1y10y/1y30y", "1y1y/2y1y/3y2y",
+    "2y2y/5y5y/10y10y", "5y5y/10y10y/20y10y", "3m3m/6m3m/9m3m",
+    "1y1y/1y5y/1y10y", "2y5y/5y5y/10y10y",
+)
+
+
+def _assert_packages_are_closed():
+    """Refuse a package whose legs are not themselves warmed series.
+
+    NOT for the synthesis shortcut - that branch is unreachable, see the grid
+    header. This is a COVERAGE property, and it is the one a reader of these
+    numbers actually needs: a fly is only interpretable next to its legs. A grid
+    warming ``1y5y/1y10y/1y30y`` but not ``1y30y`` hands a PM a spread they
+    cannot decompose, and nothing about the missing leg is visible from the
+    frame - it is simply a column nobody asked for.
+
+    Same discipline as
+    ``scripts/citivelo_intraday_ts_warm._assert_universe_is_closed``, and run at
+    import for the same reason: a grid edit is a one-line change that otherwise
+    fails silently.
+    """
+    problems = []
+    for label, legs_pool, packages in (
+        ("non-USD", set(_CITIVELO_EOD_OUTRIGHTS) | set(_CITIVELO_EOD_FORWARDS),
+         _CITIVELO_EOD_SPREADS),
+        ("USD-SOFR", set(_CITIVELO_EOD_OUTRIGHTS) | set(_CITIVELO_USD_SOFR_EOD_FORWARDS),
+         _CITIVELO_EOD_SPREADS + _CITIVELO_USD_SOFR_EOD_FWD_PACKAGES),
+        ("intraday", set(_CITIVELO_INTRADAY_OUTRIGHTS), _CITIVELO_INTRADAY_PACKAGES),
+    ):
+        # Case-insensitive ON PURPOSE. Spot outrights are banked UPPERCASE and
+        # package legs are written lowercase; both spellings are history that
+        # must not be renamed, and the two name the same swap.
+        pool = {leg.upper() for leg in legs_pool}
+        for package in packages:
+            missing = [leg for leg in package.split("/") if leg.upper() not in pool]
+            if missing:
+                problems.append(f"  {label}: {package!r} needs unwarmed leg(s) {missing}")
+    if problems:
+        raise AssertionError(
+            "Citi warm grid is not package-closed - these packages name a leg the "
+            "warm does not price as a series of its own:\n" + "\n".join(problems)
+        )
+
+
+# Intraday is deliberately a SUBSET of EOD. The minute store holds ~1,100 points
+# per curve per day and the nightly prices a 15-minute stride, so every tenor
+# here is 61 pricings per curve per day rather than one.
+#
+# It is no longer six. Measured on 2026-08-21 against the warmed minute store,
+# one tenor over five stamps costs 0.02-0.57 s and triggers ZERO curve builds -
+# curve acquisition is amortised across every tenor at the same instant
+# (``IRSwapsTB`` calls ``bulk_get_data`` once per curve for all missing points,
+# then re-uses the object), so tenors are close to free and timestamps are not.
+# That is the opposite of the assumption the old six-tenor comment encoded.
+_CITIVELO_INTRADAY_OUTRIGHTS = (
+    "2Y", "5Y", "10Y", "30Y", "1y1y", "2y1y", "1y5y", "5y5y", "10y10y",
+)
+_CITIVELO_INTRADAY_PACKAGES = (
+    "2y/10y", "5y/10y", "5y/10y/30y", "2y/5y/10y",
+    "1y1y/2y1y", "5y5y/10y10y",
+)
+_CITIVELO_INTRADAY_TENORS = (*_CITIVELO_INTRADAY_OUTRIGHTS, *_CITIVELO_INTRADAY_PACKAGES)
 _CITIVELO_INTRADAY_FREQ = "15min"
+
+_assert_packages_are_closed()
 
 # USD-OIS uses the same outrights + a subset of forwards (max 30Y)
 #: The USD curves warmed from GS Quant: SOFR and Fed Funds OIS, at BOTH clearing
@@ -382,13 +500,20 @@ _OIS_FORWARD_TENORS = (
 
 
 def _citivelo_eod_tenors(curve: str):
-    """Canonical EOD primitive/package grid for one warmed Citi curve."""
-    forwards = (
-        _CITIVELO_USD_SOFR_EOD_FORWARDS
-        if str(curve).upper() == "USD-SOFR-1D"
-        else _CITIVELO_EOD_FORWARDS
-    )
-    return (*_CITIVELO_EOD_OUTRIGHTS, *forwards, *_CITIVELO_EOD_SPREADS)
+    """Canonical EOD primitive/package grid for one warmed Citi curve.
+
+    USD-SOFR gets the forward surface and the forward packages; the four
+    non-USD curves get the bounded forward set and spot packages only. See the
+    grid block above for why the spelling is uniform.
+    """
+    if str(curve).upper() == "USD-SOFR-1D":
+        return (
+            *_CITIVELO_EOD_OUTRIGHTS,
+            *_CITIVELO_USD_SOFR_EOD_FORWARDS,
+            *_CITIVELO_EOD_SPREADS,
+            *_CITIVELO_USD_SOFR_EOD_FWD_PACKAGES,
+        )
+    return (*_CITIVELO_EOD_OUTRIGHTS, *_CITIVELO_EOD_FORWARDS, *_CITIVELO_EOD_SPREADS)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1398,6 +1523,12 @@ def warm_citivelo_timeseries_intraday(start, end):
 _CV_BOND_TAGS = "CITIVELO-TAGS-RATES.BOND"
 _CV_BOND_TAGS_MI01 = "CITIVELO-TAGS-RATES.BOND-MI01"
 _CV_SWAP_SPREAD_TAGS = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD"
+#: The MI01 twin of the swap-spread asset. A SEPARATE key, not a flag on the
+#: same one, because the two are separate directories in the tag cache and
+#: because ``assert_unique_providers`` would otherwise see two jobs writing one
+#: asset - which is the hazard it exists to catch, since ``write_day`` replaces a
+#: whole partition rather than merging into it.
+_CV_SWAP_SPREAD_TAGS_MI01 = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD-MI01"
 
 #: Stop below this. See utils/warm_jobs.py and the 2026-08-07 wedge.
 #:
@@ -2033,6 +2164,163 @@ def warm_citivelo_swap_spread_tags(start, end):
         quotes.close()
 
 
+#: The intraday swap-spread window, in the curve's own zone.
+#:
+#: 08:00-17:00 keeps every reference point INSIDE Citi's USD publishing session,
+#: and that is a cost control rather than tidiness. Citi publishes SWAP_SPREAD
+#: only during its session while the minute CurveStore holds the Sunday-evening
+#: open and the small hours, so a Monday 01:44 curve exists whose newest spread
+#: print is the previous Friday 17:59 - 55.8 h against a 12 h limit.
+#: ``_resolve_one`` then raises ``StaleCurveError`` per (tenor, minute) and
+#: ``IRSwapsTB`` logs a full traceback for each: measured at roughly 4,000
+#: tracebacks on a Monday, costing more than the pricing they replace.
+_CV_SWAP_SPREAD_INTRADAY_OPEN = datetime.time(8, 0)
+_CV_SWAP_SPREAD_INTRADAY_CLOSE = datetime.time(17, 0)
+_CV_SWAP_SPREAD_INTRADAY_FREQ = "15min"
+
+
+def warm_citivelo_swap_spread_tags_intraday(start, end):
+    """Job [STORE]: USD_SOFR ``SWAP_SPREAD`` at MI01, into the tag cache.
+
+    USD-SOFR only, and that is the whole scope. Of the twenty Citi indices only
+    thirteen carry a ``SWAP_SPREAD`` sub-type at all, the axis is ragged per
+    index, and USD is the one anybody reads at minute resolution.
+
+    Distinct from the DAILY sibling by the cache key, not by the tag: the tag
+    path ``RATES.OIS.USD_SOFR.SWAP_SPREAD.<tenor>`` carries no frequency
+    segment, and ``CitiVeloTagCache`` stores MI01 and DAILY under separate
+    directories. So the same eleven tags serve both and neither can overwrite
+    the other - which is why this declares its own asset key.
+
+    It is cheap on a warm cache and that is by construction:
+    ``_intraday_history_frame`` chunks the request under the measured six-day
+    MI01 downsampling cliff and passes ``force_refresh=not cached`` per chunk,
+    so a window the cache already covers costs no Excel round trip at all. The
+    trailing window is small for the same reason the DAILY one is.
+
+    Measured on this machine's own cache: all eleven USD_SOFR tenors already
+    hold MI01 from 2022-08-24 to 2026-08-21, ~1.27M rows and 13-17 MB each,
+    ~161 MB in total - four years, already banked. This job keeps the head of
+    that current rather than building it.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads import (
+        swap_spread_history, swap_spread_tenors,
+    )
+
+    # A TRAILING window, not [today, today], and the reason is that the tag
+    # cache's coverage model is a single [first, last] interval. It cannot see a
+    # hole INSIDE that interval, and a hole does not raise - the as-of search
+    # serves the previous print and a whole session silently inherits the day
+    # before. One missed night with a [today, today] window would therefore
+    # leave a permanent, invisible gap. Overlapping every run is what closes it.
+    days = int(os.environ.get("CITIVELO_SWAP_SPREAD_MI01_DAYS", "4"))
+    window_start = end - datetime.timedelta(days=days)
+
+    quotes, client = _citivelo_excel_guard()
+    try:
+        tenors = swap_spread_tenors(_CV_SWAP_SPREAD_INDEX)
+        log.info("  %s MI01: %d tenors, %s..%s",
+                 _CV_SWAP_SPREAD_INDEX, len(tenors), window_start, end)
+        frame = swap_spread_history(
+            _CV_SWAP_SPREAD_INDEX, tenors,
+            start=window_start, end=end, freq="MI01", quotes=quotes,
+        )
+        log.info("  served %d/%d tenors, %d minute row(s); Excel at %.0f MB after",
+                 len(frame.columns), len(tenors), len(frame), client.excel_memory_mb())
+        if not len(frame.columns):
+            raise RuntimeError(
+                f"{_CV_SWAP_SPREAD_INDEX} MI01 swap spreads returned NO tenors for "
+                f"{window_start}..{end}. All eleven have four years of banked MI01, "
+                "so an empty axis here is the wire or the window, not the market."
+            )
+        return frame
+    finally:
+        quotes.close()
+
+
+def warm_citivelo_swap_spread_values_intraday(start, end):
+    """Job [VALUE]: Citi's published swap spread at a 15-minute stride.
+
+    The same value as the EOD job - ``IRS_CITIVELO_SWAP_SPREAD``, Citi's OWN
+    published number rather than the repo's computed MMSS/SPREADOVER - read at
+    intraday instants instead of at a close.
+
+    Nothing routes it here explicitly: mode dispatch is
+    ``timestamps.resolve_request``, and a datetime carrying a time IS the
+    intraday mode, which reads MI01. A bare date, or a midnight timestamp, is
+    EOD. So the only difference between this job and its EOD sibling is the
+    reference points.
+
+    OFFLINE is forced through the module seam rather than through the query, and
+    that distinction is load-bearing. ``quotes=`` and ``offline=`` ARE accepted
+    in ``value_kwargs``, but ``value_kwargs`` is hashed into the
+    computed-timeseries symbol - so a warm that passed them there would bank
+    every value under a symbol no plain user query will ever read. It would look
+    like a working warm and serve nobody. ``set_force_offline`` is the
+    process-wide seam that exists for exactly this, and it is restored
+    afterwards so the setting cannot leak into a later job.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL import swap_spreads
+    from MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads import swap_spread_tenors
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    from TB.IRSwapsTB import IRSwapsTB
+    from TB.TimeseriesBuilder import TimeseriesBuilder
+
+    import pytz
+
+    nyc = pytz.timezone("America/New_York")
+    days = _business_days(start, end)
+    if not days:
+        log.info("  no business days in range")
+        return None
+
+    tenors = swap_spread_tenors(_CV_SWAP_SPREAD_INDEX)
+    mdp = IRSwapsMDP(source="CITIVELO_EXCEL-RL")
+    tb = TimeseriesBuilder()
+    queries = [
+        UnifiedQuery(curve="USD-SOFR-1D", tenor=t,
+                     value=UnifiedValue.IRS_CITIVELO_SWAP_SPREAD)
+        for t in tenors
+    ]
+    log.info("  %d tenors x %d day(s) at %s, in-session only (%s-%s ET)",
+             len(tenors), len(days), _CV_SWAP_SPREAD_INTRADAY_FREQ,
+             _CV_SWAP_SPREAD_INTRADAY_OPEN, _CV_SWAP_SPREAD_INTRADAY_CLOSE)
+
+    frames = []
+    swap_spreads.set_force_offline(True)
+    try:
+        for day in days:
+            try:
+                frame = tb.get_timeseries(
+                    start=nyc.localize(datetime.datetime.combine(
+                        day, _CV_SWAP_SPREAD_INTRADAY_OPEN)),
+                    end=nyc.localize(datetime.datetime.combine(
+                        day, _CV_SWAP_SPREAD_INTRADAY_CLOSE)),
+                    queries=queries,
+                    freq=_CV_SWAP_SPREAD_INTRADAY_FREQ,
+                    n_jobs=N_JOBS,
+                    routers={"IRS": IRSwapsTB(mdp, show_tqdm=True)},
+                    ignore_cache_miss=True,
+                )
+                if frame is not None and len(frame):
+                    frames.append(frame)
+            except Exception as exc:  # one bad day must not end the job
+                log.warning("  %s failed: %s: %s", day, type(exc).__name__, exc)
+    finally:
+        swap_spreads.set_force_offline(None)
+
+    if not frames:
+        return None
+
+    import pandas as pd
+
+    out = pd.concat(frames).sort_index()
+    log.info("  %d rows x %d cols", len(out), len(out.columns))
+    return out
+
+
 def warm_citivelo_frb_values(start, end):
     """Job 9 [VALUE]: FRB values on the citivelo source, into the computed TS cache.
 
@@ -2163,6 +2451,112 @@ def warm_citivelo_ust_timeseries(start, end):
     return None
 
 
+#: The intraday stride for UST bond values, and it is a HARD CONSTRAINT rather
+#: than a taste.
+#:
+#: ``FixedRateBondsTB`` disables the computed-timeseries cache entirely - read
+#: AND write - for any intraday request over 50 reference points
+#: (``_skip_ts_cache = is_intraday and len(ref_points) > 50``). Past that line
+#: the job would price a full session and persist NONE of it, reporting a frame
+#: and writing nothing, which is the same shape as the today-guard defect one
+#: layer up. 08:00-17:00 ET at 15 minutes is 37 points, comfortably inside it;
+#: 10 minutes would be 55 and silently outside.
+_CV_BOND_INTRADAY_FREQ = "15min"
+_CV_BOND_INTRADAY_OPEN = datetime.time(8, 0)
+_CV_BOND_INTRADAY_CLOSE = datetime.time(17, 0)
+
+
+def warm_citivelo_ust_intraday_values(start, end):
+    """Job [VALUE]: UST bond values at MI01, off the banked minute tags.
+
+    THE MI01 BOND STORE HAD NO READER. "CITIVELO UST universe tags INTRADAY"
+    has been banking minute quotes nightly - 806 tags over 403 bonds, 993 MB,
+    some series back to 2021-01-24 - and ``CITIVELO-TAGS-RATES.BOND-MI01`` was
+    declared in ``provides`` by that job and in ``requires`` by nobody. Both UST
+    value jobs read the DAILY asset. So the whole intraday half of that warm was
+    write-only: a store that costs Excel memory every night and answers no
+    question anybody asks through the Query/MDP path.
+
+    This is the reader. It is deliberately narrow where the tag warm is broad:
+
+    * **14 aliases, not 403 bonds.** CT and O across 2/3/5/7/10/20/30 - the
+      benchmarks somebody actually watches move during a session. 403 bonds at
+      37 stamps would be ~30,000 cells a night for numbers nobody reads.
+    * **Two values.** ``FRB_YTM`` and ``FRB_CLEAN_PRICE``, both of which SOLVE
+      from the banked ``PRICE``/``YIELD``. The quote-only values (SPREAD_TSY,
+      CITI_DURATION, CITI_DV01) are not in ``INTRADAY_VALUES`` and would come
+      back as empty columns - a hole that looks like a day Citi served nothing.
+    * **A 15-minute stride**, for the 50-point reason above.
+    * **``offline=True``**, so a tag the cache does not hold is an empty column
+      rather than a live workbook opened from a scheduled task. That is the same
+      trade "CITIVELO FRB values EOD" makes and for the same reason, and it is
+      only sound BECAUSE the tag warm runs first - which is what ``requires``
+      declares.
+
+    One day per call, and the frames concatenated, so one bad day costs a day.
+    """
+    import pytz
+
+    from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    from TB.FixedRateBondsTB import FixedRateBondsTB
+    from TB.TimeseriesBuilder import TimeseriesBuilder
+
+    nyc = pytz.timezone("America/New_York")
+    days = _business_days(start, end)
+    if not days:
+        log.info("  no business days in range")
+        return None
+
+    mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL", offline=True)
+    tb = TimeseriesBuilder()
+    wanted = (UnifiedValue.FRB_YTM, UnifiedValue.FRB_CLEAN_PRICE)
+    queries = [
+        UnifiedQuery(cusip=alias, value=value)
+        for alias in _CV_BOND_ALIASES
+        for value in wanted
+    ]
+    log.info(
+        "  %d queries (%d aliases x %d values) x %d day(s) at %s, offline",
+        len(queries), len(_CV_BOND_ALIASES), len(wanted), len(days),
+        _CV_BOND_INTRADAY_FREQ,
+    )
+
+    frames = []
+    for day in days:
+        try:
+            frame = tb.get_timeseries(
+                start=nyc.localize(datetime.datetime.combine(day, _CV_BOND_INTRADAY_OPEN)),
+                end=nyc.localize(datetime.datetime.combine(day, _CV_BOND_INTRADAY_CLOSE)),
+                queries=queries,
+                freq=_CV_BOND_INTRADAY_FREQ,
+                n_jobs=N_JOBS,
+                routers={"FRB": FixedRateBondsTB(mdp, show_tqdm=True)},
+            )
+            if frame is not None and len(frame):
+                frames.append(frame)
+        except Exception as exc:  # one bad day must not end the job
+            log.warning("  %s failed: %s: %s", day, type(exc).__name__, exc)
+
+    if not frames:
+        # Not a silent None. This job exists because the store it reads had no
+        # reader; a run that reads nothing from it is the same state wearing a
+        # different face, and it should be visible in SUMMARY.
+        raise RuntimeError(
+            f"UST intraday values priced NOTHING for {start}..{end} across "
+            f"{len(_CV_BOND_ALIASES)} alias(es). The MDP is offline, so this means "
+            "the MI01 tag cache holds nothing for these bonds in this window - "
+            "check 'CITIVELO UST universe tags INTRADAY' ran."
+        )
+
+    import pandas as pd
+
+    out = pd.concat(frames).sort_index()
+    log.info("  %d rows x %d cols", len(out), len(out.columns))
+    return out
+
+
 def warm_citivelo_swap_spread_values(start, end):
     """Job 10 [VALUE]: Citi's published swap spreads, into the computed TS cache.
 
@@ -2242,6 +2636,11 @@ WARM_JOBS = [
             kind=STORE, provides=(_CV_BOND_TAGS_MI01,), needs_excel=True),
     WarmJob("CITIVELO swap-spread tags (store)", warm_citivelo_swap_spread_tags,
             kind=STORE, provides=(_CV_SWAP_SPREAD_TAGS,), needs_excel=True),
+    # The MI01 twin. Same eleven tags, a different cache directory, its own
+    # asset key. Cheap on a warm cache - four years are already banked and the
+    # chunked reader only connects for a window the cache does not cover.
+    WarmJob("CITIVELO swap-spread tags MI01 (store)", warm_citivelo_swap_spread_tags_intraday,
+            kind=STORE, provides=(_CV_SWAP_SPREAD_TAGS_MI01,), needs_excel=True),
 
     # -- then the value jobs that read them --
     WarmJob("CitiVelo EOD timeseries", warm_citivelo_timeseries_eod,
@@ -2260,6 +2659,14 @@ WARM_JOBS = [
             requires=(_CV_BOND_TAGS,), banks_today=False),
     WarmJob("CITIVELO swap spreads EOD", warm_citivelo_swap_spread_values,
             requires=(_CV_SWAP_SPREAD_TAGS,), banks_today=False),
+    WarmJob("CITIVELO swap spreads INTRADAY", warm_citivelo_swap_spread_values_intraday,
+            requires=(_CV_SWAP_SPREAD_TAGS_MI01,), banks_today=False),
+    # The first reader the MI01 bond store has ever had. It was declared in
+    # `provides` by the tag warm and in `requires` by nobody, so the intraday
+    # half of that job was write-only: 993 MB of minute quotes costing Excel
+    # memory every night and answering nothing through the Query/MDP path.
+    WarmJob("CITIVELO UST timeseries values INTRADAY", warm_citivelo_ust_intraday_values,
+            requires=(_CV_BOND_TAGS_MI01,), banks_today=False),
 ]
 
 check(WARM_JOBS)

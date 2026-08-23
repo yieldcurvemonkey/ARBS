@@ -661,6 +661,9 @@ def test_the_shipped_registry_marks_exactly_the_whole_job_excel_warms():
         "CITIVELO UST universe tags EOD (store)",
         "CITIVELO UST universe tags INTRADAY (store)",
         "CITIVELO swap-spread tags (store)",
+        # Same shape as its DAILY sibling: one Velocity call, no offline phase,
+        # so with no usable Excel it can only reach a foregone conclusion slowly.
+        "CITIVELO swap-spread tags MI01 (store)",
     }, marked
 
 

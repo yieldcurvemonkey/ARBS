@@ -177,6 +177,8 @@ _MUST_NOT_BANK_TODAY = {
     "CITIVELO FRB values EOD",
     "CITIVELO UST timeseries values EOD",
     "CITIVELO swap spreads EOD",
+    "CITIVELO swap spreads INTRADAY",
+    "CITIVELO UST timeseries values INTRADAY",
 }
 
 

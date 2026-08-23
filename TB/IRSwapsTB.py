@@ -353,6 +353,45 @@ def _decompose_rate_into_outright_legs(q: IRSwapQuery) -> Optional[List[Tuple[fl
     return None
 
 
+def _synthesize_package_bp(
+    components: List[Tuple[float, str]],
+    leg_rate_by_tenor: Dict[str, Optional[float]],
+) -> Optional[float]:
+    """A curve or fly in basis points from its cached outright legs, or ``None``.
+
+    ``None`` means at least one leg was not cached, and the caller must price
+    the package instead of guessing at it.
+
+    THE LEG RATE KEEPS ITS OWN SIGN. This used to read ``weight * abs(dv)``,
+    which is invisible while every rate in the book is positive and wrong the
+    moment one is not. The PRICING path carried exactly this bug and it was
+    removed on 2026-08-07 after being measured: the CHF SARON front is
+    -0.055314% and an outright came back +0.055314%, an 11.06 bp error - twice
+    the rate - with a 1s10s straddling zero out by a similar amount the other
+    way. See ``Query/IRSwaps/IRSwapValue.py`` and
+    ``tests/test_irswap_value_negative_rates.py``. This is the same defect in
+    the cache-synthesis twin.
+
+    Nothing reached it, which is why it survived: the branch that calls this is
+    UNREACHABLE. Its guard skips any query carrying
+    ``structure_kwargs['notional']`` and ``IRSwapQuery`` populates that with
+    1,000,000 on every query ever constructed - verified for both a direct
+    ``IRSwapQuery`` and one built through ``UnifiedQuery``. So this fix changes
+    no number today. It changes what happens on the day somebody relaxes that
+    guard, which is precisely when a latent sign error is hardest to find.
+
+    Legs are stored as outright RATES in percent; the weights are (-1, +1) for a
+    curve and (-1, +2, -1) for a fly, so ``sum(w * r) * 100`` is basis points.
+    """
+    total = 0.0
+    for weight, tenor in components:
+        rate = leg_rate_by_tenor.get(tenor)
+        if rate is None:
+            return None
+        total += weight * float(rate)
+    return total * 100.0
+
+
 def _parse_imm_relative_tokens(tenor: str) -> Optional[List[str]]:
     """Parse a tenor like 'IMM_1xIMM_2' into relative IMM tokens ['IMM_1', 'IMM_2'].
     Returns None if tenor doesn't use relative IMM ranks."""
@@ -1178,17 +1217,16 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 synthesized = 0
                 for q, col, missing, components in decomposable:
                     for d in missing:
-                        vals = []
-                        for weight, tenor in components:
-                            dv = leg_values.get(tenor_to_symbol[tenor], {}).get(d)
-                            if dv is None:
-                                break
-                            vals.append(weight * abs(dv))
-                        else:
-                            spread = sum(vals) * 100.0
-                            cached_rows.append((d, col, spread))
-                            cached_row_keys.add((d, col))
-                            synthesized += 1
+                        spread = _synthesize_package_bp(
+                            components,
+                            {tenor: leg_values.get(sym, {}).get(d)
+                             for tenor, sym in tenor_to_symbol.items()},
+                        )
+                        if spread is None:
+                            continue
+                        cached_rows.append((d, col, spread))
+                        cached_row_keys.add((d, col))
+                        synthesized += 1
                 if synthesized:
                     self._logger.debug("Synthesized %d spread values from cached outright legs for %s", synthesized, curve_name)
 
