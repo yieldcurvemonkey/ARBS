@@ -125,14 +125,20 @@ class WarmJob:
         is never built when it runs. Read the flag as "today is a usable target
         for this job", which is what the runner acts on.
 
-        THAT JOB IS STILL BROKEN AND THE FLAG DOES NOT FIX IT. Checked rather
-        than assumed: run offline against 2026-08-21, 08-20 and 08-19 it raises
-        "No common CurveStore/CubeStore EOD dates" on all three. The CubeStore
-        holds no recent day at all - the cube build reported "0 written, 2708
-        already present, 97 unbuildable" on 2026-08-21, the fifth consecutive
-        night of zero output - so its consumer has nothing to intersect with
-        whichever day it asks for. This flag removes one of two causes; the
-        other lives in the cube warm and is not touched here.
+        And the flag is exactly the right fix for it, for a reason worth stating
+        because a first pass at this got it wrong. Citi publishes swaption vol
+        with a ONE BUSINESS DAY LAG: measured on the live tag cache, 1,988 of
+        1,989 ``RATES.VOL.USD*`` tags carry ``last = 2026-08-20`` after the
+        2026-08-21 run fetched them. So the newest cube this job can ever have
+        is yesterday's, and asking for today could never succeed - it is not a
+        cube-build failure, which is what "0 written, 2708 already present, 97
+        unbuildable" looks like until you notice that 2,708 already-present days
+        is a healthy store, not an empty one.
+
+        Run against a day where both its inputs exist, the job is fine:
+        2026-08-14 returns ``(1, 1989)`` in 12.9 s. What it needs is the
+        CurveStore EOD side to carry the same day, and the intersection is what
+        the message names.
     """
 
     name: str

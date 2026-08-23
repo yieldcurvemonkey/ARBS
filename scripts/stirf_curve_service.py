@@ -2035,6 +2035,17 @@ def _build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--timezone", default=DEFAULT_TIMEZONE, help="IANA timezone for non-CME bucket timestamps.")
     backfill.add_argument("--fail-fast", action="store_true")
     backfill.add_argument(
+        "--reprice-timeseries", action="store_true",
+        help=(
+            "Re-price every minute of every requested day even when the computed "
+            "timeseries store already covers it. Off by default: a settled day is "
+            "not repriced, which is what stopped a five-day catch-up from spending "
+            "3,600 s re-doing warm days and losing the MIX23 curve to its own cap. "
+            "Today is always repriced regardless, because today's session is still "
+            "moving."
+        ),
+    )
+    backfill.add_argument(
         "--backfill-only",
         action="store_true",
         help="Only push existing local CurveStore days in range to Supabase; skip calibration and timeseries warming.",
@@ -2221,7 +2232,33 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
                     n_jobs=int(args.n_jobs),
                     calibration_executor=str(args.calibration_executor),
                     curve_ignore_cache=False,
-                    timeseries_ignore_cache=True,
+                    # A SETTLED DAY IS NOT REPRICED, and this used to be an
+                    # unconditional True.
+                    #
+                    # The RAW half of this loop already filters its timestamps
+                    # against the CurveStore, three lines up. The TIMESERIES half
+                    # was handed the full 1,381-minute grid with
+                    # ignore_cache=True - "refetch AND persist" - so every
+                    # backfilled day re-priced every minute of every tenor
+                    # whether or not the computed store already held it.
+                    #
+                    # Measured on the 2026-08-15 Saturday run, backfilling
+                    # 08-10..08-14 when all five nights had already been warmed
+                    # by their own nightly: Q12STIRT 133 s, Q16STIRT 109 s, and
+                    # then USD-OIS-Q12xM12STIRT-SERFFX-MIX23 hit the 3,600 s
+                    # per-curve cap and was LOST. Job total 3,842.2 s, FAILED -
+                    # a job that failed because it insisted on redoing work it
+                    # had already done.
+                    #
+                    # TODAY still reprices, because today's session is still
+                    # moving and its partial values SHOULD be refreshed on a
+                    # re-run. That is the case the True was written for; it was
+                    # simply never bounded to it. ``--reprice-timeseries`` forces
+                    # the old behaviour for a deliberate repair.
+                    timeseries_ignore_cache=(
+                        bool(getattr(args, "reprice_timeseries", False))
+                        or trade_date >= dt.date.today()
+                    ),
                     show_tqdm=bool(args.show_tqdm),
                     auto_prime_bulk=bool(args.auto_prime_bulk),
                     stirf_fetch_max_workers=args.stirf_fetch_max_workers,
