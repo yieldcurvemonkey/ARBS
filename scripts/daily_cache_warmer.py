@@ -2750,6 +2750,18 @@ def warm_citivelo_frb_values(start, end):
     Requires the bond tag warm. Reads only what Citi serves per bond, so the
     quote-only values (SPREAD_TSY, OAS, ASW) are asked for alongside the ones
     rebuilt locally from PRICE.
+
+    A STRICT SUBSET of "CITIVELO UST timeseries values EOD", and kept anyway.
+    Verified 2026-08-23: its 14 aliases are 14 of that job's 28, its 3 values are
+    3 of that job's 10, and all 42 computed-store symbols are IDENTICAL. What
+    this job has that the other does not is ``offline=bool(blocked)`` below - it
+    degrades when Excel is down but goes LIVE when Excel is up, where the other
+    is ``offline=True`` always. This runs first, so the other job's offline value
+    wins wherever it has one; this job's live value survives only on a tag-cache
+    miss, which is the case it is being kept for. Cost: seconds, "4 rows x 42
+    cols". See ``tests/test_warm_frb_job_overlap.py``, which fails if the two
+    ever start writing DIFFERENT symbols - lookalike series are worse than
+    duplicates.
     """
     from Query.Unified.UnifiedQuery import UnifiedQuery
     from Query.Unified.registry import UnifiedValue
@@ -2830,12 +2842,28 @@ def warm_citivelo_ust_timeseries(start, end):
     lives beside the tag cache, NOT in the repo - this runs from the primary
     checkout and must not leave a tracked file dirty every morning.
 
-    Overlaps job "CITIVELO FRB values EOD" on 14 aliases x 2 values. That is
-    waste, not damage: both jobs compute the same numbers from the same tag cache
-    into the same ``(symbol, date)`` keys, and ``append_many_rows`` upserts rather
-    than replacing a partition. Folding the older job into this one is the
-    obvious follow-up; it is left alone here so this change adds coverage without
-    altering what already runs.
+    Overlaps job "CITIVELO FRB values EOD" on 14 aliases x THREE values, and the
+    overlap is exact rather than approximate. Verified 2026-08-23 by computing
+    both sides: 14 of this job's 28 aliases, 3 of its 10 ``DEFAULT_BUILD_VALUES``
+    (``FRB_YTM``, ``FRB_CLEAN_PRICE``, ``FRB_SPREAD_TSY``), and all 42 resulting
+    computed-store symbols IDENTICAL - same ``USTS_CITIVELO-RL`` source, same
+    ``UnifiedQuery(cusip=, value=)`` construction, same sha1 fingerprint. (An
+    earlier note here said "x2 values"; it was wrong.)
+
+    It is waste, not damage: both write the same numbers to the same
+    ``(symbol, date)`` keys and ``append_many_rows`` upserts.
+
+    THE FOLD WAS INVESTIGATED AND DECLINED. Job 17 is the only live-capable route
+    to those 42 symbols - it runs ``offline=bool(blocked)``, so with a healthy
+    Excel it can fall through to a workbook for a tag the cache lacks, while this
+    job is ``offline=True`` always. Job 17 also runs FIRST, so this job's offline
+    value wins wherever it has one and job 17's live value survives only where
+    this job produced nothing - which is exactly the cache-miss case job 17 is
+    worth keeping for. The duplication costs seconds ("4 rows x 42 cols"), so
+    folding would trade a narrow real capability for seconds.
+    ``tests/test_warm_frb_job_overlap.py`` pins the finding, because the state
+    worse than duplication is DIVERGENCE: two lookalike series under different
+    symbols, with nothing saying so.
     """
     from scripts.citivelo_ust_timeseries_warm import (
         DEFAULT_BUILD_VALUES,
