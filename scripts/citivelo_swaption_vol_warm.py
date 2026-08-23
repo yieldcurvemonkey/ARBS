@@ -39,6 +39,7 @@ import argparse
 import datetime
 import logging
 import math
+import os
 import pathlib
 import sys
 import time
@@ -188,10 +189,19 @@ def _cube_rank(candidate: Tuple[int, int, object]) -> Tuple[int, int]:
     return (int(nodes), int(n_offsets))
 
 
+#: How much of the widest ATM rectangle a SMILE cube may give up and still win.
+#:
+#: Coverage-beats-smile was the right correction and it is kept; what it lacked
+#: was a sense of proportion. See :func:`pick_widest_cube`.
+SMILE_COVERAGE_FLOOR = float(os.environ.get("ARBS_CITIVELO_SMILE_COVERAGE_FLOOR", "0.75"))
+
+
 def pick_widest_cube(candidates: Sequence[Tuple[int, int, object]]):
-    """Choose among successfully-built cubes for one day. Widest axes win.
+    """Choose among successfully-built cubes for one day.
 
     ``candidates`` is ``[(atm_node_count, n_offsets, cube), ...]``.
+
+    COVERAGE STILL BEATS SMILE, but only when the coverage is actually at stake.
 
     The warm used to try the full offset grid first and take the first build that succeeded,
     whatever survived. That ranks a day by smile richness when what matters is which part of
@@ -203,10 +213,41 @@ def pick_widest_cube(candidates: Sequence[Tuple[int, int, object]]):
     The cause is structural rather than a run of bad days: the rectangle search requires EVERY
     offset present, and a 1Y option has no -200bp strike when rates are ~1.5%, so one
     structurally unquotable wing amputates a whole expiry row.
+
+    THE PLAIN MAXIMUM WAS TOO ABSOLUTE, and it cost every smile on the current
+    week. Measured 2026-08-17..08-21: the full-offset grid drops tenors 4Y and
+    12Y for incomplete quotes, giving a 136-cell ATM rectangle against the
+    ATM-only build's 153. So ``153 > 136`` and the ATM-only cube won every day --
+    trading **17 extra ATM cells for 1,632 smile quotes** (136 x 12 offsets),
+    and leaving ``citivelo_swaption_eod_warm`` with nothing to price, since its
+    manifest is mostly ATMF+/-25 payers, receivers, strangles, risk reversals,
+    1x2s and ladders. All of those need the wings.
+
+    The floor restores proportion. A smile cube wins if it keeps at least
+    :data:`SMILE_COVERAGE_FLOOR` of the widest rectangle:
+
+    ===========  ==========  ==========  ==============================
+    day          smile ATM   widest ATM  outcome
+    ===========  ==========  ==========  ==============================
+    2026-08-21          136         153  136/153 = 89%  -> SMILE wins
+    2020-03-09           65         153   65/153 = 42%  -> ATM-only wins
+    2026-08-12            2         153    2/153 =  1%  -> ATM-only wins
+    ===========  ==========  ==========  ==============================
+
+    which is exactly the separation the COVID measurement asked for. Anything
+    that amputates the short end fails the floor by a wide margin; losing two
+    long tenors does not.
     """
     if not candidates:
         return None
-    return max(candidates, key=_cube_rank)[2]
+    widest = max(candidates, key=_cube_rank)
+    smiles = [c for c in candidates if int(c[1]) > 0]
+    if not smiles or int(widest[1]) > 0:
+        return widest[2]
+    richest = max(smiles, key=_cube_rank)
+    if widest[0] > 0 and (richest[0] / widest[0]) >= SMILE_COVERAGE_FLOOR:
+        return richest[2]
+    return widest[2]
 
 
 def build(
@@ -349,13 +390,30 @@ def build(
             candidates.append((int(built.atm.size), len(offsets), built))
 
         cube = pick_widest_cube(candidates)
-        if len(candidates) > 1:
-            best, other = sorted(candidates, key=_cube_rank, reverse=True)[:2]
-            if best[0] > other[0]:
+        if len(candidates) > 1 and cube is not None:
+            # Report the CHOICE, not the comparison. This line used to say
+            # "coverage wins" whenever the widest candidate was wider, which
+            # stopped being the same thing once the smile floor existed - and a
+            # log that describes a decision the code did not make is worse than
+            # no log.
+            chosen = next((c for c in candidates if c[2] is cube), None)
+            widest = max(candidates, key=_cube_rank)
+            if chosen is not None and chosen[0] != widest[0]:
                 _logger.info(
-                    "build: %s kept %d ATM cells (%d offsets) over %d cells (%d offsets) -- coverage wins",
-                    as_of, best[0], best[1], other[0], other[1],
+                    "build: %s kept the SMILE - %d ATM cells x %d offsets over a wider "
+                    "%d-cell ATM-only surface (%.0f%% of it, floor %.0f%%)",
+                    as_of, chosen[0], chosen[1], widest[0],
+                    100.0 * chosen[0] / widest[0], 100.0 * SMILE_COVERAGE_FLOOR,
                 )
+            elif chosen is not None and chosen[1] == 0:
+                other = max((c for c in candidates if c[1] > 0), key=_cube_rank, default=None)
+                if other is not None and widest[0] > other[0]:
+                    _logger.info(
+                        "build: %s kept %d ATM cells (0 offsets) over %d cells (%d offsets) "
+                        "- the smile keeps only %.0f%% of the surface, under the %.0f%% floor",
+                        as_of, widest[0], other[0], other[1],
+                        100.0 * other[0] / widest[0], 100.0 * SMILE_COVERAGE_FLOOR,
+                    )
         if cube is None:
             # A day with too few served nodes is a real gap, not an error to
             # paper over. Skip it and say so; the store stays honest about which
