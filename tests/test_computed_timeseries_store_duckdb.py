@@ -130,6 +130,21 @@ class TestDuckDBFastPath:
 
     @patch("Caching.computed_timeseries_store._get_computed_ts_sync")
     def test_allow_partial_returns_local_duckdb_rows_without_range_prefetch(self, mock_get_sync, store):
+        """A partial read must not buy a Supabase range prefetch.
+
+        Note what is and is not asserted. ``d2`` was never written to EITHER
+        tier, so ``[(d1, ...)]`` is the complete and correct answer here -- this
+        is not the short-mirror case (see tests/test_computed_ts_short_mirror.py),
+        where the mirror is behind Parquet and returning the mirror's rows loses
+        real data.
+
+        What this pins is the cost guard. The short-mirror repair makes a read
+        fall through to Parquet whenever the mirror comes up short, and that is
+        now the common case; if the fall-through used the full L2 path it would
+        put a round trip to production on roughly half the EOD estate's reads.
+        So the fall-through passes ``remote=False``: Parquet is consulted, the
+        network is not.
+        """
         d1 = datetime.date(2026, 3, 10)
         d2 = datetime.date(2026, 3, 11)
         store.append_rows(symbol="IRS::PARTIAL", rows=[(d1, "rate", 4.5)])

@@ -57,6 +57,63 @@ def _get_computed_ts_sync(base_dir: Union[str, Path]):
     return SupabaseComputedTimeseriesSync(base_dir=Path(base_dir), engine=get_engine())
 
 
+#: Symbols already reported as short this process. One line per symbol: a batch
+#: read touches thousands, and a warning per row would bury the signal it is.
+_SHORT_MIRROR_WARNED: set = set()
+
+
+def _warn_short_mirror(symbol: str, mirror_rows: int, full_rows: int) -> None:
+    """Say that the DuckDB mirror was short and Parquet made up the difference.
+
+    Silence is why this ran unnoticed. The mirror is a cache in front of the
+    authoritative tier, and a cache that quietly serves less than the tier holds
+    is the single shape this estate keeps getting hurt by.
+    """
+    if symbol in _SHORT_MIRROR_WARNED:
+        return
+    _SHORT_MIRROR_WARNED.add(symbol)
+    logger.warning(
+        "computed TS: the DuckDB mirror held %d of %d rows for %s over the "
+        "requested window; Parquet supplied the rest. The mirror is a cache, not "
+        "the source of truth - this is not data loss, but a mirror that is short "
+        "for many symbols means slower reads and, before this was fixed, shorter "
+        "answers.",
+        mirror_rows, full_rows, symbol,
+    )
+
+
+def _merge_preferring(primary, secondary, *, intraday: bool):
+    """``primary`` rows, plus any ``secondary`` row for a key primary lacks.
+
+    Rows are ``(reference_point, column_name, value)`` and a symbol may carry
+    several columns, so the key is (normalised reference point, column name) --
+    keying on the date alone would drop every column but one.
+
+    Used to combine the authoritative Parquet answer with whatever the mirror
+    had. Parquet wins on any key they share; the mirror can only ADD. That
+    direction matters: the mirror is the tier that has been observed to be
+    short, so it must never be able to displace a Parquet row.
+    """
+    def _key(row):
+        ref = row[0]
+        try:
+            norm = _normalize_intraday_key(ref) if intraday else _normalize_eod_key(ref)
+        except Exception:  # noqa: BLE001 - an unparseable stamp keys on itself
+            norm = ref
+        return (norm, row[1])
+
+    out = list(primary or [])
+    if not secondary:
+        return out
+    have = {_key(r) for r in out}
+    for row in secondary:
+        k = _key(row)
+        if k not in have:
+            have.add(k)
+            out.append(row)
+    return out
+
+
 def default_computed_timeseries_base_dir() -> str:
     return str(DEFAULT_COMPUTED_TS_BASE_DIR)
 
@@ -456,17 +513,29 @@ class ComputedTimeseriesStore:
             covered = {_normalize_eod_key(rp) for rp, _, _ in rows_out}
             if covered >= requested:
                 result[sym] = rows_out
-            elif allow_partial:
-                result[sym] = rows_out
             else:
+                # A SHORT MIRROR ANSWER IS NOT AN ANSWER, whatever allow_partial
+                # says. This used to have an ``elif allow_partial: result[sym] =
+                # rows_out`` arm, and since every production caller passes
+                # allow_partial=True it was the arm that ran. See ``read_rows``
+                # for the measurement and for why "partial" has to mean "after
+                # Parquet was consulted".
+                # remote=False: the mirror answered, just not fully, so Parquet
+                # settles it locally. See ``_read_with_l2_prefetch``.
                 l2_rows = self._read_with_l2_prefetch(
                     symbol=sym,
                     reference_points=reference_points,
                     intraday=False,
                     skip_current_eod=skip_current_eod,
                     fallback_column_name=(fallback_column_names or {}).get(sym),
+                    remote=False,
                 )
-                result[sym] = l2_rows
+                merged = _merge_preferring(l2_rows, rows_out, intraday=False)
+                if l2_rows:
+                    self._backfill_duckdb_from_rows(sym, merged, intraday=False)
+                if len(merged) > len(rows_out):
+                    _warn_short_mirror(sym, len(rows_out), len(merged))
+                result[sym] = merged
 
         return result
 
@@ -545,22 +614,71 @@ class ComputedTimeseriesStore:
                     duckdb_result = duckdb_result_2
 
         if allow_partial:
-            if duckdb_result is not None:
-                return duckdb_result
-            # DuckDB miss — try Parquet + L2 Supabase prefetch before giving up.
-            # Previously this returned [] when DuckDB was available but empty,
-            # skipping the L2 path entirely and forcing unnecessary repricing.
-            l2_rows = self._read_with_l2_prefetch(
+            # A SHORT MIRROR ANSWER IS NOT AN ANSWER.
+            #
+            # This used to be ``if duckdb_result is not None: return
+            # duckdb_result`` -- hand back whatever the mirror had, even though
+            # the ``covered >= requested`` test forty lines up had just FAILED.
+            # Every production caller passes allow_partial=True (both timeseries
+            # routers, USTFutures, IRSwaptions, and five call sites in
+            # TimeseriesBuilder); allow_partial=False survives only as this
+            # signature's default. So this was the arm that ran, always.
+            #
+            # Measured on the live store, same symbol, same reference points:
+            #
+            #   IRS::GSQUANT-RL::USD-OIS::c6739ceb...
+            #     parquet                  5,078 rows  2006-01-03 .. 2026-03-27
+            #     allow_partial=True       3,573 rows  2012-01-03 .. 2026-03-27
+            #     allow_partial=False      5,078 rows
+            #
+            #   FRB::USTS_FEDINVEST_WSJ_LIVE-RL::37f5933f...   4,157 -> 1,538
+            #   IRS::citivelo_excel_rl::USD-SOFR-1D::65276577...  815 -> 9
+            #
+            # 1,505 rows and six years of history, on a flag whose name promises
+            # only that a partial answer is ACCEPTABLE -- not that the
+            # authoritative tier will be skipped to produce one.
+            #
+            # AND IT SELF-ARMS, which is why it spread. A symbol the mirror has
+            # never seen reads correctly (``_read_from_duckdb`` returns None
+            # rather than a short list), but the backfill below then writes back
+            # exactly the window that was read. Demonstrated end to end: one
+            # 2015-2016 subrange read of a zero-mirror symbol returned its 504
+            # rows correctly and banked them; the next full-history read of the
+            # same symbol returned 504 instead of 4,077. An untouched control
+            # symbol returned all 4,077. Census at the time of the fix: ~2,900
+            # symbols already short, roughly half the EOD estate -- and the
+            # mirror grew 461,608 -> 496,939 rows between two measurements hours
+            # apart, which is this defect arming itself on live traffic.
+            #
+            # March 2026 fixed the EMPTY case one branch over ("Previously this
+            # returned [] when DuckDB was available but empty"). This is the
+            # same bug, one branch further on: empty was caught, SHORT was not.
+            #
+            # So: Parquet is the source of truth and is consulted whenever the
+            # mirror falls short. The mirror's rows are kept only for dates
+            # Parquet does not have, which costs one glob per short symbol and
+            # makes the answer independent of which windows happened to be read
+            # first.
+            # remote= is the cost guard. When the mirror gave us nothing this is
+            # the pre-existing fallback path and keeps its L2 fetch. When the
+            # mirror was merely SHORT -- the case this branch was written for,
+            # and the common one -- Parquet alone settles it, so the repair
+            # cannot turn half the estate's reads into Supabase round trips.
+            local_rows = self._read_with_l2_prefetch(
                 symbol=symbol,
                 reference_points=reference_points,
                 intraday=intraday,
                 skip_current_eod=skip_current_eod,
                 fallback_column_name=fallback_column_name,
+                remote=duckdb_result is None,
             )
+            merged = _merge_preferring(local_rows, duckdb_result or [], intraday=intraday)
+            l2_rows = local_rows
             if l2_rows:
-                self._backfill_duckdb_from_rows(symbol, l2_rows, intraday=intraday)
-                return l2_rows
-            return []
+                self._backfill_duckdb_from_rows(symbol, merged, intraday=intraday)
+            if duckdb_result is not None and len(merged) > len(duckdb_result):
+                _warn_short_mirror(symbol, len(duckdb_result), len(merged))
+            return merged
 
         # Fallback to Parquet + L2 path (non-partial mode)
         return self._read_with_l2_prefetch(
@@ -579,8 +697,24 @@ class ComputedTimeseriesStore:
         intraday: bool,
         skip_current_eod: bool,
         fallback_column_name: str | None,
+        remote: bool = True,
     ) -> List[Tuple[DateLike, str, float]]:
-        """Read from local Parquet first; only contact Supabase L2 for missing dates."""
+        """Read from local Parquet first; only contact Supabase L2 for missing dates.
+
+        ``remote=False`` stops after the local Parquet read. Parquet is the
+        source of truth, so a local-only call is a complete answer to "what does
+        this store actually hold"; what it gives up is the chance to import rows
+        that exist only in Supabase.
+
+        The short-mirror repair uses it. That repair fires on roughly half the
+        EOD estate, and reading Parquet costs one glob while a range prefetch is
+        a round trip to production -- so a fix aimed at correctness would have
+        quietly bought a network call per read. ``allow_partial=True`` says a
+        partial answer is acceptable; it is not a mandate to go to the network
+        to avoid one. The pre-existing empty-mirror path still passes
+        ``remote=True``: this parameter adds a Parquet read, never removes an L2
+        fetch that used to happen.
+        """
         start = min(reference_points)
         end = max(reference_points)
         read_start: DateLike = _normalize_intraday_key(start).to_pydatetime() if intraday else start
@@ -597,6 +731,9 @@ class ComputedTimeseriesStore:
             skip_current_eod=skip_current_eod,
             fallback_column_name=fallback_column_name,
         )
+
+        if not remote:
+            return rows
 
         # 2) Compute which dates are still missing.
         skipped_keys = {
