@@ -67,13 +67,35 @@ hole nobody can attribute rather than a hole.
 
 import argparse
 import datetime
+import faulthandler
 import logging
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from typing import NamedTuple
+
+# THE SUPABASE L2 SWITCH, AND IT HAS TO BE HERE - above every other import in
+# this file and before anything under ``Caching`` is reachable.
+#
+# ``Caching.supabase_engine`` reads the flag ONCE, at import, into a module
+# global (``SUPABASE_ENABLED = _env_enabled("ARBS_SUPABASE_ENABLED", True)``),
+# so a setting applied after the first import of that package is inert. Every
+# Citi script in this repo already opens with this exact line for that reason.
+#
+# The default is ENABLED, and the credentials are not an env var anybody forgot
+# to set - they are hard-coded module constants pointing at the production
+# pooler (``supabase_engine.DEFAULT_DB_HOST/USER/PASSWORD``). Neither scheduled
+# task sets the flag. So the unattended nightly has been opening connections to
+# prod and pushing a whole-day Parquet blob per computed symbol, on background
+# threads nobody waits for or reads the result of, all night, every night.
+#
+# ``setdefault`` rather than an assignment: a human who exports
+# ``ARBS_SUPABASE_ENABLED=1`` deliberately - to refresh what the laptop pulls -
+# still gets it.
+os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(REPO_ROOT)
@@ -586,6 +608,82 @@ def _business_days(start, end):
     return [d.date() for d in pd.bdate_range(start, end)]
 
 
+def _last_settled_session(on_or_before=None):
+    """The most recent US government-bond session that is over and banked.
+
+    "Over" is the whole point: a job whose writer refuses rows stamped today
+    (see ``WarmJob.banks_today``) must be pointed at a day whose rows it will
+    actually keep, and that is the previous session, not today's - however far
+    past the close the warm happens to run.
+
+    ``pd.bdate_range`` alone is not enough, and the mistake it makes is the one
+    this repo has recorded twice: it counts market holidays as business days, so
+    a Tuesday after a Monday holiday would be told to warm the Monday, find
+    nothing, and report an outage. Filtered on the same
+    ``ql.UnitedStates.GovernmentBond`` calendar the other jobs use, plus Good
+    Friday, which that calendar treats as a business day while the bond market
+    closes and every vendor here serves nothing - measured independently from GS
+    (no curve) and from twelve scraped iShares ETFs (no holdings) on 2026-04-03
+    and 2023-04-07.
+    """
+    import QuantLib as ql
+
+    today = datetime.date.today()
+    day = min(on_or_before or today, today) - datetime.timedelta(days=1)
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    for _ in range(30):
+        qd = ql.Date(day.day, day.month, day.year)
+        if cal.isBusinessDay(qd) and not _is_good_friday(day):
+            return day
+        day -= datetime.timedelta(days=1)
+    # Thirty calendar days without a session is not a holiday, it is a broken
+    # calendar. Say so rather than silently warming a month ago.
+    raise RuntimeError(
+        f"no US government-bond session found in the 30 days before "
+        f"{on_or_before or today}; the QuantLib calendar is not answering"
+    )
+
+
+def _is_good_friday(day):
+    """Good Friday, which the GovernmentBond calendar calls a business day."""
+    if day.weekday() != 4:  # Friday
+        return False
+    return day == _easter_sunday(day.year) - datetime.timedelta(days=2)
+
+
+def _easter_sunday(year):
+    """Anonymous Gregorian computus. Pure arithmetic, no calendar dependency."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    lam = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * lam) // 451
+    month, dayn = divmod(h + lam - 7 * m + 114, 31)
+    return datetime.date(year, month, dayn + 1)
+
+
+def _window_for(job, start, end):
+    """The date window this job is actually run over.
+
+    A job that banks today gets exactly what the caller asked for. A job whose
+    writer drops today's rows gets a window ending at the last settled session,
+    because otherwise it computes numbers nothing keeps - which is what the
+    weekday warm did every night, measured on partition mtimes rather than
+    argued. See :attr:`utils.warm_jobs.WarmJob.banks_today`.
+
+    ``start`` is clamped rather than shifted with ``end``: a ``--backfill 7``
+    should still cover the whole week, just stopping at the last settled day.
+    """
+    if job.banks_today or end < datetime.date.today():
+        return start, end
+    settled = _last_settled_session(end)
+    return min(start, settled), settled
+
+
 class _StepFailure(NamedTuple):
     """One non-zero subprocess exit, with the child's own last word attached.
 
@@ -642,9 +740,100 @@ _DETAIL_MAX = 300
 #: Longest ONE STIRF curve may run. Left where the original measurement put it.
 _STIRF_CURVE_TIMEOUT_S = 3600
 
+#: Longest any ONE job may run before the process gives up on the whole night.
+#:
+#: The subprocess jobs have always had deadlines; the IN-PROCESS ones had none
+#: at all, and on 2026-08-22 that cost a full run and then some. The Saturday
+#: backfill deadlocked inside job 2 and was still alive 24 hours later: two
+#: ``frb-mdp`` worker threads each wedged in ``asyncio.run`` ->
+#: ``ProactorEventLoop._poll`` under ``FedInvestFetcher.runner``, 306 threads,
+#: CPU flat at 159.1 s across a 40-minute gap between two ``py-spy`` dumps with
+#: byte-identical stacks. Sixteen of eighteen jobs never started, and the
+#: process went on holding the Excel it had launched at 10:00 that morning.
+#:
+#: Only the multi-date runs reach it: ``_process_one`` is dispatched per
+#: timestamp into a thread pool and each worker calls ``asyncio.run`` on its own
+#: event loop, so ``--backfill 7`` opens eight of them concurrently and the
+#: weekday single-day run opens one. That is why this is a Saturday failure.
+#:
+#: Two hours because the longest measured job is the UST universe tag warm at
+#: 3,466 s (2026-08-21) and the STIRF job carries its own 5,400 s budget - so
+#: this has to sit ABOVE the honest worst case or it becomes the thing that
+#: breaks the night. 7,200 s is 2.1x the worst real job, and the STIRF job is
+#: given its own longer budget below rather than being killed by this.
+_JOB_DEADLINE_S = float(os.environ.get("ARBS_WARM_JOB_DEADLINE_S", "7200"))
+
+def _arm_job_watchdog(job_name, results, budget_s):
+    """Kill the process if one job runs past its budget, saying which and why.
+
+    A Python thread cannot be interrupted from outside, so there is no way to
+    abandon a wedged in-process job and carry on with the next one. The choice
+    is between ending the night with a diagnosis and holding the machine
+    indefinitely without one, and 2026-08-22 settled which of those is worse.
+
+    Before exiting it dumps every thread's stack through :mod:`faulthandler`,
+    which is the same picture ``py-spy dump`` gave for that incident and the
+    only thing that made it diagnosable. Then it writes what the run had
+    achieved so far, so the log is not truncated mid-job the way that one was.
+
+    Returns a canceller. Nothing here runs on the happy path.
+    """
+    if budget_s <= 0:
+        return lambda: None
+
+    def _fire():
+        log.error("=" * 60)
+        log.error(
+            "DEADLINE: job %r has run for %.0fs without returning. Every thread's "
+            "stack follows; the last one that is NOT idle in the run loop is the "
+            "job. Ending the run so the machine is not held overnight.",
+            job_name, budget_s,
+        )
+        for handler in logging.getLogger().handlers:
+            try:
+                handler.flush()
+            except Exception:  # noqa: BLE001 - we are already dying
+                pass
+        try:
+            stream = open(_CHILD_LOG_PATH, "a", encoding="utf-8") if _CHILD_LOG_PATH else sys.stderr
+            stream.write(f"\n{'=' * 70}\nDEADLINE in {job_name!r} after {budget_s:.0f}s\n{'=' * 70}\n")
+            faulthandler.dump_traceback(file=stream, all_threads=True)
+            stream.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        log.error("=" * 60)
+        log.error("SUMMARY (run ended by the job deadline)")
+        log.error("=" * 60)
+        for name, status in results:
+            log.error("  %-30s %s", name, status)
+        log.error("  %-30s %s", job_name, f"DEADLINE ({budget_s:.0f}s)")
+        for handler in logging.getLogger().handlers:
+            try:
+                handler.flush()
+            except Exception:  # noqa: BLE001
+                pass
+        # os._exit, not sys.exit: the run loop is on another thread and a
+        # SystemExit raised here would be swallowed by this timer thread. The
+        # deadlocked threads are daemon-less pool workers that would keep the
+        # interpreter alive through a normal shutdown - which is exactly the
+        # 24-hour state this exists to end.
+        os._exit(1)
+
+    timer = threading.Timer(budget_s, _fire)
+    timer.daemon = True
+    timer.start()
+    return timer.cancel
+
 #: Longest the STIRF job may run across ALL its curves. See
 #: :func:`warm_stirf_cme_session` for the measurements behind the number.
 _STIRF_TOTAL_BUDGET_S = 5400
+
+#: Per-job deadline overrides. The STIRF job carries its own 5,400 s budget and
+#: may legitimately approach it, so the run-level watchdog has to sit above that
+#: rather than becoming the thing that kills a job doing its job.
+_JOB_DEADLINE_OVERRIDES = {
+    "STIRF CME Session": _STIRF_TOTAL_BUDGET_S + 1800.0,
+}
 
 #: Where this run's full child output goes. Set by :func:`_start_run_log`.
 _CHILD_LOG_PATH: str | None = None
@@ -1837,9 +2026,10 @@ _CV_CURVE_STORE = "CITIVELO-CURVESTORE"
 _CV_SWAPTION_CUBE = "CITIVELO-SWAPTION-CUBE"
 
 WARM_JOBS = [
-    WarmJob("GSQUANT USD SOFR+OIS EOD (LCH+CME, 30y+STIR)", warm_gsquant_ois_eod),
-    WarmJob("ERIS USD-SOFR-1D EOD", warm_eris_eod),
-    WarmJob("FRB FedInvest EOD", warm_frb_fedinvest_eod),
+    WarmJob("GSQUANT USD SOFR+OIS EOD (LCH+CME, 30y+STIR)", warm_gsquant_ois_eod,
+            banks_today=False),
+    WarmJob("ERIS USD-SOFR-1D EOD", warm_eris_eod, banks_today=False),
+    WarmJob("FRB FedInvest EOD", warm_frb_fedinvest_eod, banks_today=False),
     WarmJob("SR3 EOD settles (depth 20)", warm_sr3_settles_eod),
     WarmJob("STIRF CME Session", warm_stirf_cme_session),
     WarmJob("UST Futures Invoice Caches", warm_ustf_invoice_caches),
@@ -1865,21 +2055,21 @@ WARM_JOBS = [
 
     # -- then the value jobs that read them --
     WarmJob("CitiVelo EOD timeseries", warm_citivelo_timeseries_eod,
-            requires=(_CV_CURVE_STORE,)),
+            requires=(_CV_CURVE_STORE,), banks_today=False),
     WarmJob("CitiVelo swaption values EOD", warm_citivelo_swaption_timeseries_eod,
-            requires=(_CV_CURVE_STORE, _CV_SWAPTION_CUBE)),
+            requires=(_CV_CURVE_STORE, _CV_SWAPTION_CUBE), banks_today=False),
     WarmJob("CitiVelo intraday timeseries", warm_citivelo_timeseries_intraday,
-            requires=(_CV_CURVE_STORE,)),
+            requires=(_CV_CURVE_STORE,), banks_today=False),
     WarmJob("CITIVELO FRB values EOD", warm_citivelo_frb_values,
-            requires=(_CV_BOND_TAGS,)),
+            requires=(_CV_BOND_TAGS,), banks_today=False),
     # Same requirement, and it is the load-bearing one: this job builds OFFLINE,
     # so a tag the EOD universe warm has not banked comes back as an empty column
     # rather than as a live Excel call. Silent, and it would populate the computed
     # store with holes that look like days Citi served nothing.
     WarmJob("CITIVELO UST timeseries values EOD", warm_citivelo_ust_timeseries,
-            requires=(_CV_BOND_TAGS,)),
+            requires=(_CV_BOND_TAGS,), banks_today=False),
     WarmJob("CITIVELO swap spreads EOD", warm_citivelo_swap_spread_values,
-            requires=(_CV_SWAP_SPREAD_TAGS,)),
+            requires=(_CV_SWAP_SPREAD_TAGS,), banks_today=False),
 ]
 
 check(WARM_JOBS)
@@ -2098,11 +2288,22 @@ def main():
                 "; ".join(unmet[a][1] for a in degraded),
             )
 
+        # The window this job actually gets. A job whose writer refuses today's
+        # rows is pointed at the last settled session instead, so the nightly
+        # keeps what it computes; see WarmJob.banks_today for the mtime evidence
+        # that it previously did not.
+        job_start, job_end = _window_for(job, start, end)
+        if (job_start, job_end) != (start, end):
+            log.info("  window %s..%s (this job does not bank today)", job_start, job_end)
+
         t0 = time.perf_counter()
         before = len(_SUBPROCESS_FAILURES)
         before_skips = len(_SUBPROCESS_SKIPS)
+        cancel_watchdog = _arm_job_watchdog(
+            job.name, results, _JOB_DEADLINE_OVERRIDES.get(job.name, _JOB_DEADLINE_S)
+        )
         try:
-            result = job.fn(start, end)
+            result = job.fn(job_start, job_end)
             elapsed = time.perf_counter() - t0
             # A job that shells out can return normally having lost a step: every
             # caller of _run discards the code on purpose, so the only evidence
@@ -2159,6 +2360,8 @@ def main():
             for asset in job.provides:
                 unmet.setdefault(asset, (True, f"{job.name!r} failed"))
             log.exception("  FAILED: %s", e)
+        finally:
+            cancel_watchdog()
 
     # Summary
     log.info("=" * 60)

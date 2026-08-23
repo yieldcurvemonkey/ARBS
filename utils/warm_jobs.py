@@ -87,6 +87,45 @@ class WarmJob:
         banked tag cache and touch nothing live - so marking them here would
         throw away the offline phases every time Excel happened to be shut. They
         probe around their own fetch step instead.
+    banks_today
+        Whether a row this job computes for a reference point stamped TODAY
+        actually lands on disk. ``True`` for a job that owns its own date-keyed
+        store; ``False`` for one that writes through the computed-timeseries
+        routers, which refuse today on purpose.
+
+        THIS IS NOT A PREFERENCE. Both timeseries routers drop today's rows
+        before they reach the Parquet tier - ``TB/IRSwapsTB.py`` ("Skip live /
+        today rows - they are transient") and the twin guard in
+        ``TB/FixedRateBondsTB.py`` - and they are right to: an EOD value stamped
+        with the session that is still open is a snapshot, not a settle.
+
+        The warmer, meanwhile, defaulted to ``start = end = today``. Put those
+        two correct halves together and the weekday warm computed its values and
+        threw every one of them away. Measured on the partition mtimes rather
+        than argued: on 2026-08-15 every ``data/ts`` partition for 2026-08-12,
+        08-13 and 08-14 is stamped 10:01-10:02 on 08-15 - written by the
+        SATURDAY backfill, which asks for days that are not today - even though
+        each of those three nights had run the job and logged
+        ``FRB FedInvest EOD OK (1 rows x 28 cols)``. The same holds for the
+        Velocity curve family. Roughly 1,200 s a night, and the Saturday run
+        then re-priced the identical days from scratch.
+
+        So the runner hands a job that does not bank today a window ending at
+        the last SETTLED session instead, and the nightly starts keeping what it
+        computes. Declared per job rather than inferred from :data:`VALUE`,
+        because four value jobs (SR3 settles, STIRF, STIRFO, UST futures) own
+        date-keyed stores of their own, have no such guard, and genuinely want
+        today - the CME session is closed by 18:15 and their output is the only
+        record of it.
+
+        One job carries the flag for a different reason with the same remedy,
+        and it is flagged rather than special-cased because a second field whose
+        only effect is identical would be worse: the swaption value warm reads
+        the INTERSECTION of CurveStore and CubeStore coverage, and today's cube
+        is not built when it runs. It failed with "No common CurveStore/CubeStore
+        EOD dates" on five consecutive nights (2026-08-17 through 08-21) asking
+        for a day whose inputs did not exist yet. Read the flag as "today is a
+        usable target for this job", which is what the runner acts on.
     """
 
     name: str
@@ -95,6 +134,7 @@ class WarmJob:
     provides: Tuple[str, ...] = ()
     requires: Tuple[str, ...] = ()
     needs_excel: bool = False
+    banks_today: bool = True
 
     def __post_init__(self) -> None:
         if self.kind not in (STORE, VALUE):
@@ -186,7 +226,12 @@ def describe(jobs: Iterable[WarmJob]) -> str:
     """A listing that shows the dependency structure, for ``--list``."""
     lines = []
     for i, job in enumerate(jobs, 1):
-        bits = [f"  {i}. {job.name}  [{job.kind}{', needs Excel' if job.needs_excel else ''}]"]
+        flags = job.kind
+        if job.needs_excel:
+            flags += ", needs Excel"
+        if not job.banks_today:
+            flags += ", settled sessions only"
+        bits = [f"  {i}. {job.name}  [{flags}]"]
         if job.provides:
             bits.append(f"       provides: {', '.join(job.provides)}")
         if job.requires:
