@@ -1035,6 +1035,7 @@ def synthetic_world(
     years: int = 9,
     speech_years: int = 3,
     noise: float = 0.35,
+    speeches_per_week: float = 3.3,
     cfg: Optional[LeadConfig] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, "LeadConfig"]:
     """A surprise panel and a speech book with a KNOWN lead between them.
@@ -1049,6 +1050,11 @@ def synthetic_world(
     calibration cell and ``test_pipeline_reports_a_lead_even_when_the_true_lead_is_zero``
     are the same construction, without the deliverable notebook importing from
     ``tests/``.
+
+    ``speeches_per_week`` defaults to the JPM corpus's observed 3.3. The filter
+    offset depends on how densely the response side is sampled, so a study on a
+    corpus with a different density must recalibrate at ITS density rather than
+    inherit this one -- the FedLock corpus runs at 2.52/week.
     """
     cfg = cfg or LeadConfig()
     days = pd.bdate_range("2016-01-01", periods=years * 261)
@@ -1069,7 +1075,7 @@ def synthetic_world(
 
     speech_start = days[-speech_years * 261]
     candidates = days[days >= speech_start]
-    n_speech = int(len(candidates) * 3.3 / 5.0)
+    n_speech = int(len(candidates) * float(speeches_per_week) / 5.0)
     picks = np.sort(rng.choice(len(candidates), size=n_speech, replace=False))
     sdates = candidates[picks]
     scores = 20.0 * latent.reindex(sdates).to_numpy() + rng.normal(

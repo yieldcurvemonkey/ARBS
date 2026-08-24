@@ -35,25 +35,31 @@ except Exception:
     pass
 
 HERE = pathlib.Path(__file__).resolve().parent
-DEFAULT_NB = HERE / "fed_sentiment_lead.ipynb"
+DEFAULT_NB = HERE / "fedlock_sentiment_lead.ipynb"
 
 #: Figures the findings block quotes but does not compute, each with its source.
 WHITELIST = {
-    # JWS Macro #8's own description of his chart, quoted in the introduction
-    "0.85": "JWS's stated July level",
-    "0.1": "JWS's stated current level",
-    # the existing point-in-time-gated speaker backtest, cited not recomputed
-    "0.219": "intraday FED leg, bp per trade",
-    "0.146": "intraday FED leg, break-even bp",
-    "0.25": "listed SR3 round-trip cost, bp",
-    "473": "intraday FED leg, trades",
-    "103.5": "intraday FED leg, total bp",
-    "0.69": "intraday FED leg, Sharpe",
-    "1.24": "intraday FED leg, t",
+    # the FIRST study's published results, quoted here for comparison and
+    # recomputed there, not here
+    "0.737": "study 1, JPM levels r",
+    "0.096": "study 1, JPM levels p",
+    "0.153": "study 1, JPM changes r",
+    "0.568": "study 1, JPM changes p",
+    "0.005": "study 1, as-published p floor",
+    "2.65": "study 1, JPM mean revision in points",
+    "147": "study 1, sample weeks",
+    "189": "study 1, rotation count",
+    # FedLock's own published figures, quoted from its methodology page
+    "0.82": "FedLock published rho between V2 and V3",
+    "3.3": "Llama 3.3 70B -- a model name, not a measurement",
+    "2.0": "Gemini 2.0 Flash -- a model name, not a measurement",
+    "78": "FedLock published Powell Jackson Hole score (V2 era)",
     # dates, lag counts and other structural integers
     **{t: "structural" for t in (
-        "2026", "2023", "2024", "2025", "2022", "1998", "2005",
-        "16", "27", "13", "12", "11", "14", "26", "10", "5", "4.33",
+        "1985", "2004", "2005", "2009", "2013", "2016", "2017", "2019", "2021",
+        "2022", "2023", "2024", "2025", "2026", "2027", "2010", "2020",
+        "13", "11", "12", "27", "18", "10", "5", "2.52", "3.28", "21", "70",
+        "1.5", "1.6",
     )},
 }
 
