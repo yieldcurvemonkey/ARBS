@@ -48,6 +48,12 @@ def warmer(tmp_path, monkeypatch):
     # dependent on whether someone happens to have a workbook open. Tests that
     # care about the pre-flight patch it themselves.
     monkeypatch.setattr(module, "_excel_preflight", lambda: None)
+    # The source pre-flight is neutralised for the same reason as the Excel one
+    # above: these tests are not about it. Left real it parses 1,496 files of the
+    # actual checkout on EVERY main() call - measured at 108 s across this file
+    # and its two siblings - to re-establish a fact tests/test_warm_source_guard.py
+    # already covers properly.
+    monkeypatch.setattr(module, "_SOURCE_ROOTS", ())
     # Detach the file handler this test's run adds, so handlers do not pile up
     # across tests and keep writing into deleted tmp dirs.
     before = list(module.log.handlers)

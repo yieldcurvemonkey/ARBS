@@ -2326,3 +2326,52 @@ def test_the_legacy_key_is_still_written_so_a_rollback_degrades_to_a_refetch(
 
     entry = _book(env.manifest, "eod")[uni[0].isin]
     assert entry["key"] == WARM._key("eod", start, end, ("PRICE",))
+
+
+def test_COVERAGE_is_judged_on_the_requested_window_not_the_residual(env, monkeypatch):
+    """The invariant 504ced86 created and nothing else pins.
+
+    Every other window-taker in the batch loop moved to the residual - the
+    needs-data probe, the sidecar sample, the fetch itself, the outage guard -
+    because they are questions about THIS fetch. The coverage check deliberately
+    did NOT: it is a question about the DATA, and the tag cache is cumulative.
+
+    It is load-bearing, not tidy. ``tag_states`` classifies on ``last >= start``
+    first, so narrowing the window to the owed tail flips any tag whose last
+    print falls inside the requested window but before that tail from COVERED to
+    STALLED - and ``newly_stalled`` turns that into a ``regressed`` entry, which
+    escalates a COMPLETED warm to exit 1 and marks its store asset blocking,
+    skipping both downstream value jobs. That is the 324-bond cascade of
+    2026-08-19/20/21 in a new disguise.
+
+    Asserted on the CALL rather than on a planted sidecar, because the states a
+    sidecar produces depend on maturity, the widest-gap calibration and the
+    fake's fixed print dates - three things that can each make this pass for the
+    wrong reason.
+    """
+    uni = WARM.universe()
+    already = [r.isin for r in uni[:8]]
+    _seed_ledger(env.manifest, "eod", already,
+                 {"PRICE": [["2026-08-01", "2026-08-09"]]})
+
+    seen = []
+    real = WARM.tag_states
+    monkeypatch.setattr(
+        WARM, "tag_states",
+        lambda freq, tags, **kw: seen.append((kw.get("start"), kw.get("end")))
+        or real(freq, tags, **kw),
+    )
+
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 8, 1), end=datetime.date(2026, 8, 10),
+              values=("PRICE",), batch=8, limit=8)
+
+    assert _windows(quotes) == [
+        (datetime.date(2026, 8, 10), datetime.date(2026, 8, 10))
+    ], "the FETCH must use the residual"
+    assert seen, "tag_states was never called"
+    assert set(seen) == {(datetime.date(2026, 8, 1), datetime.date(2026, 8, 10))}, (
+        f"COVERAGE must be judged on the requested window; it was asked about "
+        f"{sorted(set(seen))}"
+    )

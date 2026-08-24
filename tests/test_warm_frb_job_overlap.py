@@ -53,6 +53,30 @@ JOB17_VALUES = ("FRB_YTM", "FRB_CLEAN_PRICE", "FRB_SPREAD_TSY")
 SOURCE = "USTS_CITIVELO-RL"
 
 
+def _unified_query_call(fn) -> list:
+    """The KEYWORD NAMES of the ``UnifiedQuery(...)`` call inside ``fn``.
+
+    Compared between the two jobs, this is what actually decides whether they
+    write the same symbol: the store key is a sha1 over cusip/value/structure/
+    structure_kwargs/name/risk_weight (TB/FixedRateBondsTB.py:43-57), so a kwarg
+    added at ONE call site silently forks the 42 shared symbols.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "UnifiedQuery":
+            names = [kw.arg for kw in node.keywords]
+            assert not node.args, (
+                f"{fn.__name__} passes UnifiedQuery a POSITIONAL argument; this "
+                f"comparison only reads keywords"
+            )
+            return sorted(names)
+    raise AssertionError(f"no UnifiedQuery(...) call found in {fn.__name__}")
+
+
 def _symbol(cusip: str, value) -> str:
     """What ``FixedRateBondsTB`` will key this query on in the computed store."""
     return f"FRB::{SOURCE}::{_query_fingerprint(UnifiedQuery(cusip=cusip, value=value).to_legacy())}"
@@ -98,16 +122,35 @@ def test_every_overlapping_symbol_is_IDENTICAL_not_merely_similar(value_name):
     nothing else in the repo would say so.
     """
     member = getattr(UnifiedValue, value_name)
+
+    # THE TWO JOBS' OWN CALLS, extracted from their source. The first version of
+    # this test wrote `assert _symbol(a, v) == _symbol(a, v)` - the same
+    # expression twice, against a deterministic sha1 - so it could not fail, and
+    # the one regression this file exists for (either job growing a kwarg such as
+    # `name=`, which IS in the fingerprint payload, splitting 42 shared symbols
+    # into two sets carrying identical numbers) went straight past it.
+    call17 = _unified_query_call(WARMER.warm_citivelo_frb_values)
+    call18 = _unified_query_call(JOB18.build)
+    assert call17 == call18, (
+        f"the two jobs no longer construct the query the same way:\n"
+        f"  job 17: {call17}\n  job 18: {call18}\n"
+        f"Any difference in the kwargs changes the sha1 fingerprint, so they "
+        f"would write DIFFERENT symbols carrying the same numbers."
+    )
+    assert set(call17) == {"cusip", "value"}, (
+        f"a kwarg was added to the shared query construction ({sorted(call17)}); "
+        f"re-verify the overlap - structure/name/risk_weight all feed the "
+        f"fingerprint at TB/FixedRateBondsTB.py:43-57"
+    )
+
     for alias in WARMER._CV_BOND_ALIASES:
-        # Job 17: UnifiedQuery(cusip=c, value=v) in warm_citivelo_frb_values.
-        # Job 18: UnifiedQuery(cusip=s, value=v) in citivelo_ust_timeseries_warm.build.
-        assert _symbol(alias, member) == _symbol(alias, member)
         q = UnifiedQuery(cusip=alias, value=member).to_legacy()
         assert getattr(q, "structure_kwargs", None) == {"cusip": alias}, (
             "the fingerprint payload changed shape; re-verify the overlap"
         )
         assert getattr(q, "name", None) is None
         assert getattr(q, "risk_weight", None) is None
+        assert _symbol(alias, member).startswith(f"FRB::{SOURCE}::")
 
 
 def _code(fn: object) -> str:

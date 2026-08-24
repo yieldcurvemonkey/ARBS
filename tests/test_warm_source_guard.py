@@ -140,11 +140,19 @@ def test_the_guard_can_be_switched_off(warmer, tmp_path, monkeypatch):
     nightly with no way out at 08:00.
     """
     root = _tree(tmp_path, broken="def (:\n")
-    monkeypatch.setenv("ARBS_WARM_SOURCE_GUARD", "0")
-    monkeypatch.setattr(warmer, "_SOURCE_GUARD_ENABLED", False)
     monkeypatch.setattr(warmer, "_SOURCE_ROOTS", (str(root),))
 
-    assert warmer._preflight_source() == [], "the switch must actually skip the scan"
+    # Armed, this tree fails - so the assertion below is about the SWITCH and
+    # not about an accidentally healthy fixture.
+    assert warmer._preflight_source(), "the fixture tree must actually be broken"
+
+    # THE ENV VAR, which is what an operator sets, not the module attribute. The
+    # flag is read at call time precisely so this can be tested: bound at import,
+    # a monkeypatch.setenv runs too late to matter and the only testable thing
+    # left is the attribute - so renaming the variable in the read left the whole
+    # suite green.
+    monkeypatch.setenv("ARBS_WARM_SOURCE_GUARD", "0")
+    assert warmer._preflight_source() == [], "the switch must skip the scan"
 
 
 # ------------------------------------------------------------------ #
@@ -225,6 +233,37 @@ def test_a_clean_edit_is_reported_once_not_before_every_child(warmer, tmp_path, 
     assert text.count("SOURCE CHANGED") == 1, (
         "the change must be re-baselined after it is reported:\n" + text
     )
+
+
+def test_a_DELETED_file_is_reported_once_too(warmer, tmp_path, monkeypatch):
+    """Deletion is a change, and it re-baselines like any other.
+
+    ``_source_snapshot`` skips any path whose ``os.stat`` raises, so a deleted
+    file yields no key and ``dict.update`` cannot remove the stale one - it stays
+    in the symmetric difference for the life of the process and the warning fires
+    before every remaining child. Log noise rather than a wrong decision, but the
+    comment above the re-baseline promises it does not happen.
+
+    Reachable, and not hypothetically: merging a branch that removes a ``.py``
+    under a scanned root while the 18:15 warm is running does it, and this very
+    branch removes ``scripts/_ustf_cache_warmer.py``.
+    """
+    root = _tree(tmp_path, keep="X = 1\n", doomed="Y = 2\n")
+    monkeypatch.setattr(warmer, "_SOURCE_ROOTS", (str(root),))
+    warmer._preflight_source()
+    (root / "doomed.py").unlink()
+
+    script = _child(tmp_path, "print('ok')\n")
+    warmer._start_run_log(stamp="20260823_103100")
+    for label in ("step one", "step two", "step three"):
+        assert warmer._run([sys.executable, "-u", str(script)], label) == 0
+
+    text = (pathlib.Path(warmer.LOG_DIR) / "cache_warmer_20260823_103100.log").read_text(
+        encoding="utf-8")
+    assert text.count("SOURCE CHANGED") == 1, (
+        "a deleted file must be re-baselined like any other change:\n" + text
+    )
+    assert warmer._SUBPROCESS_FAILURES == [], "and no child may be refused for it"
 
 
 def test_a_dirty_tree_at_run_start_does_not_fire_the_guard(warmer, tmp_path, monkeypatch):
@@ -369,6 +408,29 @@ def test_a_real_traceback_that_merely_mentions_importerror_is_not_fatal(warmer, 
 # ------------------------------------------------------------------ #
 
 
+def _service_format_string() -> str:
+    """The literal ``stirf_curve_service`` logs its per-curve backfill total with.
+
+    Pulled out of the source by AST so the warmer's regex is checked against the
+    string the service actually renders, rather than a copy someone kept in step
+    by hand.
+    """
+    import ast
+
+    src = (REPO / "scripts" / "stirf_curve_service.py").read_text(encoding="utf-8")
+    found = [
+        node.value
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        and node.value.startswith("Backfill summary for")
+    ]
+    assert len(found) == 1, (
+        f"expected exactly one 'Backfill summary for' literal in "
+        f"stirf_curve_service.py, found {len(found)}: {found}"
+    )
+    return found[0]
+
+
 def test_the_real_service_summary_line_is_the_one_that_is_parsed():
     """Pinned to ``stirf_curve_service``'s actual format string.
 
@@ -380,8 +442,13 @@ def test_the_real_service_summary_line_is_the_one_that_is_parsed():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    real = ("2026-08-23 10:31:00 [INFO] Backfill summary for USD-SOFR-1D-Q12STIRT: "
-            "windows=5 curve_partial_or_error=0 ts_partial_or_error=0")
+    # RENDERED FROM THE SERVICE'S OWN FORMAT STRING. A copy of it kept here pins
+    # nothing: a reword in stirf_curve_service would leave this green while
+    # _stirf_windows_banked starts returning None, which downgrades a PARTIAL
+    # curve into a reported LOST one on the next bad night.
+    real = "2026-08-23 10:31:00 [INFO] " + (
+        _service_format_string() % ("USD-SOFR-1D-Q12STIRT", 5, 0, 0)
+    )
     assert module._stirf_windows_banked(real, "") == 5
     assert module._stirf_windows_banked("", real) == 5, "the service logs to stderr"
     assert module._stirf_windows_banked("nothing like it", "") is None, (

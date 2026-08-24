@@ -1240,7 +1240,15 @@ _FATAL_IMPORT_LINE = re.compile(
 _SOURCE_ROOTS = ("TB", "Caching", "MDP", "Query", "Utils", "utils", "scripts",
                  "BT", "RVUtils")
 
-_SOURCE_GUARD_ENABLED = os.environ.get("ARBS_WARM_SOURCE_GUARD", "1") != "0"
+def _source_guard_enabled() -> bool:
+    """Read at CALL time, not at import.
+
+    Bound at import, the switch could only be tested by patching the module
+    attribute - which proves the branch works and not that the VARIABLE an
+    operator sets does anything. Renaming the env var here used to leave the
+    whole suite green.
+    """
+    return os.environ.get("ARBS_WARM_SOURCE_GUARD", "1") != "0"
 
 #: What :func:`_run` returns when the source guard refused to launch a child.
 #:
@@ -1251,6 +1259,7 @@ _NOT_LAUNCHED = "NOT LAUNCHED"
 
 #: ``{path: (mtime_ns, size)}`` as of run start. Filled by :func:`_preflight_source`.
 _SOURCE_SNAPSHOT: dict[str, tuple[int, int]] = {}
+
 
 
 def _rel(path):
@@ -1273,10 +1282,21 @@ def _source_files():
     so moving it would break the very subprocess the test is about.
     """
     out = []
+    # De-duplicated by normalised path. ``_SOURCE_ROOTS`` names both "Utils" and
+    # "utils"; only the lowercase tree is tracked, but NTFS resolves both, so
+    # without this its 8 files are walked, stat'ed and parsed under two path
+    # strings - and a broken one is reported twice, under two spellings, with the
+    # abort line saying "2 source file(s)" for one file. Measured: 1,504 paths
+    # collapsing to 1,496 unique.
+    seen = set()
     for root in _SOURCE_ROOTS:
         base = root if os.path.isabs(root) else os.path.join(REPO_ROOT, root)
         if not os.path.isdir(base):
             continue
+        key = os.path.normcase(os.path.abspath(base))
+        if key in seen:
+            continue
+        seen.add(key)
         for dirpath, dirnames, filenames in os.walk(base):
             # A worktree under .claude/ is a stale copy of this repo and nothing
             # imports from it; __pycache__ holds no source at all.
@@ -1291,7 +1311,7 @@ def _source_files():
 
 
 def _source_snapshot(paths):
-    """``{path: (mtime_ns, size)}``. Measured at 0.3 s over 1,503 files."""
+    """``{path: (mtime_ns, size)}``. Measured at 0.3 s over 1,496 files."""
     snap = {}
     for path in paths:
         try:
@@ -1326,10 +1346,16 @@ def _compile_failures(paths):
 def _preflight_source():
     """Guard 1. Every source file parses; snapshot the tree for guard 2.
 
-    Returns the list of failures. Measured on this machine: 2.9 s to parse 1,503
+    Returns the list of failures. Measured on this machine: 2.9 s to parse 1,496
     files warm (13.9 s cold), against a nightly span of 2,600-3,500 s.
+
+    Once per run, and it stays that way: a nightly calls :func:`main` exactly
+    once. Tests that call it repeatedly and are not about this guard neutralise
+    it by pointing ``_SOURCE_ROOTS`` at nothing, the same way they already
+    neutralise the Excel pre-flight - a per-process memo was tried instead and
+    bought nothing, because those fixtures re-import the module per test.
     """
-    if not _SOURCE_GUARD_ENABLED:
+    if not _source_guard_enabled():
         log.info("source guard disabled (ARBS_WARM_SOURCE_GUARD=0)")
         return []
     t0 = time.perf_counter()
@@ -1358,7 +1384,7 @@ def _source_changed_since_start():
     a clean edit, which is legal and worth knowing about. A changed file that no
     longer parses is the hazard, and it stops the child.
     """
-    if not _SOURCE_GUARD_ENABLED or not _SOURCE_SNAPSHOT:
+    if not _source_guard_enabled() or not _SOURCE_SNAPSHOT:
         return [], []
     now = _source_snapshot(_source_files())
     changed = sorted(
@@ -1391,7 +1417,22 @@ def _assert_source_stable(label):
         )
         # Re-baseline: a clean edit is reported ONCE, not before every child for
         # the rest of the night.
-        _SOURCE_SNAPSHOT.update(_source_snapshot(changed))
+        #
+        # ``update`` alone cannot do it. ``_source_snapshot`` skips any path whose
+        # ``os.stat`` raises, so a DELETED file yields no key, stays in the
+        # snapshot for the life of the process, and keeps appearing in the
+        # symmetric difference - so the warning would fire before every remaining
+        # child, which is the opposite of what the line above promises. Log noise
+        # rather than a wrong decision (no child is refused and nothing is
+        # recorded), but the promise should hold. Merging a branch that removes a
+        # .py while a warm runs is enough to trigger it, and this branch removes
+        # one.
+        fresh = _source_snapshot(changed)
+        for path in changed:
+            if path in fresh:
+                _SOURCE_SNAPSHOT[path] = fresh[path]
+            else:
+                _SOURCE_SNAPSHOT.pop(path, None)
         return ""
     where = "; ".join(
         f"{_rel(p)}:{lineno} {msg}" for p, lineno, msg in broken[:3]
@@ -3254,7 +3295,7 @@ def main():
     # BEFORE anything runs. A warm shells out for hours and every child imports
     # from disk, so a source file that does not parse is three hours of work
     # committed to a tree that cannot load. 2.9 s to find out, measured over
-    # 1,503 files; the alternative was measured too, on 2026-08-23, and cost a
+    # 1,496 files; the alternative was measured too, on 2026-08-23, and cost a
     # STIRF curve while the run reported OK.
     broken = _preflight_source()
     if broken:
