@@ -357,13 +357,21 @@ with no sanity check.
 
 **They were not re-run here**, and that is a deliberate call. The series they read
 now has 2,600 interior holes rather than 2,600 lies, so re-running today would
-regress a silently shorter sample and answer a different question than either the
-original or the repaired-data version. The right sequence is: deep re-harvest,
-then re-run. Both studies concluded the relationship "does not reach the price",
-and spurious variance biases a regression toward zero, so the conclusion is very
-likely to survive — but it survived by accident and still needs the re-run to
-have been earned. `fed_detachment_prices.curve_store_par_rate(2)` is a drop-in
-clean source that needs no re-harvest and no COM.
+regress a silently shorter sample and answer a third question — neither the
+original's nor the repaired-data one. The right sequence is: deep re-harvest,
+then re-run. `fed_detachment_prices.curve_store_par_rate(2)` is a drop-in clean
+source that needs neither, if the owner prefers not to wait.
+
+**Why the conclusion probably survives, stated correctly.** The poisoned series
+was the **dependent** variable — a forward change in the rate, regressed on a
+sentiment index. Noise in *Y* does not attenuate the coefficient the way noise in
+a regressor does; the estimate stays unbiased and the standard error inflates. At
+roughly 84x the true volatility (sd 1,887bp against 22.5bp at four weeks) the
+power is destroyed, so "we found nothing" is what that regression had to say
+regardless of whether anything was there. That is a weaker statement than
+attenuation would give: it means the studies could not have detected a real
+effect, not that a real effect would have shown up smaller. Both concluded the
+relationship does not reach the price, and both are still owed an honest test.
 
 ## Operational note
 
