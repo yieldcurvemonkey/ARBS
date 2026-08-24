@@ -111,6 +111,7 @@ __all__ = [
     "StructureContext",
     "book_daily",
     "build_contexts",
+    "clear_fv_memo",
     "condition_binding",
     "declared_cells",
     "episode_cost_usd",
@@ -317,6 +318,47 @@ def _spliced(s: pd.Series, roll_dates: Sequence) -> pd.Series:
     return roll_spliced(s, roll_dates)
 
 
+#: Memo for the quarterly refit.  The fair value depends only on the CA series,
+#: the fit kind, the window and the regressors -- NOT on any threshold -- so the
+#: 23 declared cells and the whole control battery re-derive the same handful of
+#: paths dozens of times.  The key is a CONTENT fingerprint, not an object id:
+#: an id is reused after garbage collection and would serve one structure's fit
+#: under another's name.
+_FV_MEMO: Dict[tuple, Tuple[pd.DataFrame, pd.Series]] = {}
+
+
+def clear_fv_memo() -> None:
+    """Drop the refit memo.  Only needed if a panel is mutated in place."""
+    _FV_MEMO.clear()
+
+
+def _fv_key(ca: pd.Series, panel: pd.DataFrame, kind: str, window_bd: int,
+            cols: Sequence[str], rolls) -> tuple:
+    idx = ca.index
+    return (kind, int(window_bd), tuple(cols), len(idx),
+            idx[0].value, idx[-1].value, len(rolls),
+            float(np.nansum(ca.to_numpy())),
+            float(np.nansum(ca.to_numpy() ** 2)),
+            float(np.nansum(ca.to_numpy() * np.arange(len(idx)))),
+            tuple(float(np.nansum(panel[c].to_numpy())) for c in cols),
+            tuple(float(np.nansum(panel[c].to_numpy() ** 2)) for c in cols),
+            tuple(float(np.nansum(panel[c].to_numpy() * np.arange(len(idx))))
+                  for c in cols))
+
+
+def _refit_memoised(ca: pd.Series, panel: pd.DataFrame, kind: str,
+                    window_bd: int, cols: Sequence[str], rolls
+                    ) -> Tuple[pd.DataFrame, pd.Series]:
+    key = _fv_key(ca, panel, kind, window_bd, cols, rolls)
+    hit = _FV_MEMO.get(key)
+    if hit is None:
+        hit = FV.imm_refit(ca, panel, kind, window_bd, cols,
+                           roll_dates=list(rolls))
+        _FV_MEMO[key] = hit
+    frame, fitted = hit
+    return frame.copy(), fitted.copy()
+
+
 def _fit_kind_for(hedge: str) -> str:
     return "citi" if hedge == "citi_2017" else "fly"
 
@@ -353,8 +395,8 @@ def build_contexts(panel: pd.DataFrame, screen: Mapping[str, pd.DataFrame],
         ca_sig = _spliced(ca_raw, rolls) if cfg.splice_signal else ca_raw
         ca_pnl = _spliced(ca_raw, rolls) if cfg.splice_pnl else ca_raw
 
-        frame, fitted = FV.imm_refit(ca_sig, panel, kind, cfg.fit_window_bd,
-                                     fv_cols, roll_dates=list(rolls))
+        frame, fitted = _refit_memoised(ca_sig, panel, kind,
+                                        cfg.fit_window_bd, fv_cols, rolls)
         # the parameters in force on each date, forward-filled from the roll
         par = pd.DataFrame(index=idx, columns=["a", "b", "w2", "w10"],
                            dtype=float)
@@ -414,8 +456,10 @@ def build_contexts(panel: pd.DataFrame, screen: Mapping[str, pd.DataFrame],
 
         if cfg.signal_lag_bd:
             sh = int(cfg.signal_lag_bd)
-            conds = conds.shift(sh).fillna(False).astype(bool)
-            all_ok = all_ok.shift(sh).fillna(False).astype(bool)
+            # ``fill_value`` rather than ``.fillna``: shifting a bool frame
+            # upcasts to object first, and the downcast back is deprecated.
+            conds = conds.shift(sh, fill_value=False).astype(bool)
+            all_ok = all_ok.shift(sh, fill_value=False).astype(bool)
             z_model, z_fly = z_model.shift(sh), z_fly.shift(sh)
 
         out[lab] = StructureContext(

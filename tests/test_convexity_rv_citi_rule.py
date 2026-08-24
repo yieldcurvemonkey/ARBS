@@ -617,3 +617,78 @@ def test_stats_frame_reports_every_exit_reason_and_the_cost_sweep():
     for m in R.COST_MULTS:
         assert f"net_{m}" in f.columns and f"sharpe_{m}" in f.columns
     assert float(f["net_0.0"].iloc[0]) > float(f["net_2.0"].iloc[0])
+
+
+# ---------------------------------------------------------------------------
+# 8. the refit memo -- an optimisation that must not change an answer
+# ---------------------------------------------------------------------------
+def test_the_refit_memo_returns_the_same_answer_as_a_cold_fit():
+    p = _real_panel()
+    s = SC.build_screen(p)
+    cfg = R.RuleConfig()
+    R.clear_fv_memo()
+    cold = R.build_contexts(p, s, cfg)["BLUES"]
+    warm = R.build_contexts(p, s, cfg)["BLUES"]
+    for attr in ("fitted", "rich_bp", "beta", "w2", "w10", "combo",
+                 "dcombo_held", "z_fly"):
+        a, b = getattr(cold, attr), getattr(warm, attr)
+        assert a.equals(b) or float((a - b).abs().max()) < 1e-15, attr
+
+
+def test_the_memo_hands_back_a_copy_so_a_caller_cannot_poison_it():
+    p = _real_panel()
+    s = SC.build_screen(p)
+    cfg = R.RuleConfig()
+    R.clear_fv_memo()
+    first = R.build_contexts(p, s, cfg)["BLUES"]
+    first.fitted.iloc[:] = -999.0
+    second = R.build_contexts(p, s, cfg)["BLUES"]
+    assert float(second.fitted.dropna().abs().max()) < 900.0
+
+
+def test_the_memo_key_separates_structures_and_fit_kinds():
+    p = _real_panel()
+    s = SC.build_screen(p)
+    R.clear_fv_memo()
+    fly = R.build_contexts(p, s, R.RuleConfig(hedge="fitted_refit"))
+    citi = R.build_contexts(p, s, R.RuleConfig(hedge="citi_2017"))
+    # different structures must not share a fit
+    assert not fly["BLUES"].fitted.equals(fly["GOLDS"].fitted)
+    # and the fly-constrained fit is not Citi's fixed-weight one
+    assert not fly["BLUES"].w2.equals(citi["BLUES"].w2)
+    assert float(citi["BLUES"].w2.dropna().unique()[0]) == FV.CITI_FEB2017_W2
+
+
+def test_a_changed_panel_does_not_hit_a_stale_memo_entry():
+    """The key is a CONTENT fingerprint; an object id would be reused after a
+    garbage collection and serve one panel's fit under another's name.
+
+    Note the perturbation has to change the SHAPE: adding a constant to a
+    regressor moves nothing, because the fitted intercept absorbs it exactly --
+    which is worth knowing before reading any fair-value sensitivity.
+    """
+    p = _real_panel()
+    s = SC.build_screen(p)
+    cfg = R.RuleConfig()
+    R.clear_fv_memo()
+    a = R.build_contexts(p, s, cfg)["BLUES"].fitted
+    level = p.copy()
+    level["r5y_pct"] += 0.25
+    lv = R.build_contexts(level, SC.build_screen(level), cfg)["BLUES"].fitted
+    assert float((a - lv).abs().max()) < 1e-9, "the intercept absorbs a level shift"
+    shape = p.copy()
+    shape["r5y_pct"] = shape["r5y_pct"] * 1.5
+    sh = R.build_contexts(shape, SC.build_screen(shape), cfg)["BLUES"].fitted
+    assert float((a - sh).abs().max()) > 1e-6
+
+
+def test_the_memo_fingerprint_separates_a_permutation_of_the_same_values():
+    """A fingerprint built only from a sum would collide here."""
+    p = _real_panel()
+    cfg = R.RuleConfig()
+    R.clear_fv_memo()
+    a = R.build_contexts(p, SC.build_screen(p), cfg)["BLUES"].fitted
+    q = p.copy()
+    q["r5y_pct"] = q["r5y_pct"].to_numpy()[::-1]
+    b = R.build_contexts(q, SC.build_screen(q), cfg)["BLUES"].fitted
+    assert float((a - b).abs().max()) > 1e-6
