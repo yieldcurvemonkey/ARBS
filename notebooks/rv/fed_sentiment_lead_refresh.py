@@ -92,8 +92,14 @@ def from_live(out: pathlib.Path, *, freq: str = "DAILY", period: str = "MAX") ->
 
     LOCAL_CACHE.mkdir(parents=True, exist_ok=True)
     cache = CitiVeloTagCache(base_dir=LOCAL_CACHE)
-    client = CitiVelocityExcelClient()
-    try:
+
+    # ``connect()``, never the bare constructor. The classmethod is what binds to
+    # a running Excel with retries (a long recalc makes a single pass report "no
+    # usable Excel"), raises AddInNotSignedInError when ``=CVTODAY()`` comes back
+    # ``#NAME?`` instead of silently fetching nothing, and REUSES the tagged
+    # SCRATCH workbook -- before tags existed every client added one and 62 had
+    # accumulated. The context manager closes it after the drain pause.
+    with CitiVelocityExcelClient.connect() as client:
         def fetcher(tags, freq_token, span_start, span_end, point_token):
             kwargs = {"price_point": point_token}
             if span_start is None and span_end is None:
@@ -104,11 +110,6 @@ def from_live(out: pathlib.Path, *, freq: str = "DAILY", period: str = "MAX") ->
 
         series = cache.get(list(SNAPSHOT_TAGS), freq, fetcher=fetcher, force_refresh=True)
         failures = client.last_failures()
-    finally:
-        try:
-            client.close()
-        except Exception:
-            pass
     if not series:
         raise SystemExit("live fetch returned nothing; snapshot NOT rewritten")
     frame = pd.concat(series, axis=1).sort_index()

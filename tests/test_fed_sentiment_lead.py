@@ -30,71 +30,11 @@ import fed_sentiment_lead_data as D  # noqa: E402
 
 
 # ---------------------------------------------------------------- helpers
-def _ar1(n: int, phi: float, rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
-    e = rng.normal(scale=scale, size=n)
-    out = np.empty(n)
-    out[0] = e[0]
-    for i in range(1, n):
-        out[i] = phi * out[i - 1] + e[i]
-    return out
-
-
-def _synthetic_world(
-    *,
-    lead_days: int,
-    rng: np.random.Generator,
-    years: int = 9,
-    speech_years: int = 3,
-    noise: float = 0.35,
-    cfg: D.LeadConfig | None = None,
-):
-    """A surprise panel and a speech book with a KNOWN lead between them.
-
-    ``lead_days`` is the true lead of the surprise driver over the latent
-    sentiment that speeches are drawn from. Everything else -- the trailing
-    z-score, the weekly sampling, the EWMA over speeches -- is the production
-    pipeline, unmodified.
-    """
-    cfg = cfg or D.LeadConfig()
-    days = pd.bdate_range("2016-01-01", periods=years * 261)
-    driver = _ar1(len(days), 0.985, rng, scale=1.0)
-    driver = pd.Series(driver, index=days)
-
-    # two daily legs that share the driver, each with its own idiosyncratic noise
-    panel = pd.DataFrame(
-        {
-            D.TAG_LABOUR: 10.0 * driver + rng.normal(scale=2.0, size=len(days)),
-            D.TAG_PRICES: 10.0 * driver + rng.normal(scale=2.0, size=len(days)),
-        },
-        index=days,
-    )
-    panel.index.name = "date"
-
-    # the latent stance follows the driver with the planted lead
-    latent = driver.shift(0).copy()
-    latent.index = latent.index + pd.Timedelta(days=lead_days)
-    latent = latent.reindex(days.union(latent.index)).interpolate().reindex(days)
-
-    # speeches at ~3.3/week over the last `speech_years`, scored off the latent
-    speech_start = days[-speech_years * 261]
-    candidates = days[days >= speech_start]
-    n_speech = int(len(candidates) * 3.3 / 5.0)
-    picks = np.sort(rng.choice(len(candidates), size=n_speech, replace=False))
-    sdates = candidates[picks]
-    scores = 20.0 * latent.reindex(sdates).to_numpy() + rng.normal(
-        scale=20.0 * noise, size=len(sdates)
-    )
-    book = pd.DataFrame(
-        {
-            "central_bank": "FED",
-            "date": sdates,
-            "pub_date": sdates,  # contemporaneous: the vintage question is tested elsewhere
-            "speaker": [f"S{i % 12}" for i in range(len(sdates))],
-            "hawk_dove_score": scores,
-            "relevance_pct": 50.0,
-        }
-    )
-    return panel, book, cfg
+# The synthetic world lives in the DATA module, not here. The notebook's
+# calibration cell reads the same construction, and a deliverable notebook must
+# not import from tests/ to be re-executable.
+_ar1 = D.ar1_path
+_synthetic_world = D.synthetic_world
 
 
 def _measure(panel, book, cfg, transform="levels"):
@@ -273,20 +213,37 @@ def test_fit_ar_recovers_a_planted_ar2():
 def test_fit_ar_scores_every_order_on_the_same_rows():
     """AIC across models fitted on different sample sizes is not comparable.
 
-    Fitting AR(1) on n-1 rows and AR(6) on n-6 biases the selection toward the
-    short lag, because a likelihood computed on more observations is simply
-    larger. The fix is a common sample, and the property is testable: the
-    residual vectors of every candidate order must have the same length.
+    Fitting AR(1) on n-1 rows and AR(6) on n-6 biases selection toward the short
+    lag, because a likelihood computed on more observations is simply larger.
+    The fix is a common sample -- the last ``n - max_p`` rows for every
+    candidate -- and it has a consequence that can actually fail: when the
+    selected order ``p`` is BELOW ``max_p``, the returned coefficients must
+    equal an OLS fitted on rows ``[max_p:]``, not on rows ``[p:]``. Those two
+    regressions differ, so this test distinguishes the two rules.
     """
     rng = np.random.default_rng(1)
-    x = _ar1(500, 0.8, rng)
-    lengths = set()
-    for max_p in (4, 4, 4):
-        phi, p = D.fit_ar(x, max_p=max_p)
-        start = max_p
-        Z = np.column_stack([x[start - j - 1 : len(x) - j - 1] for j in range(p)])
-        lengths.add(len(x[start:] - Z @ phi))
-    assert len(lengths) == 1
+    n = 300
+    x = np.zeros(n)
+    e = rng.normal(size=n)
+    for i in range(2, n):
+        x[i] = 0.55 * x[i - 1] - 0.35 * x[i - 2] + e[i]
+    max_p = 8
+    phi, p = D.fit_ar(x, max_p=max_p)
+    assert 0 < p < max_p, f"need an interior selection to discriminate; got {p}"
+
+    def _ols(start):
+        Z = np.column_stack([x[start - j - 1 : n - j - 1] for j in range(p)])
+        beta, *_ = np.linalg.lstsq(Z, x[start:], rcond=None)
+        return beta
+
+    common, per_order = _ols(max_p), _ols(p)
+    assert not np.allclose(common, per_order, atol=1e-9), (
+        "the two rules coincide on this sample, so the test proves nothing"
+    )
+    assert np.allclose(phi, common, atol=1e-9), (
+        f"fit_ar returned {phi}, the common-sample fit is {common} and the "
+        f"per-order fit is {per_order} -- it is using the wrong sample"
+    )
 
 
 def test_prewhitened_answer_is_not_a_property_of_the_order_cap():
@@ -415,12 +372,41 @@ def test_a_planted_lead_clears_the_shift_null_in_CHANGES():
     observed = float(np.nanmax(D.lag_curve_common(X, Y, lags)["corr"].to_numpy()))
     null = D.shift_null(x, y, lags, cfg, transform="changes", draws=300,
                         rng=np.random.default_rng(15))
-    assert null["draws_used"] > 250
+    # the rotation set is FINITE and is enumerated in full, so the null is exact
+    # and its p-value cannot go below 1/(distinct + 1)
+    assert null["exhaustive"] is True
+    assert null["draws_used"] == null["distinct_rotations"] > 100
     p = D.surrogate_pvalue(observed, null)
+    assert p >= null["p_floor"], "a p-value finer than the reference set can resolve"
     assert p < 0.05, (
         f"a planted 5-week lead did not clear the shift null in changes "
-        f"(max {observed:.3f}, null q95 {null['q95']:.3f}, p={p:.3f})"
+        f"(max {observed:.3f}, null q95 {null['q95']:.3f}, p={p:.3f}, "
+        f"floor {null['p_floor']:.4f})"
     )
+
+
+def test_shift_null_enumerates_its_finite_reference_set():
+    """A p-value can never be finer than 1/(distinct surrogates + 1).
+
+    Sampling ~190 distinct rotations 1,500 times with replacement produces a
+    reference set of at most 190 distinct curves, so quoting p = 0.001 off it
+    claims a resolution that does not exist. The null now enumerates the whole
+    set whenever it fits the draw budget, and reports the floor.
+    """
+    cfg = D.LeadConfig()
+    rng = np.random.default_rng(41)
+    n = 200
+    idx = pd.date_range("2022-01-07", periods=n, freq="W-FRI")
+    x = pd.Series(_ar1(n, 0.95, rng), index=idx)
+    y = pd.Series(_ar1(n, 0.95, rng), index=idx)
+    lags = cfg.lags()
+    null = D.shift_null(x, y, lags, cfg, draws=5000, rng=np.random.default_rng(42))
+    expected = n - 2 * (max(abs(lags.min()), abs(lags.max())) + 1)
+    assert null["exhaustive"] is True
+    assert null["distinct_rotations"] == expected
+    assert null["draws_used"] == expected
+    assert abs(null["p_floor"] - 1.0 / (expected + 1)) < 1e-12
+    assert D.surrogate_pvalue(0.5, null) >= null["p_floor"] - 1e-12
 
 
 def test_LEVELS_cannot_discriminate_even_a_planted_lead():
@@ -462,15 +448,15 @@ def test_LEVELS_cannot_discriminate_even_a_planted_lead():
 def test_shift_null_size_is_near_nominal(transform, ceiling):
     """Calibration: how often does the null reject when nothing is there?
 
-    Measured over 120 unrelated AR(0.97) pairs at 27 lags, rejection at a
-    nominal 5%: shift/changes 5.0%, shift/levels 8.3%, shift/prewhitened 5.8%,
-    phase/changes 0.8%, phase/levels 7.5%. The changes pair is the one the
-    notebook takes its p-values from; the others are reported with their size
-    stated rather than assumed to be 5%.
+    The notebook measures all six null/transform sizes in a cell and prints
+    Wilson intervals; this test only has to catch a null that has stopped
+    working altogether. Run at 40 trials so the fast gate stays fast, with
+    ceilings loose enough to absorb that sample.
 
-    Run here at 40 trials so the fast gate stays fast; the ceilings are loose
-    enough to absorb that sample and tight enough to catch a null that has
-    stopped working.
+    Do not re-hard-code a size here. The previously quoted 8.3%/5.0%/9.2% were
+    measured before the rotations were enumerated exactly and before the AR
+    order was selected on a common sample; both changed the answer, and a
+    number frozen in a docstring does not change with them.
     """
     cfg = D.LeadConfig()
     lags = cfg.lags()
@@ -509,10 +495,16 @@ def test_snapshot_carries_both_legs_at_a_shared_daily_frequency():
 
 
 @pytest.mark.skipif(
-    not Path(D.DEFAULT_SCORES_CSV).exists(), reason="JPM corpus not on this machine"
+    not (REPO / "notebooks" / "rv" / "fed_sentiment_lead_citi_snapshot.parquet").exists(),
+    reason="snapshot not built",
 )
 def test_a_hot_cpi_print_moves_the_prices_surprise_index_up():
-    """G3's hand-check, as a test: a known hot CPI must lift the prices leg."""
+    """G3's hand-check, as a test: a known hot CPI must lift the prices leg.
+
+    Guarded on the SNAPSHOT, which is what it reads -- guarding it on the JPM
+    corpus instead would silently skip the only content check on the committed
+    parquet exactly where that corpus is absent, i.e. on every machine but one.
+    """
     panel, _ = D.load_surprise_panel()
     prices = panel[D.TAG_PRICES].dropna()
     # 2024-04-10: March CPI printed 0.4% m/m core against 0.3% expected, and

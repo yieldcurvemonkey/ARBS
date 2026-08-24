@@ -62,10 +62,14 @@ import pandas as pd
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 
-#: The JPM NLP corpus, outside this repo.
-DEFAULT_SCORES_CSV = (
+#: The JPM NLP corpus. It lives outside this repo (it is licensed research), so
+#: the path is a default rather than a constant: set ``ARBS_FED_SPEAK_CSV`` to
+#: point at another checkout. Everything else in the study runs from the
+#: committed snapshot, so this is the one input another machine must supply.
+DEFAULT_SCORES_CSV = os.environ.get(
+    "ARBS_FED_SPEAK_CSV",
     r"C:\Users\chris\clee\project-oasis\private\jpm_research\fed_speak_nlp"
-    r"\global_hawk_dove_scores.csv"
+    r"\global_hawk_dove_scores.csv",
 )
 
 #: The hand-exported CVTSHIST workbook, used when the snapshot is missing.
@@ -206,6 +210,13 @@ class LeadConfig:
     #: Found algorithmically; hand-picking points to match JWS's four arrows
     #: would bake in his conclusion.
     turning_point_prominence: float = 0.60
+    #: The same, on the sentiment side. It needs its own value because the two
+    #: series live on different scales -- the composite is a z-score of order 1,
+    #: the sentiment index runs -9 to +30 -- so one number cannot serve both.
+    #: 6.0 is a little under one standard deviation of the sentiment series
+    #: (6.82 on the point-in-time sample), which is the same relative bar the
+    #: 0.60 sets on a composite whose sample standard deviation is 0.68.
+    sentiment_turning_point_prominence: float = 6.0
 
     def lags(self) -> np.ndarray:
         return np.arange(self.min_lag_weeks, self.max_lag_weeks + 1, dtype=int)
@@ -306,7 +317,11 @@ def read_cached_rate(tag: str = TAG_SOFR_2Y) -> Optional[pd.Series]:
         from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
 
         series = CitiVeloTagCache().read(tag, "DAILY", "CLOSE")
-    except Exception:  # pragma: no cover - environment dependent
+    except (ImportError, FileNotFoundError, OSError) as exc:  # pragma: no cover
+        # a MISSING cache is absence and degrades to "not testable here"; a
+        # CORRUPT one is a defect and must not be reported as absence, so
+        # anything other than these three propagates
+        print(f"read_cached_rate({tag}): cache unavailable -- {type(exc).__name__}: {exc}")
         return None
     if series is None or len(series) == 0:
         return None
@@ -686,22 +701,12 @@ def surrogate_null(
     null at one fixed lag while the real number is a maximum over 27 would
     flatter the real number by exactly the amount the search is worth.
 
-    Its size is measured, not assumed. Over 120 unrelated AR(0.97) pairs at a
-    nominal 5%, rejection rates are:
-
-    ==============  =========  =========
-    transform       shift      phase
-    ==============  =========  =========
-    levels          8.3%       7.5%
-    changes         **5.0%**   0.8%
-    prewhitened     5.8%       0.8%
-    ==============  =========  =========
-
-    So neither null is right everywhere: phase randomisation is mildly
-    anti-conservative on levels and heavily over-conservative on changes, where
-    the shift null is exactly calibrated. The notebook takes its p-values from
-    ``shift_null`` on changes and reports every other cell with its measured
-    size beside it.
+    Its size is not quoted here on purpose. Hard-coding a measured size in a
+    docstring is how a number outlives the estimator it described -- this one
+    read 8.3%/5.0%/9.2% while the rotations were sampled with replacement and
+    the AR order was selected on a moving sample, and both of those were later
+    fixed. Call :func:`measure_null_size`; the notebook does, in a cell, and
+    prints Wilson intervals beside it.
     """
     rng = rng or cfg.rng(2)
     draws = draws or cfg.surrogate_draws
@@ -748,6 +753,12 @@ def shift_null(
     series' trend, persistence, variance and marginal distribution -- only the
     correspondence with sentiment is broken.
 
+    The rotation set is finite and is enumerated in full whenever it fits the
+    draw budget, so the p-value is exact and its floor is reported as
+    ``p_floor``. Sampling ~190 distinct rotations 1,500 times with replacement
+    would let a p-value be quoted at 0.001 when the reference set cannot resolve
+    below ~0.005; that is a real trap and it is closed here rather than noted.
+
     This matters because the obvious alternative, phase randomisation, quietly
     makes the null too easy for series like these. It preserves the power
     spectrum but wraps the path, so a surrogate wanders less than a
@@ -763,10 +774,18 @@ def shift_null(
     min_offset = min_offset or (max(abs(min(lags)), abs(max(lags))) + 1)
     if n < 3 * min_offset:
         return {"max_corr": np.array([]), "argmax": np.array([]), "q50": np.nan,
-                "q95": np.nan, "draws_used": 0}
+                "q95": np.nan, "draws_used": 0, "exhaustive": False,
+                "distinct_rotations": 0, "p_floor": np.nan}
     xv = joint["x"].to_numpy(float)
     maxima, argmaxima = [], []
-    offsets = rng.integers(min_offset, n - min_offset, size=draws)
+    # The reference set is FINITE: only ``n - 2*min_offset`` distinct rotations
+    # exist. Sampling it with replacement cannot make a p-value finer than
+    # 1/(distinct+1), and quoting one that is finer claims a resolution the
+    # surrogate set does not have. So enumerate the whole set when it fits in
+    # the draw budget -- the test is then exact, and cheaper.
+    candidates = np.arange(min_offset, n - min_offset, dtype=int)
+    exhaustive = len(candidates) <= draws
+    offsets = candidates if exhaustive else rng.choice(candidates, size=draws, replace=False)
     for d in offsets:
         xs = pd.Series(np.roll(xv, int(d)), index=joint.index)
         xt, yt, _ = transform_pair(xs, joint["y"], transform)
@@ -785,6 +804,9 @@ def shift_null(
         "q50": float(np.quantile(maxima, 0.50)) if maxima.size else np.nan,
         "q95": float(np.quantile(maxima, 0.95)) if maxima.size else np.nan,
         "draws_used": int(maxima.size),
+        "exhaustive": bool(exhaustive),
+        "distinct_rotations": int(len(candidates)),
+        "p_floor": 1.0 / (maxima.size + 1) if maxima.size else np.nan,
     }
 
 
@@ -795,21 +817,26 @@ def surrogate_pvalue(observed_max: float, null: Dict[str, object]) -> float:
     return float((1 + np.sum(m >= observed_max)) / (1 + m.size))
 
 
-def plateau(curve: pd.DataFrame, band_lo: np.ndarray) -> List[int]:
-    """Lags whose correlation is not separated from the peak.
+def plateau(curve: pd.DataFrame, boot_curves: np.ndarray, alpha: float = 0.05) -> List[int]:
+    """Lags that a PAIRED bootstrap cannot separate from the peak.
 
     Two low-pass filtered series produce a broad plateau, and quoting only the
-    argmax of a plateau claims a precision the data does not carry. A lag is in
-    the plateau when its correlation clears the 5th-percentile bootstrap band
-    of the peak.
+    argmax of a plateau claims a precision the data does not carry.
+
+    The comparison has to be paired. Testing each lag's point estimate against
+    the *marginal* bootstrap band of the peak ignores that the two correlations
+    move together across draws -- they are computed from the same resampled
+    rows -- so the marginal band is far wider than the distribution of their
+    difference, and every plateau comes out too wide. Instead: within each
+    bootstrap draw take ``peak_lag`` minus ``this_lag``, and keep the lag when
+    the lower ``alpha`` quantile of that difference is at or below zero, i.e.
+    when the draws do not consistently rank the peak above it.
     """
-    j = int(np.nanargmax(curve["corr"].to_numpy()))
-    floor = float(band_lo[j])
-    return [
-        int(l)
-        for l, c in zip(curve["lag_weeks"], curve["corr"])
-        if np.isfinite(c) and c >= floor
-    ]
+    vals = curve["corr"].to_numpy()
+    j = int(np.nanargmax(vals))
+    diff = boot_curves[:, [j]] - boot_curves          # (draws, lags), paired
+    lo = np.nanquantile(diff, alpha, axis=0)
+    return [int(l) for l, d in zip(curve["lag_weeks"], lo) if np.isfinite(d) and d <= 0.0]
 
 
 # --------------------------------------------------------------------------
@@ -886,7 +913,14 @@ def gate_vintage(scores: pd.DataFrame, grid: pd.DatetimeIndex, cfg: LeadConfig) 
         td = np.datetime64(t.date(), "D")
         naive = s_date <= td
         pit = naive & (p_date <= td)
+        # the cumulative counts describe the corpus; the index only ever reads
+        # rows inside the EWMA window, so the share removed THERE is the number
+        # that actually changes a sentiment value
+        age = (td - s_date).astype("timedelta64[D]").astype(int)
+        inwin = naive & (age <= cfg.ewma_window_days)
+        inwin_pit = inwin & (p_date <= td)
         n_naive, n_pit = int(naive.sum()), int(pit.sum())
+        n_w, n_wp = int(inwin.sum()), int(inwin_pit.sum())
         rows.append(
             {
                 "date": t,
@@ -894,6 +928,9 @@ def gate_vintage(scores: pd.DataFrame, grid: pd.DatetimeIndex, cfg: LeadConfig) 
                 "n_point_in_time": n_pit,
                 "n_removed": n_naive - n_pit,
                 "share_removed": np.nan if n_naive == 0 else 1.0 - n_pit / n_naive,
+                "n_in_window": n_w,
+                "n_in_window_pit": n_wp,
+                "share_removed_in_window": np.nan if n_w == 0 else 1.0 - n_wp / n_w,
             }
         )
     out = pd.DataFrame(rows).set_index("date")
@@ -974,3 +1011,135 @@ def gate_trailing_only(series: pd.Series, cfg: LeadConfig, *, probe_dates: Itera
             f"(worst |diff| {worst:.3e}) -- it is not a trailing statistic"
         )
     return out
+
+# --------------------------------------------------------------------------
+# synthetic worlds, and the null's own calibration
+# --------------------------------------------------------------------------
+def ar1_path(n: int, phi: float, rng: np.random.Generator, scale: float = 1.0) -> np.ndarray:
+    """One AR(1) path. Used only to build data whose answer is known."""
+    e = rng.normal(scale=scale, size=n)
+    out = np.empty(n)
+    out[0] = e[0]
+    for i in range(1, n):
+        out[i] = phi * out[i - 1] + e[i]
+    return out
+
+
+def synthetic_world(
+    *,
+    lead_days: int,
+    rng: np.random.Generator,
+    years: int = 9,
+    speech_years: int = 3,
+    noise: float = 0.35,
+    cfg: Optional[LeadConfig] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame, "LeadConfig"]:
+    """A surprise panel and a speech book with a KNOWN lead between them.
+
+    ``lead_days`` is the true lead of the surprise driver over the latent stance
+    that speeches are drawn from. Everything downstream -- the trailing z-score,
+    the weekly sampling, the EWMA over speeches -- is the production pipeline,
+    unmodified, which is the point: pushing a *zero* lead through it is how the
+    pipeline's own filter offset gets measured instead of assumed.
+
+    This lives here rather than in the test file so that the notebook's
+    calibration cell and ``test_pipeline_reports_a_lead_even_when_the_true_lead_is_zero``
+    are the same construction, without the deliverable notebook importing from
+    ``tests/``.
+    """
+    cfg = cfg or LeadConfig()
+    days = pd.bdate_range("2016-01-01", periods=years * 261)
+    driver = pd.Series(ar1_path(len(days), 0.985, rng, scale=1.0), index=days)
+
+    panel = pd.DataFrame(
+        {
+            TAG_LABOUR: 10.0 * driver + rng.normal(scale=2.0, size=len(days)),
+            TAG_PRICES: 10.0 * driver + rng.normal(scale=2.0, size=len(days)),
+        },
+        index=days,
+    )
+    panel.index.name = "date"
+
+    latent = driver.copy()
+    latent.index = latent.index + pd.Timedelta(days=lead_days)
+    latent = latent.reindex(days.union(latent.index)).interpolate().reindex(days)
+
+    speech_start = days[-speech_years * 261]
+    candidates = days[days >= speech_start]
+    n_speech = int(len(candidates) * 3.3 / 5.0)
+    picks = np.sort(rng.choice(len(candidates), size=n_speech, replace=False))
+    sdates = candidates[picks]
+    scores = 20.0 * latent.reindex(sdates).to_numpy() + rng.normal(
+        scale=20.0 * noise, size=len(sdates)
+    )
+    book = pd.DataFrame(
+        {
+            "central_bank": "FED",
+            "date": sdates,
+            "pub_date": sdates,
+            "speaker": [f"S{i % 12}" for i in range(len(sdates))],
+            "hawk_dove_score": scores,
+            "relevance_pct": 50.0,
+        }
+    )
+    return panel, book, cfg
+
+
+def wilson_interval(k: int, n: int, z: float = 1.96) -> Tuple[float, float]:
+    """Wilson score interval for a proportion. Honest at small ``n``."""
+    if n == 0:
+        return (np.nan, np.nan)
+    p = k / n
+    d = 1.0 + z * z / n
+    centre = p + z * z / (2 * n)
+    half = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return ((centre - half) / d, (centre + half) / d)
+
+
+def measure_null_size(
+    cfg: LeadConfig,
+    *,
+    transform: str,
+    which: str = "shift",
+    trials: int = 60,
+    n_weeks: int = 170,
+    phi: float = 0.97,
+    seed: int = 1000,
+    draws: int = 400,
+) -> Dict[str, object]:
+    """How often does the null reject when there is nothing to find?
+
+    Two unrelated AR(``phi``) series, scored exactly as the real analysis scores
+    them -- the maximum correlation over the whole lag grid -- ``trials`` times.
+    The rejection rate at a nominal 5% is the null's actual size, and a
+    p-value quoted against it should be read against that number rather than
+    against 5%.
+
+    Reported with a Wilson interval, because a size estimated on 60 or 120
+    trials is itself an estimate: 6 rejections in 120 is consistent with a true
+    size anywhere from about 2% to 11%.
+    """
+    lags = cfg.lags()
+    rejected = 0
+    for i in range(trials):
+        rng = np.random.default_rng(seed + i)
+        idx = pd.date_range("2023-05-05", periods=n_weeks, freq=cfg.week_anchor)
+        a = pd.Series(ar1_path(n_weeks, phi, rng), index=idx)
+        b = pd.Series(ar1_path(n_weeks, phi, rng), index=idx)
+        at, bt, _ = transform_pair(a, b, transform)
+        X, Y, _ = lag_matrix(at, bt, lags)
+        obs = float(np.nanmax(lag_curve_common(X, Y, lags)["corr"].to_numpy()))
+        fn = shift_null if which == "shift" else surrogate_null
+        null = fn(a, b, lags, cfg, transform=transform, draws=draws,
+                  rng=np.random.default_rng(seed + 5000 + i))
+        rejected += surrogate_pvalue(obs, null) < 0.05
+    lo, hi = wilson_interval(rejected, trials)
+    return {
+        "null": which,
+        "transform": transform,
+        "trials": trials,
+        "rejected": rejected,
+        "size": rejected / trials,
+        "wilson_lo": lo,
+        "wilson_hi": hi,
+    }

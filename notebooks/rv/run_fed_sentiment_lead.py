@@ -56,7 +56,15 @@ def main(argv=None) -> int:
     if rc:
         return rc
 
-    if not args.no_exec:
+    if args.no_exec:
+        # conversion only. Verifying here would always fail -- _py2nb writes an
+        # unexecuted notebook, and "0 outputs, N unrun" is exactly what the gate
+        # is built to reject -- so a runner that returned that would report a
+        # successful conversion as a broken study.
+        print(f"converted only (--no-exec); {nb} is unexecuted and NOT verified")
+        return 0
+
+    if True:
         t0 = time.time()
         code = (
             "import nbformat, sys;"
@@ -76,7 +84,15 @@ def main(argv=None) -> int:
         [sys.executable, str(TOOLS / "_verify_nb.py"), str(nb.relative_to(REPO)).replace("\\", "/")],
         REPO,
     )
-    return rc_verify
+
+    # and the second half of the gate: the hand-written summary must not have
+    # drifted from the cells. Over this study's life the null sizes moved twice
+    # and a p-value once, each time orphaning a number in the prose.
+    rc_numbers = _run(
+        [sys.executable, str(HERE / "_audit_fed_sentiment_lead_numbers.py"), str(nb)],
+        REPO,
+    )
+    return rc_verify or rc_numbers
 
 
 if __name__ == "__main__":

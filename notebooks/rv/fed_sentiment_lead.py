@@ -19,90 +19,112 @@
 # *(Every figure here is restated by a cell below. If the cells and this summary
 # ever disagree, the cells are what ran.)*
 #
-# 1. **Taken at face value the lead is 11-14 weeks, not 5.** As-published the
-#    curve peaks at **+11w (r 0.62)**, interior inside the headline +/-13 scan.
-#    Point-in-time it pins at the **+13w** boundary of that scan, so the scan is
-#    widened to +/-26: it resolves to **+14w (r 0.77)** with a flat top across
-#    +12..+16 and a fall away to 0.52 by +26w, which makes it a real interior
-#    maximum rather than an artefact of where the scan stopped. At JWS's +5w the
-#    correlation is 0.46 (point-in-time, 62% of the peak) and 0.55
-#    (as-published, 89%). At long negative lags the curve is -0.37
-#    (point-in-time) and +0.05 (as-published), so sentiment does not lead
-#    surprises in either vintage -- the *direction* of the story survives; the
-#    number does not.
-# 2. **An independent inflation series agrees, and also says 11-14 weeks.**
+# 1. **Taken at face value the lead is 11-14 weeks, not 5 -- but "at face value"
+#    is carrying weight.** As-published the curve peaks at **+11w (r 0.619)**;
+#    point-in-time it pins at the **+13w** edge of the headline +/-13 scan, and
+#    widening to +/-26 resolves it to **+14w (r 0.773)** with a flat top over
+#    +12..+16 falling to 0.52 by +26w -- a real interior maximum, not an artefact
+#    of where the scan stopped. At long negative lags the curve is **-0.37**
+#    (point-in-time) and **+0.05** (as-published), so sentiment does not lead
+#    surprises in either vintage: the *direction* of JWS's story survives.
+#    **The precision does not.** The point-in-time bootstrap pins the argmax to
+#    +12..+13 and its paired plateau to 2 of 27 lags, but the as-published cell
+#    -- the one with more data -- has a 5-95% bootstrap interval of **[+1, +13]**
+#    and a plateau of **-3..+13, 17 of 27 lags**. In that vintage five weeks
+#    cannot be separated from eleven at all.
+# 2. **An independent inflation series says longer still: about +4 months.**
 #    Citi's proper monthly Inflation Surprise Index (`ISI.SI_CISI`, 343
-#    observations back to 1998 -- a different construction from the daily leg
-#    the chart uses) peaks against the same sentiment index at **+4 months**,
-#    r 0.756, again with an interior peak.
-# 3. **Exactly one cell clears a null that respects the persistence, and it is
-#    the one built from information that did not exist at the time.** Both
-#    series are heavily smoothed and near-unit-root, so the null keeps each path
-#    *exactly* and destroys only the alignment, scored by the same 27-lag
-#    maximum the real analysis takes. The **as-published** levels peak reaches
-#    **p = 0.001** -- but run it on the point-in-time *window* rather than its
-#    own longer one and it falls to **p = 0.081**. The extra significance comes
-#    entirely from 2022, where 100% of the sentiment rows are back-filled by
-#    reports that did not exist until May-2023. The honest cells:
-#    point-in-time levels **p = 0.09** against a test whose measured size is
-#    8.3%, and on weekly **changes** -- the one transform where the null is
-#    exactly calibrated (measured size 5.0%) -- a maximum over all 27 lags of
-#    **r 0.153, p = 0.55**. There is no relationship in changes at any lag in
-#    either vintage.
-# 4. **Five weeks is the first half of the sample, and it has already broken.**
-#    Split the point-in-time sample at 2024-12: the first half's argmax is
-#    **exactly +5 weeks** (r 0.685) -- JWS's number. The second half's is +13w,
-#    and the correlation *at five weeks* is **-0.07**, bootstrap 5-95%
-#    [-0.47, +0.37]. In changes: +0.219 then +0.043.
-# 5. **The pipeline manufactures about three weeks of the apparent lead by
+#    observations back to 1998; it correlates with the daily prices leg the
+#    chart uses at only **0.41**, so it is a genuinely different construction)
+#    peaks at **+4 months ~ 17 weeks**, r 0.756 blended with the labour leg and
+#    **r 0.595 on its own**, interior in both. JWS's +1 month reads 0.594 and
+#    0.483. Longer than the weekly estimate, and not five weeks.
+# 3. **The strongest cell fails its null; the one that clears is the vintage
+#    that could not have been traded.** Both series are near-unit-root, so the
+#    null keeps each path *exactly* and destroys only the alignment, enumerating
+#    the whole finite rotation set and scoring every surrogate by the same
+#    27-lag maximum the real analysis takes. Results: point-in-time levels
+#    **p = 0.096**; as-published levels **p = 0.005**, which *is* that test's
+#    resolution floor (1/189) -- and restricted to the point-in-time window the
+#    same cell reads **p = 0.089**. On weekly **changes**, nothing anywhere:
+#    p = 0.568 (point-in-time) and 0.779 (as-published). Neither half of the
+#    sample is significant either (p = 0.100 and 0.322).
+# 4. **Levels is where the test has almost no power, which is why the verdict
+#    rests on changes.** Not on calibration -- the notebook measures all six
+#    null/transform sizes and they sit between 1.7% and 5.0% with overlapping
+#    Wilson intervals, so no transform is meaningfully better calibrated than
+#    another. It rests on discrimination: a *deliberately planted* five-week
+#    lead reaches **r 0.919** in levels while the null's own 95th percentile
+#    reaches **0.923**, so it does not clear (p = 0.078) -- and the identical
+#    relationship gives **p = 0.008** in changes and in prewhitened. A levels
+#    result, in either direction, is close to uninformative on ~150 weekly
+#    points of wandering data. Run in a cell below, and asserted by
+#    `test_LEVELS_cannot_discriminate_even_a_planted_lead`.
+# 5. **Five weeks is the first half of the sample, and it has already broken.**
+#    Split point-in-time at 2024-12: the first half's argmax is **exactly +5
+#    weeks** (r 0.685, p 0.100 -- an argmax, not a finding). The second half's
+#    is +13w and the correlation *at five weeks* is **-0.07**, bootstrap 5-95%
+#    [-0.47, +0.37]. In changes: +0.219 then +0.043. The halves do not disagree
+#    about *whether*; they disagree about *where*, at the horizon being traded.
+# 6. **The pipeline manufactures about three weeks of the apparent lead by
 #    itself.** A *zero*-lead relationship pushed through the identical pipeline
-#    on synthetic data comes out at a median argmax of **+3 weeks** in levels
-#    (+1 in changes) -- the backward EWMA's own centre of mass. Asserted by a
-#    test (`test_pipeline_reports_a_lead_even_when_the_true_lead_is_zero`), not
-#    left as a footnote.
-# 6. **Found algorithmically rather than drawn, the turning points give 12-13
-#    weeks with a -1 to +23 spread.** Nine surprise turns and thirteen sentiment
-#    turns since Apr-2023; the gap to the next same-sign sentiment turn has
-#    median **13.0w**, mean 12.2w, range **-1 to +23**, n = 6. One of the six is
-#    negative -- sentiment turned first.
-# 7. **The current episode already contradicts the five-week rule.** Our
-#    composite peaked 2026-06-05 at +1.16 and reads -0.37 now. Five weeks past
-#    that peak is 2026-07-10, and since then Fed sentiment has gone from **+9.7
-#    to +29.6 -- the most hawkish reading in the entire sample (100th
-#    percentile)** -- on **16 hawk-labelled speeches out of 19**, Logan 62,
-#    Hammack 58, Warsh 49.
-# 8. **The rolldown is an inflation-surprise story, not a data story.** It is
-#    entirely the prices leg (z +0.22 -> -1.27 since 10-Jul). The labour leg was
-#    still +1.4 through July and only slipped to +0.53 in the last fortnight.
-# 9. **The point-in-time series is revised hard, exactly where it is used.**
-#    Mean |revision| between what a reader saw at the time and what the same
-#    week reads today is **2.65 sentiment points = 39% of one standard
-#    deviation**; 74.6% of weeks move by more than a point. The 2026-07-31
-#    reading was **21.63 at the time and reads 30.47 today**. And 17.9% of Fed
-#    rows are published so late they can never enter the point-in-time index at
+#    on synthetic data returns a median argmax of **+3 weeks** in levels (+1 in
+#    changes) -- the backward EWMA's own centre of mass. Asserted by
+#    `test_pipeline_reports_a_lead_even_when_the_true_lead_is_zero`. Sweeping
+#    the half-life 7d to 63d moves the filter's centre of mass 1.4w to 13.0w and
+#    the point-in-time argmax **not at all** (+13w throughout), so the smoother
+#    is not what is being seen -- but nor does any setting bring it near five.
+# 7. **Found algorithmically rather than drawn, the turning points give 12-13
+#    weeks, and three of nine have no partner at all.** Nine surprise turns
+#    since Apr-2023; six have a following same-sign sentiment turn, at median
+#    **13.0w**, mean 12.2w, range **-1 to +23** (one is negative -- sentiment
+#    turned first). The other three, all in 2026, have none, and they are
+#    dropped -- which is generous to the claim, because they are precisely the
+#    turns that have so far not been followed.
+# 8. **The current episode already contradicts the five-week rule.** Our
+#    composite peaked 2026-06-05 at +1.16 and reads -0.37. Five weeks past that
+#    peak is 2026-07-10, and since then Fed sentiment has gone from **+9.7 to
+#    +29.6 -- the most hawkish reading in the entire sample (100th
+#    percentile)** -- on **16 hawk labels out of 19** (Logan 62, Hammack 58,
+#    Warsh 49). The measured 11-14 week lead puts the turn between 2026-08-21
+#    and 2026-09-04, which is not yet observable.
+# 9. **The rolldown is an inflation-surprise story, not a data story.** It is
+#    entirely the prices leg (z +0.22 -> -1.27), and it happened in a single
+#    day: **2026-07-14**, a -7.7 move on the June CPI print and the largest
+#    one-day move in that index all year. The labour leg was still +1.4 through
+#    July and only slipped to +0.529 in the last fortnight.
+# 10. **The point-in-time series is revised hard, exactly where it is used.**
+#    Mean |revision| between what a reader saw and what the same week reads
+#    today is **2.65 sentiment points = 39% of one standard deviation**; 74.6%
+#    of weeks move by more than a point; **2026-07-31 was 21.63 at the time and
+#    reads 30.47 today**. Inside the 126-day window the index actually reads,
+#    the publication gate removes **11.7% of rows on average and 29% at its
+#    worst** -- not the 4.7% the cumulative count suggests. And 17.9% of Fed
+#    rows are published so late they can never enter a point-in-time index at
 #    all.
-# 10. **It does not reach the price.** The forward 4/5/6/8/11/13-week change in
+# 11. **It does not reach the price.** The forward 4/5/6/8/11/13-week change in
 #    the 2y SOFR OIS rate regressed on the composite gives **|t| <= 0.79 and
-#    R2 <= 0.013** across all twelve cells -- in the point-in-time era *and* in
-#    the full 2005-2026 sample, where HAC leaves an effective n of 86-281 rather
-#    than the 12-42 the point-in-time era supports. Sentiment itself does no
-#    better (t -0.68, R2 0.005).
-# 11. **No variant of the construction recovers five weeks.** Eleven
-#    alternatives -- half-lives 7d to 42d, z-windows 2y to 5y, a Wednesday week,
-#    each leg alone, the whole economic surprise index, relevance weighting --
-#    put the levels argmax at **13 weeks in 11 cases out of 11**. On changes the
-#    argmax scatters across -12, -5, +1 and +13, which is what no relationship
-#    looks like.
+#    R2 <= 0.0127** across all twelve cells, in the point-in-time era *and* in
+#    the full 2005-2026 sample. HAC leaves an effective n of 86-281 in the long
+#    sample and only 12-42 in the short one. Sentiment itself does no better
+#    (t -0.68, R2 0.005).
+# 12. **No variant of the construction recovers five weeks.** Ten alternatives
+#    beside the frozen baseline -- half-lives 7d to 42d, z-windows 2y to 5y, a
+#    Wednesday week, each leg alone, the whole economic surprise index,
+#    relevance weighting -- all put the point-in-time levels argmax at 13 weeks.
+#    On changes the argmax scatters across -12, -5, +1 and +13, which is what no
+#    relationship looks like.
 #
-# **Verdict.** The lead exists as a shape and it points the right way, but it
-# is 11-14 weeks rather than five; the only cell that clears its null is the one
-# built from scores that did not exist at the time; it is unstable across the
-# only two halves this sample supports, with the five-week correlation going
-# from +0.69 to -0.07; and it does not reach a tradeable price at any horizon.
+# **Verdict.** The lead exists as a shape and it points the right way. But it is
+# 11-14 weeks rather than five; the strongest version of it fails a null that
+# respects how persistent both series are; the only version that clears one is
+# the vintage built from scores that did not exist at the time; the sample's two
+# halves disagree about the horizon, with the five-week correlation going from
+# +0.69 to -0.07; and it does not reach a tradeable price at any horizon tested.
 # As a description of history it is fine. As a reason to be positioned for
 # dovish Fedspeak into 16-Sep it is four arrows on a chart -- and the current
-# episode has already run five weeks past the surprise peak with Fedspeak at
-# its most hawkish reading on record.
+# episode has already run five weeks past the surprise peak with Fedspeak at its
+# most hawkish reading on record.
 #
 # ## Two vintages, because our sentiment data is not Bloomberg's
 #
@@ -207,12 +229,20 @@ print(G3.to_string(index=False))
 
 # hand-check: a hot CPI must move the prices leg UP
 prices = panel[D.TAG_PRICES].dropna()
-for d, note in [("2024-04-10", "Mar-24 core CPI 0.4% vs 0.3% expected"),
+for d, note in [("2024-04-10", "Mar-24 core CPI 0.4% vs 0.3% -- a HOT print"),
                 ("2025-01-15", "Dec-24 core CPI 0.2% vs 0.3% -- a COOL print"),
-                ("2026-07-17", "the week the prices leg collapsed")]:
+                ("2026-07-14", "Jun-26 CPI -- the day the prices leg collapsed")]:
     t = pd.Timestamp(d)
     prev, on = prices[prices.index < t].iloc[-1], prices.asof(t)
-    print(f"  {d}  {note:48s} prices leg {prev:+7.2f} -> {on:+7.2f}  ({on - prev:+.2f})")
+    print(f"  {d}  {note:52s} prices leg {prev:+7.2f} -> {on:+7.2f}  ({on - prev:+.2f})")
+_2026 = prices.loc["2026-01-01":].diff().abs()
+print(f"  (that -7.7 is the largest single-day move in the prices leg all year; "
+      f"the next largest is {_2026.nlargest(2).iloc[1]:.1f}. The direction is right: "
+      f"a cool CPI pushes the inflation-surprise index DOWN.)")
+print(f"\n  raw levels last ({prices.index[-1].date()}): labour "
+      f"{panel[D.TAG_LABOUR].dropna().iloc[-1]:+.1f}, prices {prices.iloc[-1]:+.1f} -- "
+      f"the tens-scale that makes a standardisation necessary before anything is "
+      f"plotted against JWS's -0.75..+1.50 axis.")
 
 # %% [markdown]
 # ## The two series, and gates G1 / G2 / G5
@@ -258,9 +288,16 @@ print(f"rows published so late they can NEVER enter the point-in-time index "
 G1 = D.gate_vintage(SCORES, GRID_W, CFG)
 print("\nG1 -- what the publication gate removes (every 26th week):")
 print(G1.loc[G1.index[::26]].round(3).to_string())
+_post = G1.loc[G1.index >= "2023-06-01"]
 print(f"G1 passes: the gate removes up to {int(G1['n_removed'].max())} rows "
       f"({G1['share_removed'].max():.0%} at the corpus start, "
-      f"{G1.loc[G1.index >= '2023-06-01', 'share_removed'].mean():.1%} on average after it)")
+      f"{_post['share_removed'].mean():.1%} on average after it)")
+print(f"  but the cumulative share is not the operative number: the index only ever "
+      f"reads rows INSIDE the {CFG.ewma_window_days}-day window, and there the gate "
+      f"removes {_post['share_removed_in_window'].mean():.1%} on average, "
+      f"{_post['share_removed_in_window'].max():.0%} at its worst "
+      f"({int(_post['n_in_window'].median())} rows in a typical window). That is the "
+      f"share that can actually move a sentiment value, and it is the larger of the two.")
 
 D.gate_no_pre_corpus(SENT_PIT["sentiment"], CFG)
 print(f"G2 passes: no point-in-time observation before {CFG.corpus_start}; "
@@ -276,9 +313,12 @@ print(f"\nsentiment coverage: as-published {int(SENT_AP['sentiment'].notna().sum
       f"from {SENT_AP['sentiment'].first_valid_index().date()}; point-in-time "
       f"{int(SENT_PIT['sentiment'].notna().sum())} weeks from "
       f"{SENT_PIT['sentiment'].first_valid_index().date()}")
-print(f"speeches inside the EWMA window: min {int(SENT_PIT['n_speeches'].min())}, "
-      f"median {int(SENT_PIT['n_speeches'].median())}, max {int(SENT_PIT['n_speeches'].max())} "
-      f"-- the min_speeches={CFG.min_speeches_in_window} floor never binds")
+_pit_win = SENT_PIT["n_speeches"][SENT_PIT.index >= pd.Timestamp(CFG.corpus_start)]
+print(f"speeches inside the EWMA window, ON THE POINT-IN-TIME SAMPLE: "
+      f"min {int(_pit_win.min())}, median {int(_pit_win.median())}, "
+      f"max {int(_pit_win.max())} -- so the min_speeches="
+      f"{CFG.min_speeches_in_window} floor never binds there. Before 2023-05 it binds "
+      f"everywhere, which is G2: the count is zero and the series is empty.")
 _first2 = SCORES["pub_date"].isin(pd.to_datetime(["2023-05-02", "2023-05-03"]))
 _t0 = pd.Timestamp("2023-05-05")
 _win0 = int((((SCORES["date"] <= _t0) & (SCORES["pub_date"] <= _t0))
@@ -353,18 +393,22 @@ print(X_ALL[X_ALL.index >= "2026-06-01"].round(3).to_string())
 # The lag scan runs **symmetrically, -13 to +13 weeks**. Negative lags are the
 # control: if the curve peaked there the story would be backwards.
 #
-# Three transforms, because they answer different questions and only one of
-# them supports inference:
+# Three transforms, because they answer different questions:
 #
-# | transform | what it sees | measured null size |
-# |---|---|---|
-# | **levels** | the shape JWS is describing | 8.3% |
-# | **changes** | week-on-week co-movement | **5.0%** |
-# | **prewhitened** | Box-Jenkins: filter both by the input's own AR model | 5.8% |
+# | transform | what it sees |
+# |---|---|
+# | **levels** | the shape JWS is describing |
+# | **changes** | week-on-week co-movement |
+# | **prewhitened** | Box-Jenkins: filter both by the input's own AR model |
 #
-# Those sizes are not assumed -- they were measured over 120 unrelated AR(0.97)
-# pairs scored at a nominal 5%, and they are why the p-values quoted in the
-# findings come from **changes**.
+# The verdict rests on **changes**, and the reason is power rather than
+# calibration. A cell below measures all six null/transform sizes rather than
+# quoting them, and they come out between 1.7% and 5.0% with overlapping
+# intervals -- no transform is meaningfully better calibrated than another. What
+# separates them is discrimination: a deliberately planted five-week lead
+# reaches r 0.919 in levels while the null's own 95th percentile reaches 0.923,
+# so it fails at p 0.078 -- and the identical relationship gives p 0.008 in
+# changes. Both numbers are produced by a cell below, not quoted.
 #
 # Every lag is scored on **one common-support row set**, so a difference between
 # lags is a difference in the relationship and not a difference in the sample;
@@ -388,7 +432,7 @@ def measure(x, y, transform, *, boot=600, shift=1500, phase=800, seed=31):
     pair = D.lag_curve_pairwise(xt, yt, LAGS)
     j = int(np.nanargmax(curve["corr"].to_numpy()))
     b = D.bootstrap_lead(Xm, Ym, LAGS, CFG, draws=boot, rng=np.random.default_rng(seed))
-    plat = D.plateau(curve, b["band_lo"])
+    plat = D.plateau(curve, b["curves"])
     sh = D.shift_null(x, y, LAGS, CFG, transform=transform, draws=shift,
                       rng=np.random.default_rng(seed + 10))
     ph = D.surrogate_null(x, y, LAGS, CFG, transform=transform, draws=phase,
@@ -492,6 +536,17 @@ fig.update_yaxes(title_text="correlation, levels")
 style(fig, 430, "Wide scan: the peak turns over, so it is a real interior maximum")
 fig.show()
 print(pd.DataFrame(wide_rows).round(3).to_string(index=False))
+_xw, _yw = SAMPLES["point_in_time"]
+_Xw, _Yw, _ = D.lag_matrix(*D.transform_pair(_xw, _yw, "levels")[:2], WIDE)
+_obsw = float(np.nanmax(D.lag_curve_common(_Xw, _Yw, WIDE)["corr"].to_numpy()))
+_nw = D.shift_null(_xw, _yw, WIDE, CFG, transform="levels", draws=2000,
+                   rng=np.random.default_rng(83))
+print(f"\npoint-in-time, priced for THIS search (53 lags, not 27): peak {_obsw:.3f}, "
+      f"p {D.surrogate_pvalue(_obsw, _nw):.3f} over {_nw['distinct_rotations']} exact "
+      f"rotations (floor {_nw['p_floor']:.3f}).")
+print("A wider search costs a wider null, so the +14w peak is if anything harder")
+print("to defend than the +13w one -- which is why the wide scan is used to")
+print("establish the SHAPE of the curve and never to supply a p-value.")
 print("\nThe curve rises, peaks around +11..+16 and falls away again, so the argmax")
 print("is a real interior maximum and not an artefact of where the scan stopped.")
 print("At long NEGATIVE lags it is -0.37 (point-in-time) and +0.05 (as-published),")
@@ -513,18 +568,17 @@ print("JWS's story survives. The number does not: it is 11-14 weeks, not five.")
 # offset, and every real number below is read against it.
 
 # %%
-# The synthetic world is imported from the TEST module on purpose: the number
-# printed below is the same artefact that
+# `D.synthetic_world` is the SAME construction
 # `test_pipeline_reports_a_lead_even_when_the_true_lead_is_zero` asserts on, so
-# the notebook and the test cannot drift apart into two different calibrations.
-sys.path.insert(0, str(REPO / "tests"))
-from test_fed_sentiment_lead import _synthetic_world  # noqa: E402
-
+# the notebook and the test cannot drift into two different calibrations. It
+# lives in the data module rather than in the test file, because a deliverable
+# notebook that imports from `tests/` cannot be re-executed by anyone who ships
+# `notebooks/` without them.
 offsets = {}
 for tr in ("levels", "changes", "prewhitened"):
     vals = []
     for seed in range(12):
-        p0, b0, _ = _synthetic_world(lead_days=0, rng=np.random.default_rng(700 + seed))
+        p0, b0, _ = D.synthetic_world(lead_days=0, rng=np.random.default_rng(700 + seed))
         c0, _ = D.build_surprise_composite(p0, CFG)
         xx = D.weekly_last(c0, CFG.week_anchor)
         yy = D.sentiment_index(b0, xx.index, CFG, point_in_time=False)["sentiment"]
@@ -542,21 +596,34 @@ for vint in ("as_published", "point_in_time"):
     print(f"  {vint:14s} measured {r['argmax']:+d}w  ->  ~{r['argmax'] - int(np.median(offsets['levels'])):+d}w "
           f"attributable to the relationship")
 
-print("\nand a half-life sweep on the REAL data -- if the argmax tracked the")
-print("smoother, the smoother would be what is being seen:")
+print("\nand a half-life sweep on the REAL data, in BOTH vintages -- if the argmax")
+print("tracked the smoother, the smoother would be what is being seen:")
+sweep_rows = []
 for hl in (7, 14, 21, 28, 42, 63):
     c2 = D.LeadConfig(ewma_halflife_days=float(hl))
-    y2 = D.sentiment_index(SCORES, X_ALL.index, c2, point_in_time=False)["sentiment"]
-    out = []
-    for tr in ("levels", "changes"):
-        xt, yt, _ = D.transform_pair(X_ALL, y2, tr)
-        Xm, Ym, _ = D.lag_matrix(xt, yt, LAGS)
-        cc = D.lag_curve_common(Xm, Ym, LAGS)
-        j = int(np.nanargmax(cc["corr"].to_numpy()))
-        out.append(f"{tr} {int(cc['lag_weeks'].iloc[j]):+3d}w r={cc['corr'].iloc[j]:.3f}")
-    print(f"  hl={hl:3d}d (E[age] {hl/np.log(2)/7:4.1f}w)   " + "   ".join(out))
-print("  -> the argmax moves +10w to +13w while the filter's centre of mass moves")
-print("     1.4w to 13.0w. The smoother is not the whole story; the common trend is.")
+    row = {"halflife_d": hl, "filter_E_age_w": round(hl / np.log(2) / 7, 1)}
+    for vint, pit, start in (("as_pub", False, CFG.as_published_start),
+                             ("pit", True, CFG.corpus_start)):
+        y2 = D.sentiment_index(SCORES, X_ALL.index, c2, point_in_time=pit)["sentiment"]
+        y2 = y2[y2.index >= pd.Timestamp(start)]
+        x2 = X_ALL[X_ALL.index >= pd.Timestamp(start)]
+        for tr in ("levels", "changes"):
+            xt, yt, _ = D.transform_pair(x2, y2, tr)
+            Xm, Ym, _ = D.lag_matrix(xt, yt, LAGS)
+            cc = D.lag_curve_common(Xm, Ym, LAGS)
+            j = int(np.nanargmax(cc["corr"].to_numpy()))
+            row[f"{vint}_{tr}_argmax"] = int(cc["lag_weeks"].iloc[j])
+            row[f"{vint}_{tr}_r"] = round(float(cc["corr"].iloc[j]), 3)
+    sweep_rows.append(row)
+SWEEP = pd.DataFrame(sweep_rows)
+print(SWEEP.to_string(index=False))
+_lo, _hi = SWEEP["pit_levels_argmax"].min(), SWEEP["pit_levels_argmax"].max()
+print(f"  -> across a filter whose centre of mass moves "
+      f"{SWEEP['filter_E_age_w'].min():.1f}w to {SWEEP['filter_E_age_w'].max():.1f}w, the")
+print(f"     point-in-time levels argmax moves {_lo:+d}w to {_hi:+d}w and the as-published")
+print(f"     one {SWEEP['as_pub_levels_argmax'].min():+d}w to "
+      f"{SWEEP['as_pub_levels_argmax'].max():+d}w. The smoother is not what is being")
+print("     seen -- but nor does the argmax ever come back near five.")
 
 # %% [markdown]
 # ### The nulls
@@ -584,11 +651,22 @@ fig.show()
 
 print(SUMMARY[["vintage", "transform", "n", "argmax", "corr", "at_5w",
                "p_shift", "p_phase"]].round(3).to_string(index=False))
-print("\nOne cell of six clears 0.05 on the primary null: as-published levels, at")
-print("p=0.001 over 216 weeks. Every other cell fails, and the point-in-time levels")
-print("peak reaches only p=0.09 against a test whose measured size is 8.3%. On")
-print("changes -- the one transform whose null is exactly calibrated at 5.0% -- the")
-print("maximum over all 27 lags is r=0.153, p=0.55.")
+_ps = SUMMARY.set_index(["vintage", "transform"])["p_shift"]
+_pp = SUMMARY.set_index(["vintage", "transform"])["p_phase"]
+print(f"\nOn the primary (shift) null, one cell of six clears 0.05: as-published")
+print(f"levels at p={_ps[('as_published','levels')]:.3f} over 216 weeks -- and that IS the")
+print(f"resolution floor of an exact 189-rotation test, so it means 'the smallest")
+print(f"p this test can report', not 'one in a thousand'. The point-in-time levels")
+print(f"peak reaches only p={_ps[('point_in_time','levels')]:.3f}, and on changes the")
+print(f"maximum over all 27 lags is r={SUMMARY.set_index(['vintage','transform'])['corr'][('point_in_time','changes')]:.3f}, "
+      f"p={_ps[('point_in_time','changes')]:.3f}.")
+print(f"\nThe PERMISSIVE phase null disagrees, and it is reported rather than hidden:")
+print(f"it rejects point-in-time levels at p={_pp[('point_in_time','levels')]:.3f} and")
+print(f"as-published levels at p={_pp[('as_published','levels')]:.3f}. Two nulls that")
+print("differ by an order of magnitude on the same cell is not a result; it is a")
+print("sign that a levels correlation between two wandering series is fragile to")
+print("how the null is built. The conservative one is the one that keeps each")
+print("path exactly, and it does not reject.")
 
 print("\nprewhitening depends on an AR order chosen by AIC, so sweep the cap:")
 xpw, ypw = SAMPLES["point_in_time"]
@@ -634,11 +712,76 @@ for vint, sent in (("as_published", SENT_AP), ("point_in_time", SENT_PIT)):
                       "p_shift": round(D.surrogate_pvalue(obs, sh), 3)})
 VINT = pd.DataFrame(vrows)
 print(VINT.to_string(index=False))
-print(f"\nas-published levels: p=0.001 on its own 216-week window, "
-      f"p={VINT.query('vintage==\'as_published\' and transform==\'levels\'')['p_shift'].iloc[0]:.3f} "
-      f"on the 147-week point-in-time window.")
-print("So the only significant result in the notebook is a property of the years")
-print("where no signal existed. That is the vintage trap doing exactly what it does.")
+_apw = VINT.query("vintage=='as_published' and transform=='levels'").iloc[0]
+_ap_full = SUMMARY.query("vintage=='as_published' and transform=='levels'").iloc[0]
+print(f"\nas-published levels: r {_ap_full['corr']:.3f} at p {_ap_full['p_shift']:.3f} on its own "
+      f"216-week window; r {_apw['corr']:.3f} at p {_apw['p_shift']:.3f} on the 147-week "
+      f"point-in-time window.")
+print("Note the correlation RISES when 2022 is dropped and the p-value still")
+print("worsens. That is the mechanism worth naming: significance here is bought")
+print("with sample LENGTH, not with the strength of the relationship -- a shorter")
+print("sample lets random rotations line up better, so the null widens faster than")
+print("the signal does. The 69 extra weeks that buy it are 2022, where G1 removes")
+print("100% of the sentiment rows. So the only cell in the study that clears its")
+print("null is a cell whose significance comes from a stretch of series that, for")
+print("a reader at the time, did not exist.")
+
+# %% [markdown]
+# ### The null's own size, measured here rather than quoted
+#
+# The table above says p-values should be read against 8.3% on levels and 5.0%
+# on changes. Those numbers are load-bearing -- they are the reason the headline
+# p-values are taken from changes -- so the notebook measures them rather than
+# citing them. Two unrelated AR(0.97) series, scored exactly as the real
+# analysis scores them, sixty times per cell.
+#
+# A size estimated on sixty trials is itself an estimate, so each comes with a
+# Wilson interval. That interval is wide, and saying so is the point: "the
+# changes null is calibrated and the levels null is not" is a claim about a
+# difference of a few rejections, and the intervals overlap.
+
+# %%
+size_rows = []
+for which in ("shift", "phase"):
+    for tr in ("levels", "changes", "prewhitened"):
+        r = D.measure_null_size(CFG, transform=tr, which=which, trials=60, draws=300,
+                                seed=1000)
+        size_rows.append({**r, "size": round(r["size"], 3),
+                          "wilson_lo": round(r["wilson_lo"], 3),
+                          "wilson_hi": round(r["wilson_hi"], 3)})
+SIZES = pd.DataFrame(size_rows)
+print(SIZES.to_string(index=False))
+_s = SIZES.set_index(["null", "transform"])["size"]
+print(f"\nAt a nominal 5%: shift/levels {_s[('shift','levels')]:.1%}, "
+      f"shift/changes {_s[('shift','changes')]:.1%}, "
+      f"shift/prewhitened {_s[('shift','prewhitened')]:.1%}.")
+print("The intervals overlap, so this does NOT establish that one null is")
+print("calibrated and another is not. What it does establish is that none of")
+print("them is generous: a p of 0.57 on changes is not a near miss under any")
+print("size in these intervals, and a p of 0.10 on levels is not a rejection")
+print("under any of them either.")
+
+print("\nSo the transform is chosen on POWER, not calibration. Plant a five-week")
+print("lead deliberately and ask each transform to find it:")
+_p, _b, _ = D.synthetic_world(lead_days=35, rng=np.random.default_rng(14))
+_c, _ = D.build_surprise_composite(_p, CFG)
+_x = D.weekly_last(_c, CFG.week_anchor)
+_y = D.sentiment_index(_b, _x.index, CFG, point_in_time=False)["sentiment"]
+for tr in ("levels", "changes", "prewhitened"):
+    xt, yt, _ = D.transform_pair(_x, _y, tr)
+    Xm, Ym, _ = D.lag_matrix(xt, yt, LAGS)
+    cc = D.lag_curve_common(Xm, Ym, LAGS)
+    j = int(np.nanargmax(cc["corr"].to_numpy()))
+    obs = float(cc["corr"].iloc[j])
+    nl = D.shift_null(_x, _y, LAGS, CFG, transform=tr, draws=2000,
+                      rng=np.random.default_rng(15))
+    print(f"  {tr:12s} argmax {int(cc['lag_weeks'].iloc[j]):+3d}w  r {obs:.3f}  "
+          f"null q95 {nl['q95']:.3f}  p {D.surrogate_pvalue(obs, nl):.3f}")
+print("  -> in LEVELS the planted relationship reaches r 0.92 and the null reaches")
+print("     0.92 too, so it does not clear. The identical relationship is")
+print("     unambiguous in changes. A levels result on ~150 weekly points of")
+print("     wandering data is close to uninformative in EITHER direction, which is")
+print("     why the verdict rests on the changes row and not on the biggest number.")
 
 # %% [markdown]
 # ### An independent inflation series, at its own frequency
@@ -665,6 +808,18 @@ comp_m = pd.concat([zc, zl], axis=1)
 comp_m = comp_m.mean(axis=1).where(comp_m.notna().all(axis=1))
 sent_m = D.sentiment_index(SCORES, comp_m.index, CFG, point_in_time=False)["sentiment"]
 MLAGS = np.arange(-6, 7)
+# the blended monthly composite shares its LABOUR leg with the daily one, so a
+# CISI-only curve is run beside it -- that is the only fully independent input
+for label, series in (("CISI + labour (blended)", comp_m),
+                      ("CISI ALONE (independent)", zc)):
+    xt_, yt_, _ = D.transform_pair(series[series.index >= "2022-01-01"],
+                                   sent_m[sent_m.index >= "2022-01-01"], "levels")
+    Xm_, Ym_, _ = D.lag_matrix(xt_, yt_, MLAGS)
+    cm_ = D.lag_curve_common(Xm_, Ym_, MLAGS)
+    j_ = int(np.nanargmax(cm_["corr"].to_numpy()))
+    print(f"  {label:26s} n={len(Ym_):3d}m  argmax {int(cm_['lag_weeks'].iloc[j_]):+d}m "
+          f"(~{int(cm_['lag_weeks'].iloc[j_]) * 4.33:.0f}w)  r={cm_['corr'].iloc[j_]:.3f}"
+          f"  at +1m {float(cm_.loc[cm_['lag_weeks'] == 1, 'corr'].iloc[0]):+.3f}")
 xt, yt, _ = D.transform_pair(comp_m[comp_m.index >= "2022-01-01"],
                              sent_m[sent_m.index >= "2022-01-01"], "levels")
 Xm, Ym, _ = D.lag_matrix(xt, yt, MLAGS)
@@ -710,11 +865,30 @@ for tr in ("levels", "changes"):
                       "boot_5w_lo": lo, "boot_5w_hi": hi})
 STAB = pd.DataFrame(srows)
 print(STAB.round(3).to_string(index=False))
-print("\nThe first half's argmax is EXACTLY +5 weeks -- JWS's number, and it is a")
-print("real feature of 2023-05..2024-12. The second half puts the argmax at +13w")
-print("and the five-week correlation at -0.07, with a bootstrap interval that")
-print("comfortably contains zero. The lead is not stable; it is not even the same")
-print("sign at the horizon being traded.")
+print("\nand the null on each half, so '+5w in the first half' is not asserted bare:")
+for label, sub_ in ((f"{joint.index.min().date()}..{MID.date()}", joint[joint.index <= MID]),
+                    (f"{MID.date()}..{joint.index.max().date()}", joint[joint.index > MID])):
+    for tr in ("levels", "changes"):
+        xt, yt, _ = D.transform_pair(sub_["x"], sub_["y"], tr)
+        Xm, Ym, _ = D.lag_matrix(xt, yt, LAGS)
+        cc = D.lag_curve_common(Xm, Ym, LAGS)
+        obs = float(np.nanmax(cc["corr"].to_numpy()))
+        nl = D.shift_null(sub_["x"], sub_["y"], LAGS, CFG, transform=tr, draws=2000,
+                          rng=np.random.default_rng(77))
+        print(f"  {label} {tr:8s} peak {obs:.3f}  p {D.surrogate_pvalue(obs, nl):.3f}"
+              f"  (exact over {nl['distinct_rotations']} rotations, floor "
+              f"{nl['p_floor']:.3f})")
+print("A half is 60 weeks, so the rotation set is small and the p-value floor is")
+print("coarse. Neither half's peak is significant. The finding is not that either")
+print("half found something -- it is that the two halves disagree about WHERE.")
+print("\nThe first half's argmax is EXACTLY +5 weeks -- JWS's number, and it is where")
+print("that half's curve peaks. It is NOT a significant peak (p 0.100 above), so the")
+print("honest statement is that the first half's argmax happens to land at five, on")
+print("a sample and a transform where an argmax carries little information. The")
+print("second half puts it at +13w with the five-week correlation at -0.07 and a")
+print("bootstrap interval that comfortably contains zero. What the split shows is")
+print("not that either half found something, but that they disagree about WHERE --")
+print("and they disagree at the horizon a trade would be put on.")
 
 # %%
 fig = go.Figure()
@@ -754,7 +928,19 @@ fig.show()
 
 # %%
 TP_X = D.turning_points(X_ALL[X_ALL.index >= "2023-04-01"], CFG.turning_point_prominence)
-TP_Y = D.turning_points(SENT_AP["sentiment"][SENT_AP.index >= "2023-04-01"], 6.0)
+TP_Y = D.turning_points(SENT_AP["sentiment"][SENT_AP.index >= "2023-04-01"],
+                        CFG.sentiment_turning_point_prominence)
+_TP_Y_PIT = D.turning_points(SENT_PIT["sentiment"][SENT_PIT.index >= "2023-04-01"],
+                             CFG.sentiment_turning_point_prominence)
+print(f"NOTE the sentiment turns below are the AS-PUBLISHED series, to match the "
+      f"chart being critiqued -- and the vintage matters more here than anywhere "
+      f"else in the notebook. On the point-in-time series the same rule finds only "
+      f"{len(_TP_Y_PIT)} turns against {len(TP_Y)}: the mean 2.65-point revision is a "
+      f"third of the {CFG.sentiment_turning_point_prominence} prominence bar, and "
+      f"back-filling sharpens turns that were not visible at the time. So this "
+      f"exhibit reproduces the chart being critiqued; it is not evidence about what "
+      f"a reader could have seen, and the {len(TP_Y)}-turn count is itself a "
+      f"hindsight artefact.")
 print(f"surprise composite: {len(TP_X)} turns")
 print(TP_X.to_string(index=False))
 print(f"\nsentiment: {len(TP_Y)} turns")
@@ -772,6 +958,17 @@ for _, r in TP_X.iterrows():
 MATCH = pd.DataFrame(matched)
 print("\nnearest FOLLOWING same-sign sentiment turn:")
 print(MATCH.to_string(index=False))
+_censored = len(TP_X) - len(MATCH)
+print(f"\n{_censored} of {len(TP_X)} surprise turns have NO following same-sign "
+      f"sentiment turn and are dropped:")
+_paired = {pd.Timestamp(d) for d in MATCH["surprise_turn"]}
+print(TP_X[~TP_X["date"].isin(_paired)].to_string(index=False))
+print("They are the most recent ones, and they are censored by the end of the")
+print("sample rather than by anything about the relationship -- the sentiment")
+print("turn that would pair with them has not happened yet, which is exactly the")
+print("situation the current episode is in. Censoring the unresolved cases is")
+print("generous to the claim: it drops precisely the turns that have so far")
+print("failed to be followed.")
 print(f"\nmedian {MATCH['gap_weeks'].median():.1f}w   mean {MATCH['gap_weeks'].mean():.1f}w   "
       f"range {MATCH['gap_weeks'].min():.1f}..{MATCH['gap_weeks'].max():.1f}   n={len(MATCH)}")
 print("Four arrows on a three-year chart is n=4. Found rather than drawn it is")
@@ -946,7 +1143,7 @@ gap = FED_LEG["listed_cost_bp"] - FED_LEG["avg_bp"]
 print(f"\n  shortfall {gap:+.3f}bp per trade -- a conditioning overlay would have to lift")
 print(f"  the per-trade edge by {gap/FED_LEG['avg_bp']:.0%} merely to reach break-even,")
 print("  from a signal whose measured conditioning information is not distinguishable")
-print("  from zero on the only calibrated test in this notebook.")
+print("  from zero on every test in this notebook that has the power to tell.")
 
 # %% [markdown]
 # ## Robustness -- the knobs that were not chosen
@@ -1004,10 +1201,13 @@ rrows.append(row)
 
 ROBUST = pd.DataFrame(rrows)
 print(ROBUST.to_string(index=False))
-n5 = int((ROBUST["levels_argmax"] == 5).sum())
-print(f"\n{n5} of {len(ROBUST)} variants put the levels argmax at 5 weeks. "
-      f"The median across variants is {ROBUST['levels_argmax'].median():.0f}w "
-      f"(range {ROBUST['levels_argmax'].min()}..{ROBUST['levels_argmax'].max()}).")
+_alt = ROBUST[ROBUST["variant"] != "frozen"]
+n5 = int((_alt["levels_argmax"] == 5).sum())
+print(f"\n{n5} of {len(_alt)} ALTERNATIVES (the frozen baseline is excluded -- it is "
+      f"the configuration being defended, not evidence for it) put the levels argmax "
+      f"at 5 weeks. Across those {len(_alt)} the median is "
+      f"{_alt['levels_argmax'].median():.0f}w, range "
+      f"{_alt['levels_argmax'].min()}..{_alt['levels_argmax'].max()}.")
 print(f"On changes the argmax scatters across "
       f"{sorted(set(ROBUST['changes_argmax']))} -- which is what no relationship")
 print("looks like, and is consistent with the p-values above.")
@@ -1021,11 +1221,11 @@ print("to +14w. The robustness point is that nothing moves it near five.")
 # 1. **Our sentiment series is not the one JWS plots.** Bloomberg's Fed
 #    Sentiment Language Model is contemporaneous and continuous; ours is an
 #    aggregate of discrete JPM speech scores, and its smoothing is a choice we
-#    made. Section 2's half-life sweep bounds how much that choice can matter to
-#    the argmax (+10w to +13w while the filter's own centre of mass moves 1.4w
-#    to 13.0w), but it cannot make the two series the same object. A reader with
-#    Bloomberg's series should re-run the lag scan on it; the machinery here
-#    takes any two series.
+#    made. Section 2's half-life sweep bounds how much that choice can matter --
+#    the point-in-time argmax does not move at all across half-lives 7d to 63d,
+#    the as-published one moves +10w to +13w -- but it cannot make the two series
+#    the same object. A reader with Bloomberg's series should re-run the lag scan
+#    on it; the machinery here takes any two series.
 # 2. **147 weekly point-in-time observations.** That is the sample, whatever the
 #    x-axis suggests. It supports one split and roughly six turning points. One
 #    cell in the notebook does clear its null at p = 0.001 -- as-published
@@ -1042,16 +1242,26 @@ print("to +14w. The robustness point is that nothing moves it near five.")
 #    availability.** 2021 carries 8 Fed speeches in the whole year and 2020 one;
 #    running it back to the earliest speech date (2008-11) would produce a chart,
 #    not a sample.
-# 5. **The shift null's size is measured, not exact** -- 8.3% on levels, 5.0% on
-#    changes, 5.8% on prewhitened, over 120 unrelated AR(0.97) pairs at a
-#    nominal 5%. A p-value on levels should be read against 8.3%, not 5%.
-#    (Prewhitened was 9.2% before the AR-order selection was moved onto a common
-#    sample; fixing that comparison is what brought it to 5.8%, which is a
-#    reminder that a null's size is a property of the whole estimator and not
-#    just of the resampling scheme.)
-# 6. **The turning-point matcher takes the *next* same-sign sentiment turn**,
-#    which is generous to the claim: it can reach 23 weeks forward to find one.
-#    A stricter window would shrink n below the point of usefulness.
+# 5. **The null sizes are measured in a cell, and their intervals are wide.**
+#    Sixty trials each, so a 5.0% estimate carries a Wilson interval of roughly
+#    [1.7%, 13.7%]. That is honest but weak, and it is why the choice of
+#    transform is argued from power (a planted lead that levels cannot detect)
+#    rather than from a size ranking. It is also why every p-value in the study
+#    is either far above 0.05 or sitting on its own resolution floor -- none of
+#    them is a near miss that a better-calibrated null would flip.
+# 5b. **The shift null's p-value has a floor.** The rotation set is finite -- 189
+#    on the as-published window, 119 on the wide-scan row set, 59 on a half --
+#    and it is enumerated in full, so the test is exact but coarse. A reported
+#    0.005 is the smallest number that test can produce, not a measurement of
+#    one-in-two-hundred.
+# 6. **The turning-point exhibit is generous to the claim in three ways.** The
+#    matcher takes the *next* same-sign sentiment turn and can reach 23 weeks
+#    forward to find one; three of the nine surprise turns have no partner and
+#    are dropped, and they are the recent ones that have so far not been
+#    followed; and the sentiment turns are located on the as-published series,
+#    where the same rule finds 13 turns against the point-in-time series' 7.
+#    None of it feeds a p-value. It exists to replace four hand-drawn arrows
+#    with a rule, and even under those generous terms the answer is 13 weeks.
 # 7. **What would change the answer.** A longer point-in-time sentiment history
 #    (the corpus growing forward, or a contemporaneous vendor series) is the only
 #    thing that would let the +11..+14w peak be tested properly. Failing that,
