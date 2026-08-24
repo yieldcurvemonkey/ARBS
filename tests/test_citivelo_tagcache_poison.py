@@ -153,6 +153,97 @@ def test_an_ordinary_single_block_is_untouched():
     assert len(block.series[PAR_10Y]) == 3
 
 
+def _planted_inside_a_spill() -> list[list]:
+    """The layout the three structural markers CANNOT see.
+
+    A short nightly-tail par request is planted 38 rows into a taller vol spill,
+    so what follows the par block is that spill's CONTINUATION rows: no second
+    header, no formula row, and - because the vol rows at that sheet depth carry
+    dates months older than the par block's oldest - the sequence never stops
+    descending. Only the requested WINDOW distinguishes them.
+    """
+    rows: list[list] = [
+        ["=CVTSHIST(par)", None],
+        ["Date", f"{PAR_10Y} - CLOSE"],
+        [datetime.datetime(2026, 8, 21), 4.30],
+        [datetime.datetime(2026, 8, 20), 4.29],
+        [datetime.datetime(2026, 8, 19), 4.28],
+    ]
+    d = datetime.datetime(2026, 6, 15)
+    for i in range(40):
+        rows.append([d - datetime.timedelta(days=i), 76.5 + i * 0.1])
+    return rows
+
+
+def test_the_window_rejects_a_continuation_that_never_stops_descending():
+    """THE SECOND REGRESSION, found by asking what the markers could not see.
+
+    Without the window this returns 43 rows reaching back to May, 40 of them
+    normal vol wearing a par rate's name - and reports zero failures.
+    """
+    rows = _planted_inside_a_spill()
+    block = parse_tshist_block(
+        rows, [PAR_10Y],
+        window=(datetime.date(2026, 8, 14), datetime.date(2026, 8, 21)),
+    )
+    s = block.series[PAR_10Y]
+    assert len(s) == 3
+    assert s.max() == pytest.approx(4.30)
+    assert not ((s < -1.0) | (s > 15.0)).any()
+    assert block.foreign_rows == 40
+
+
+def test_without_a_window_the_markers_alone_do_not_see_that_layout():
+    """Names the residual honestly: this is why the window guard exists, and why
+    a relative ``period=`` request is defended by the band rather than here."""
+    block = parse_tshist_block(_planted_inside_a_spill(), [PAR_10Y])
+    s = block.series[PAR_10Y]
+    assert ((s < -1.0) | (s > 15.0)).any()
+
+
+def test_a_bound_landing_on_a_holiday_does_not_lose_real_rows():
+    """The pad is not decoration. The add-in resolves a bound against the tag's
+    own calendar, so a request can legitimately answer a day or two outside it."""
+    rows = [
+        ["Date", f"{PAR_10Y} - CLOSE"],
+        [datetime.datetime(2026, 8, 21), 4.30],
+        [datetime.datetime(2026, 8, 20), 4.29],
+        [datetime.datetime(2026, 8, 19), 4.28],
+    ]
+    block = parse_tshist_block(
+        rows, [PAR_10Y],
+        window=(datetime.date(2026, 8, 20), datetime.date(2026, 8, 20)),
+    )
+    assert len(block.series[PAR_10Y]) == 3
+    assert block.foreign_rows == 0
+
+
+def test_no_window_means_no_filtering():
+    """A relative ``period=`` request has no window; guessing one would drop
+    real rows, so the guard must not fire at all."""
+    rows = [
+        ["Date", f"{PAR_10Y} - CLOSE"],
+        [datetime.datetime(2005, 1, 3), 4.10],
+        [datetime.datetime(2026, 8, 21), 4.30],
+    ]
+    block = parse_tshist_block(rows, [PAR_10Y], window=None)
+    assert block.foreign_rows == 0
+    assert len(block.series[PAR_10Y]) == 2
+
+
+def test_an_open_end_bounds_only_the_near_side():
+    rows = [
+        ["Date", f"{PAR_10Y} - CLOSE"],
+        [datetime.datetime(2026, 8, 21), 4.30],
+        [datetime.datetime(2015, 10, 8), 39.97],
+    ]
+    block = parse_tshist_block(
+        rows, [PAR_10Y], window=(datetime.date(2026, 8, 14), None)
+    )
+    assert len(block.series[PAR_10Y]) == 1
+    assert block.foreign_rows == 1
+
+
 # ------------------------------------------------------------------ #
 #          2. the cache must not write a tag it was not asked for     #
 # ------------------------------------------------------------------ #
@@ -265,8 +356,8 @@ class _FakeRegion:
         self.Value = [["Date"], [None]]
 
 
-def _client_with_a_2700_row_spill(settled_value):
-    """A client whose formula settles to ``settled_value`` over a huge spill."""
+def _client_over_a_spill(settled_value, *, spill_rows: int, extent_raises: bool = False):
+    """A client whose formula settles to ``settled_value`` over a spill."""
     from MDP.CitiVelocityExcel import com_client as cc
 
     client = cc.CitiVelocityExcelClient.__new__(cc.CitiVelocityExcelClient)
@@ -279,17 +370,20 @@ def _client_with_a_2700_row_spill(settled_value):
     client._check_alive = lambda: None
     client._anchor = lambda rows_needed: "B1"
     client._settle = lambda cell, timeout=None: (settled_value, 0.0)
-    client._extent = lambda anchor: _FakeRegion(row=1, n_rows=2700)
+
+    def _extent(anchor):
+        if extent_raises:
+            raise RuntimeError("Excel is wedged; the extent cannot be measured")
+        return _FakeRegion(row=1, n_rows=spill_rows)
+
+    client._extent = _extent
     return client
 
 
-@pytest.mark.parametrize(
-    "settled, what",
-    [
-        (GETTING_DATA_ERR, "a poll timeout"),
-        (VALUE_ERR, "an Excel error int"),
-    ],
-)
+@pytest.mark.parametrize("settled, what", [
+    (GETTING_DATA_ERR, "a poll timeout"),
+    (VALUE_ERR, "an Excel error int"),
+])
 def test_the_cursor_advances_past_a_spill_on_the_early_return_paths(settled, what):
     """THE CAUSE, tested where it lives.
 
@@ -298,11 +392,39 @@ def test_the_cursor_advances_past_a_spill_on_the_early_return_paths(settled, wha
     correction, so ``self._row`` stayed 39 while the block went on to fill 2,700
     rows - and the next formula was planted inside it.
     """
-    client = _client_with_a_2700_row_spill(settled)
-    rows, value, _elapsed = client._write_and_read("=CVTSHIST(...)", rows_needed=8)
-
+    client = _client_over_a_spill(settled, spill_rows=2700)
+    rows, _value, _elapsed = client._write_and_read("=CVTSHIST(...)", rows_needed=8)
     assert rows == []
     assert client._row > 2700, (
         f"after {what} the cursor stayed at row {client._row}, inside a 2,700-row "
         "spill; the next anchor lands in a live block and the two regions merge"
+    )
+
+
+def test_a_spill_taller_than_the_worst_case_is_still_cleared():
+    """Isolates ``_advance_past``. An MI01 block runs well past
+    ``_WORST_CASE_SPILL_ROWS``, so the constant alone is not enough and the
+    MEASURED extent has to be honoured too."""
+    client = _client_over_a_spill(GETTING_DATA_ERR, spill_rows=12_000)
+    client._write_and_read("=CVTSHIST(...)", rows_needed=8)
+    assert client._row > 12_000, (
+        f"cursor at {client._row}: the measured extent was ignored and the "
+        "constant floor is short of this block"
+    )
+
+
+def test_the_cursor_still_clears_the_block_when_the_extent_cannot_be_measured():
+    """Isolates the worst-case skip, in the case it exists for.
+
+    ``_extent`` is COM and can fail on exactly the wedged Excel that produced the
+    timeout. With no measurement at all the cursor must still clear a full DAILY
+    history rather than staying at the 38-row provisional reservation.
+    """
+    from MDP.CitiVelocityExcel.com_client import _WORST_CASE_SPILL_ROWS
+
+    client = _client_over_a_spill(GETTING_DATA_ERR, spill_rows=0, extent_raises=True)
+    client._write_and_read("=CVTSHIST(...)", rows_needed=8)
+    assert client._row >= 1 + _WORST_CASE_SPILL_ROWS, (
+        f"cursor at {client._row} with no usable extent; the next anchor lands "
+        "inside whatever this formula goes on to spill"
     )

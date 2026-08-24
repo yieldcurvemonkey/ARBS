@@ -47,8 +47,8 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import logging
-import os
 import pathlib
 import shutil
 import sys
@@ -95,6 +95,44 @@ def _save(path: pathlib.Path, series: pd.Series) -> None:
     tmp = path.with_suffix(".parquet.tmp")
     pq.write_table(table, tmp, compression="zstd")
     replace_with_retry(tmp, path)
+
+
+def _rewrite_sidecar(path: pathlib.Path, series: pd.Series, *, removed: int) -> None:
+    """Bring the ``.meta.json`` back into agreement with the parquet.
+
+    ``write()`` writes ``n_rows``/``first``/``last`` from the merged series on
+    every write, and ``citivelo_daily_par_refresh._sidecar_last`` reads the
+    sidecar rather than parsing the parquet - its docstring calls it
+    authoritative. Editing the parquet underneath it and leaving the sidecar
+    behind would make that true statement false, which is exactly the kind of
+    silent disagreement this whole exercise is about.
+
+    ``repair_note`` is recorded because the holes this leaves are INTERIOR, and
+    ``missing_spans`` reasons about head and tail only - so nothing will refill
+    them by itself and the next person to read a short series deserves to know
+    why it is short.
+    """
+    meta_path = path.with_suffix(".meta.json")
+    meta: Dict[str, object] = {}
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            meta = {}
+    meta["n_rows"] = int(series.size)
+    if not series.empty:
+        meta["first"] = series.index.min().isoformat()
+        meta["last"] = series.index.max().isoformat()
+    meta["repaired_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    meta["repaired_rows_removed"] = int(removed)
+    meta["repair_note"] = (
+        "foreign-series rows removed by scripts/citivelo_tagcache_repair.py; the "
+        "holes are INTERIOR and missing_spans() cannot see them, so a deep "
+        "re-harvest is what refills this tag - the nightly tail will not."
+    )
+    tmp = meta_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(meta, indent=1), encoding="utf-8")
+    replace_with_retry(tmp, meta_path)
 
 
 def _donor_pool(directory: pathlib.Path) -> List[pathlib.Path]:
@@ -249,6 +287,7 @@ def main(argv=None) -> int:
             continue
         keep = s.drop(index=r["drop"], errors="ignore")
         _save(r["path"], keep)
+        _rewrite_sidecar(r["path"], keep, removed=len(s) - len(keep))
         moved += len(s) - len(keep)
         _logger.info("%s: %d -> %d rows", r["tag"], len(s), len(keep))
     print(f"\nremoved {moved} row(s) across {len(records)} tag(s)")

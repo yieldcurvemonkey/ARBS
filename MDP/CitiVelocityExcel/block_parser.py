@@ -378,11 +378,22 @@ def _one_block_only(
     return list(body), 0
 
 
+#: How far outside the requested window a row may still legitimately fall.
+#:
+#: The add-in resolves a bound against the tag's own calendar, so a request for
+#: a Saturday, or one whose end lands on a holiday, comes back a day or two
+#: inside or outside. Three days absorbs every such convention and is still four
+#: orders of magnitude tighter than the months-away rows the window guard exists
+#: to reject.
+_WINDOW_PAD = datetime.timedelta(days=3)
+
+
 def parse_tshist_block(
     raw: Any,
     tags: Sequence[str],
     *,
     price_point: str = "CLOSE",
+    window: Optional[Tuple[Optional[Any], Optional[Any]]] = None,
 ) -> TshistBlock:
     """Parse a ``CVTSHIST`` block into one series per requested tag.
 
@@ -445,6 +456,47 @@ def parse_tshist_block(
     stamps: List[Optional[datetime.datetime]] = [
         coerce_excel_datetime(r[0]) if r else None for r in body
     ]
+
+    # THE WINDOW GUARD. A CVTSHIST was asked for a span; a row outside it is not
+    # this block's data, whatever it looks like.
+    #
+    # This is the marker that catches the layout the other three miss: a SHORT
+    # request planted inside a taller spill, so what follows the block is the
+    # older block's CONTINUATION rows - no second header, no formula row, and the
+    # dates never stop descending. That is the nightly-tail shape, and it is the
+    # one that kept re-poisoning the par tags after every heal.
+    #
+    # It only applies when the caller asked with explicit bounds; a relative
+    # ``period=`` has no window to check against, and an open end means "up to
+    # now". A wide request cannot be defended this way - but a wide request
+    # produces a block TALLER than the spill it was planted in, which leaves no
+    # continuation rows and lands back in the three markers above.
+    if window is not None:
+        lo, hi = window
+        lo = None if lo is None else pd.Timestamp(lo) - _WINDOW_PAD
+        hi = None if hi is None else pd.Timestamp(hi) + _WINDOW_PAD
+        if lo is not None or hi is not None:
+            kept_rows: List[Sequence[Any]] = []
+            kept_stamps: List[Optional[datetime.datetime]] = []
+            dropped = 0
+            for row, stamp in zip(body, stamps):
+                if stamp is not None:
+                    ts = pd.Timestamp(stamp)
+                    if (lo is not None and ts < lo) or (hi is not None and ts > hi):
+                        dropped += 1
+                        continue
+                kept_rows.append(row)
+                kept_stamps.append(stamp)
+            if dropped:
+                out.foreign_rows += dropped
+                _logger.warning(
+                    "parse_tshist_block: %d row(s) fell outside the requested window "
+                    "%s .. %s and were discarded; the region held part of another "
+                    "block. First requested tag: %s.",
+                    dropped, lo, hi, next(iter(dict.fromkeys(tags)), "(none)"),
+                )
+            body, stamps = kept_rows, kept_stamps
+            out.n_rows = len(body)
 
     for tag in tag_list:
         col = _column_for_tag(headers, tag)

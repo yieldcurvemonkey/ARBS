@@ -116,6 +116,15 @@ _MAX_ROW = 900_000
 #: the true ceiling is unknown, so the default does not exceed the proven number.
 DEFAULT_CHUNK_SIZE = 44
 
+#: How far to skip past a formula whose extent could not be trusted.
+#:
+#: The deepest DAILY history in this cache is ~5,550 rows (a 21-year OIS par
+#: tag), and a pending formula's measured extent is a floor rather than the
+#: truth. 6,000 clears the worst case with room; the sheet has a million rows and
+#: :meth:`_anchor` adds a new one when it runs out, so the only cost of skipping
+#: too far is address space nobody wants.
+_WORST_CASE_SPILL_ROWS = 6_000
+
 #: Tags per ``CVMETADATA`` call. Smaller, because a poison tag hard-fails the
 #: whole batch and forces a bisect.
 DEFAULT_METADATA_CHUNK_SIZE = 20
@@ -740,6 +749,20 @@ class CitiVelocityExcelClient:
         under-reserving would put the next anchor inside a live ``CvFunction_*``
         region, which is a crash trigger.
         """
+        # RE-READ THE SHEET, do not trust the private cursor. ``self._row`` was
+        # set once at construction and advanced privately thereafter, which is
+        # wrong in two measured ways: a formula whose extent could not be
+        # measured leaves the cursor above its own block, and ``EXCEL_LOCK`` is a
+        # per-PROCESS lock while the tagged scratch workbook is deliberately
+        # SHARED between processes - two clients that connect at the same moment
+        # start at the same row and interleave their blocks. ``_next_free_row``
+        # reads ``UsedRange``, so it accounts for everything actually on the
+        # sheet regardless of who put it there. One COM call against a CVTSHIST
+        # that costs seconds.
+        try:
+            self._row = max(self._row, _next_free_row(self._ws, gap=self._gap))
+        except Exception:  # noqa: BLE001 - the private cursor stands
+            pass
         if self._row + rows_needed + self._gap > _MAX_ROW:
             # Add a sheet rather than reuse rows. Never delete the old one.
             self._ws = com_retry(lambda: self._wb.Worksheets.Add())
@@ -868,6 +891,19 @@ class CitiVelocityExcelClient:
             except Exception:  # noqa: BLE001 - the provisional reservation stands
                 self._logger.debug("could not measure the extent of a %s formula at %s",
                                    "pending" if is_pending(value) else "failed", anchor)
+            # A PENDING formula is still spilling, so whatever extent we just
+            # measured is a FLOOR, not the truth - a block measured at 500 rows
+            # can finish at 5,500 and swallow the next anchor anyway. Skip the
+            # worst case a DAILY history can reach instead of trusting the floor.
+            # Rows are free; a merged region is not.
+            #
+            # The row comes out of the anchor string rather than off the sheet:
+            # ``_anchor`` builds it as ``B<row>``, so a COM round trip here would
+            # be asking Excel for something we just wrote down - and it is a call
+            # that can fail on exactly the wedged Excel this path exists for.
+            m = re.match(r"^[A-Z]+(\d+)$", anchor)
+            if m is not None:
+                self._row = max(self._row, int(m.group(1)) + _WORST_CASE_SPILL_ROWS)
             return [], value, elapsed
 
         region = self._extent(anchor)
@@ -987,7 +1023,14 @@ class CitiVelocityExcelClient:
                         failures[tag] = err
                     continue
 
-                block: TshistBlock = parse_tshist_block(rows, chunk, price_point=point_token)
+                # The window this call actually asked for, so the parser can
+                # reject a row that cannot belong to it. Only when the request
+                # carried explicit bounds: a relative ``period=`` has no window,
+                # and passing a guessed one would drop real rows.
+                asked_window = (start, end) if (start is not None or end is not None) else None
+                block: TshistBlock = parse_tshist_block(
+                    rows, chunk, price_point=point_token, window=asked_window
+                )
                 out.update(block.series)
                 failures.update(block.failures)
 
