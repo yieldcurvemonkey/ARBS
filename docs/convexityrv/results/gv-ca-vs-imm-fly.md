@@ -159,6 +159,55 @@ pair.
 The `immM` legs are the worst of all: rolling vol β median **−0.005 to +0.017**
 with sd 0.06–0.09. The matched-expiry IMM flies have **no measurable vega**.
 
+### 3b. The brief's own two regressions, reproduced — and then extended
+
+Both printed fits reproduce **exactly** on this panel:
+
+| regressor | window | n | const | β | R² | DW |
+|---|---|---:|---:|---:|---:|---:|
+| `IMM_1x2y/IMM_1x5y/IMM_1x10y` fly | brief's | 161 | **+7.6893** | **+0.1461** | **0.3937** | 1.146 |
+| `10y10y/20y10y` curve | brief's | 410 | **−0.3514** | **−0.0993** | **0.5047** | 0.764 |
+
+Now run each one on the *other* two windows:
+
+| regressor | n = 161 | n = 410 | n = 1,409 (full) |
+|---|---|---|---|
+| IMM_1 2s5s10s fly | β **+0.1461**, R² **0.394** | β +0.0150, R² **0.009** | β **−0.0841**, R² 0.223 |
+| 10y10y/20y10y curve | β −0.0570, R² **0.064** | β **−0.0993**, R² **0.505** | β −0.0790, R² 0.247 |
+
+**Each regression is strong only on the window it was run on.** The fly's R²
+falls from 0.394 to **0.009** when the window is widened from 161 to 410 days,
+and its β **flips sign** on the full sample. The curve's R² is 0.064 on 161 days
+and 0.505 on 410.
+
+Rolling 410-bd windows across the whole sample, all 21 (structure × leg) pairs:
+R² ranges **0.000 to 0.807**, the β's range is **0.395 at the median pair
+against a median |β| of 0.110 — a span 3.6× the level itself — and the sign
+flips within the sample on 20 of 21 pairs**. A hedge ratio that changes sign
+inside its own sample is not a hedge ratio.
+
+The Durbin–Watson statistics are the tell that was already on the brief's own
+printouts: **0.764 and 1.146**, and 0.097–0.112 on the full sample. Residuals
+that autocorrelated are the textbook spurious-regression signature.
+
+And the decisive test, because it removes the obvious objection that daily CA
+marks are too noisy to see a relationship: **resample to weekly and the level R²
+survives while the change R² does not.**
+
+| structure | leg | weekly level β | level R² | level DW | weekly **change** β | **change R²** |
+|---|---|---:|---:|---:|---:|---:|
+| GREENS | `le_10y10y_15y10y` | −0.105 | 0.375 | 0.166 | +0.006 | **0.0003** |
+| BLUES | `le_10y10y_15y10y` | −0.205 | 0.416 | 0.297 | +0.046 | **0.0035** |
+| BLUES | `le_10y10y_20y10y` | −0.080 | 0.243 | 0.223 | +0.039 | **0.0085** |
+| GOLDS | `le_10y10y_15y10y` | −0.364 | **0.579** | 0.346 | +0.175 | **0.0315** |
+| GOLDS | `le_10y10y_20y10y` | −0.149 | 0.370 | 0.217 | +0.112 | **0.0428** |
+
+If the level relation were a pricing relationship, cleaning the noise out by
+sampling weekly would make the *change* relation appear. It does not: weekly
+change R² is **0.0003–0.089** against level R² of 0.05–0.58, and the change β is
+**positive** where the level β is negative. The two series drift together; they
+do not move together.
+
 ---
 
 ## 4. The roll — and the finding that the roll jump IS the theta

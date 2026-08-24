@@ -425,6 +425,102 @@ _f.update_layout(title="The raw co-trend the premise rests on "
 _f.show()
 
 # %% [markdown]
+# ## 4b. The brief's own two regressions, reproduced — and then extended
+#
+# Both printed fits reproduce exactly. Then each is run on the *other* two
+# windows, and on rolling windows across the whole sample.
+
+# %%
+_y = CA[U.ca_col("BLUES")]
+_fly = LEGS["USD-SOFR-1D IMM_1x2y/IMM_1x5y/IMM_1x10y FLY RATE"]
+_cur = LEGS["USD-SOFR-1D 10y10y/20y10y CURVE RATE"]
+
+
+def _ols(y, x):
+    j = pd.concat([pd.Series(y).rename("y"), pd.Series(x).rename("x")],
+                  axis=1).dropna()
+    X = np.column_stack([np.ones(len(j)), j["x"].to_numpy()])
+    b, *_ = np.linalg.lstsq(X, j["y"].to_numpy(), rcond=None)
+    e = j["y"].to_numpy() - X @ b
+    return {"n": len(j), "const": float(b[0]), "beta": float(b[1]),
+            "r2": float(1 - e.var(ddof=0) / j["y"].to_numpy().var(ddof=0)),
+            "dw": float(np.sum(np.diff(e) ** 2) / np.sum(e ** 2))}
+
+
+_rows = []
+for _name, _x in (("IMM_1 2s5s10s fly", _fly), ("10y10y/20y10y curve", _cur)):
+    for _lab, _sl in (("last 161 (brief's fly window)", slice(-161, None)),
+                      ("last 410 (brief's curve window)", slice(-410, None)),
+                      ("full sample (1409)", slice(None))):
+        _rows.append({"regressor": _name, "window": _lab,
+                      **_ols(_y.iloc[_sl], _x.iloc[_sl])})
+BRIEF = pd.DataFrame(_rows)
+print(BRIEF.round(4).to_string(index=False))
+assert abs(BRIEF.iloc[0]["beta"] - 0.1461) < 1e-3
+assert abs(BRIEF.iloc[0]["r2"] - 0.3937) < 1e-3
+assert abs(BRIEF.iloc[4]["beta"] + 0.0993) < 1e-3
+assert abs(BRIEF.iloc[4]["r2"] - 0.5047) < 1e-3
+print("\nBoth of the brief's prints reproduce exactly. Each is then strong ONLY "
+      "on the window it was run on: the fly's R2 falls 0.394 -> 0.009 when the "
+      "window widens 161 -> 410 days, and its beta FLIPS SIGN on the full "
+      "sample. Durbin-Watson 1.146 / 0.764 on the brief's own printouts, and "
+      "0.097 / 0.112 on the full sample -- the spurious-regression signature.")
+
+# %%
+WINDOW = 410
+_rows = []
+for _st in U.PRIMARY_STRUCTURES:
+    _yy = CA[U.ca_col(_st)]
+    for _leg_id in U.LEGS:
+        _xx = U.leg_series(LEGS, _leg_id, _st)
+        _j = pd.concat([_yy.rename("y"), _xx.rename("x")], axis=1).dropna()
+        _r2 = (_j["y"].rolling(WINDOW).corr(_j["x"]) ** 2).dropna()
+        _b = (_j["y"].rolling(WINDOW).cov(_j["x"])
+              / _j["x"].rolling(WINDOW).var(ddof=1)).dropna()
+        _rows.append({"structure": _st, "leg_id": _leg_id,
+                      "r2_full": float(_j["y"].corr(_j["x"]) ** 2),
+                      "r2_roll_min": float(_r2.min()),
+                      "r2_roll_med": float(_r2.median()),
+                      "r2_roll_max": float(_r2.max()),
+                      "beta_roll_med": float(_b.median()),
+                      "beta_roll_range": float(_b.max() - _b.min()),
+                      "frac_beta_neg": float((_b < 0).mean())})
+WSTAB = pd.DataFrame(_rows)
+print(WSTAB.round(4).to_string(index=False))
+_flips = int(WSTAB["frac_beta_neg"].between(0.02, 0.98).sum())
+print(f"\nRolling {WINDOW}-bd windows: R2 spans "
+      f"{WSTAB['r2_roll_min'].min():.3f}..{WSTAB['r2_roll_max'].max():.3f}, the "
+      f"beta's range is {WSTAB['beta_roll_range'].median():.3f} at the median "
+      f"pair against a median |beta| of "
+      f"{WSTAB['beta_roll_med'].abs().median():.3f} -- "
+      f"{WSTAB['beta_roll_range'].median() / WSTAB['beta_roll_med'].abs().median():.1f}x "
+      f"the level itself -- and the SIGN flips within the sample on {_flips} of "
+      f"{len(WSTAB)} pairs. A hedge ratio that changes sign inside its own "
+      "sample is not a hedge ratio.")
+
+# %%
+_rows = []
+for _st in U.PRIMARY_STRUCTURES:
+    _yy = CA[U.ca_col(_st)].resample("W-WED").last()
+    for _leg_id in ("immF_2s5s10s", "immM_2s5s10s", "le_10y10y_20y10y",
+                    "le_10y10y_15y10y"):
+        _xx = U.leg_series(LEGS, _leg_id, _st).resample("W-WED").last()
+        _lv, _ch = _ols(_yy, _xx), _ols(_yy.diff(), _xx.diff())
+        _rows.append({"structure": _st, "leg_id": _leg_id,
+                      "lvl_beta": _lv["beta"], "lvl_r2": _lv["r2"],
+                      "lvl_dw": _lv["dw"], "chg_beta": _ch["beta"],
+                      "chg_r2": _ch["r2"], "n_weeks": _lv["n"]})
+WEEKLY = pd.DataFrame(_rows)
+print(WEEKLY.round(4).to_string(index=False))
+print("\nThe decisive test, because it removes the obvious objection that the "
+      "daily CA mark is too noisy to see a relationship: resample to WEEKLY and "
+      "the LEVEL R2 survives while the CHANGE R2 does not. Weekly change R2 is "
+      f"{WEEKLY['chg_r2'].min():.4f}-{WEEKLY['chg_r2'].max():.4f} against level "
+      f"R2 of {WEEKLY['lvl_r2'].min():.2f}-{WEEKLY['lvl_r2'].max():.2f}, and "
+      "the change beta is POSITIVE where the level beta is negative. The two "
+      "series drift together; they do not move together.")
+
+# %% [markdown]
 # ## 5. THE SIZING ANSWER
 #
 # The objection was that the previous results looked bad because of sizing.
