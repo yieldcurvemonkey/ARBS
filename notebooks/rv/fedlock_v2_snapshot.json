@@ -1,0 +1,25 @@
+{
+  "dataset": "fedlock_v2 (frozen Gemini run)",
+  "url": "https://jnathan9.github.io/fedlock/v2/data.json",
+  "fetched": "2026-08-24T08:38:20",
+  "first": "1985-07-25",
+  "last": "2026-07-06",
+  "built_on": null,
+  "data_through": null,
+  "n_rows": 4645,
+  "n_dated": 4309,
+  "n_undated": 336,
+  "undated_by_speaker": {
+    "Richard W Fisher": 90,
+    "Janet L Yellen": 87,
+    "John C Williams": 81,
+    "Mary C Daly": 24,
+    "Robert S Kaplan": 19,
+    "Austan D Goolsbee": 11,
+    "Ben S Bernanke": 7,
+    "Jerome H Powell": 7
+  },
+  "undated_by_source": {},
+  "undated_mean_score": 50.912529761904764,
+  "dated_mean_score": 50.176727779067065
+}
