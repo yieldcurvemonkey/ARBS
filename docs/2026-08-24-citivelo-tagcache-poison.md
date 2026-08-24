@@ -292,10 +292,29 @@ one or two impossible values with no donor at all — 1,460% and 1,463% on
 -6.52% on `US9128284X55`. Bad ticks rather than this defect, but a yield that
 cannot be a yield does not get to stay just because its cause is different.
 
-**One left alone:** `RATES.OIS.DKK_TNDKK.PAR.5Y` at 2026-08-05 07:27 reads
-17.7948 between neighbours of 2.46595 and 2.46300. A single-minute spike, no
-donor, and inside the band — flagged here rather than deleted, because nothing
-about it is provably foreign.
+### Validating the MI01 survivors
+
+A bond's price and yield must move opposite ways, and after the repair they do:
+`corr(dY, dP)` on true consecutive-minute changes is **−0.9994** for
+`US91282CHT18` and **−0.9993** for `US91282CQE48`. Yields land at 3.82–4.58% and
+prices at 95.8–100.3 — ordinary UST numbers where the max was 146.99% before. A
+handful of midnight rows survive in each (26, 11, 21), which is the guard working
+as designed: they matched no donor, so they were left alone.
+
+### Two things left alone, and named
+
+**`RATES.OIS.DKK_TNDKK.PAR.5Y`** at 2026-08-05 07:27 reads 17.7948 between
+neighbours of 2.46595 and 2.46300. A single-minute spike, no donor, inside the
+band — nothing about it is provably foreign.
+
+**`RATES.BOND.US912810EX29`** is internally inconsistent and **that is
+pre-existing, not the repair**: 1,890 minutes between 2026-08-07 08:30 and
+2026-08-14 19:59 carry yields of 2.56–3.5% while the price sits pinned at
+100.009–100.044 — a stuck price against a moving yield, which no bond does. The
+count is *identical* in the pre-repair backup, and `corr(dY, dP)` is −0.46 here
+against −0.999 for its healthy siblings. It is a different data-quality problem in
+the same family and it deserves its own look; the repair neither caused it nor
+touched it.
 
 ### Totals
 
