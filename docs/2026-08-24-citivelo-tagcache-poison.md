@@ -328,6 +328,23 @@ touched it.
 Re-run of the sweep after the repair: `DAILY`, `MI01` and `HOURLY` all report
 **no foreign rows**.
 
+### Getting the old bytes back
+
+Every file the repair touched was copied before it was touched, parquet and
+sidecar both, under
+`%LOCALAPPDATA%\ARBS\ARBS\Cache\citivelo_excel_prerepair\<UTC stamp>\`:
+
+| stamp | files | what |
+|---|---:|---|
+| `20260824T213134Z` | 248 | the 124 daily OIS PAR tags |
+| `20260824T223941Z` | 114 | the 57 MI01 bond tags |
+| `20260824T224814Z` | 10 | the 5 isolated-tick tags |
+
+A second copy of the 132 daily PAR parquets, taken before anything at all
+happened, is committed to this branch under `_snapshot/DAILY_CLOSE_PAR/` — that
+one is the reference for "what did it look like before you started", because it
+predates even the first report.
+
 ## Blast radius
 
 `notebooks/rv/fed_sentiment_lead.py:1075` and
