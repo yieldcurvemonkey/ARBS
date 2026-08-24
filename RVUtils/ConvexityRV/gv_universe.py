@@ -67,6 +67,7 @@ __all__ = [
     "leg_dv01_to_leg_notionals",
     "contract_t1s",
     "time_weight_series",
+    "mean_t1_series",
     "ca_roll_dates",
     "leg_roll_dates",
     "blackout_mask",
@@ -114,7 +115,15 @@ class GVStructure:
 
     @property
     def structure_tag(self) -> str:
-        return "OUTRIGHT" if self.kind == "outright" else "PACKS"
+        """The TB's own tag: ``OUTRIGHT`` / ``PACKS`` / ``BUNDLES``.
+
+        Tied out against ``TB.IRSwapsTB._cvx_col_name`` for every declared
+        structure in the test suite -- a second naming scheme that merely
+        *looks* right produces a ``KeyError`` on a real panel, which is how this
+        was found.
+        """
+        return {"outright": "OUTRIGHT", "pack": "PACKS",
+                "bundle": "BUNDLES"}[self.kind]
 
 
 def _pack(label: str, a: int, tier: str, reason: str = "") -> GVStructure:
@@ -331,6 +340,18 @@ def time_weight_series(dates: Sequence, label: str,
     vals = [pack_time_weight(contract_t1s(d.date(), label), convention=convention)
             for d in idx]
     return pd.Series(vals, index=idx, name=f"w_{label}")
+
+
+def mean_t1_series(dates: Sequence, label: str) -> pd.Series:
+    """``mean_i(T1_i)`` per date -- the CA's decay rate, NOT its time weight.
+
+    ``dCA/dt = -sigma^2 * mean(T1) / 1e4`` while ``CA = sigma^2 * mean(T1^2) / 2e4``,
+    so the two moments do different jobs and confusing them is a Jensen-sized
+    error in a first-order term.
+    """
+    idx = pd.DatetimeIndex(pd.to_datetime(list(dates)))
+    return pd.Series([float(np.mean(contract_t1s(d.date(), label))) for d in idx],
+                     index=idx, name=f"t1mean_{label}")
 
 
 def ca_roll_dates(dates: Sequence) -> List[pd.Timestamp]:

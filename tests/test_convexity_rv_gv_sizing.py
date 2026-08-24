@@ -162,13 +162,97 @@ def test_ca_vega_grows_with_pack_depth():
 # ---------------------------------------------------------------------------
 # 3. The sizing rules
 # ---------------------------------------------------------------------------
-def _inputs(ca, leg, nvol=None, w=None) -> S.SizingInputs:
+def _inputs(ca, leg, nvol=None, w=None, level=None, slope=None,
+            seed=99) -> S.SizingInputs:
     idx = ca.index
+    rng = np.random.default_rng(seed)
     if nvol is None:
         nvol = pd.Series(100.0, index=idx)
     if w is None:
         w = pd.Series(12.363, index=idx)
-    return S.SizingInputs(ca=ca, ca_denoised=ca, leg=leg, nvol=nvol, w=w)
+    if level is None:
+        level = pd.Series(rng.normal(0, 1, len(idx)).cumsum() + 400.0, index=idx)
+    if slope is None:
+        slope = pd.Series(rng.normal(0, 1, len(idx)).cumsum() + 50.0, index=idx)
+    return S.SizingInputs(ca=ca, ca_denoised=ca, leg=leg, nvol=nvol, w=w,
+                          level=level, slope=slope)
+
+
+def test_vega_match_refuses_to_run_without_the_level_and_slope_controls():
+    """An uncontrolled dleg/dsigma is partly duration; dividing by it points the
+    hedge at the wrong risk, so the rule refuses rather than guessing."""
+    idx = pd.bdate_range("2015-01-01", periods=300)
+    rng = np.random.default_rng(4)
+    ca = pd.Series(rng.normal(0, 1, 300).cumsum(), index=idx)
+    leg = pd.Series(rng.normal(0, 1, 300).cumsum(), index=idx)
+    bare = S.SizingInputs(ca=ca, ca_denoised=ca, leg=leg,
+                          nvol=pd.Series(100.0, index=idx),
+                          w=pd.Series(12.363, index=idx))
+    with pytest.raises(ValueError, match="level and slope"):
+        S.sizing_beta("vega_match", bare)
+
+
+def test_controlled_vol_beta_strips_a_planted_level_channel():
+    """A fly built as ``0.8*level`` with NO vol content must come back with a
+    vol beta near zero and a partial R2 below the gate -- the uncontrolled fit
+    reports a large spurious slope because level and vol co-move."""
+    n = 700
+    idx = pd.bdate_range("2015-01-01", periods=n)
+    rng = np.random.default_rng(13)
+    shock = rng.normal(0, 1.0, n).cumsum()
+    level = pd.Series(400.0 + shock, index=idx)
+    nvol = pd.Series(100.0 + 0.5 * shock + rng.normal(0, 0.05, n), index=idx)
+    slope = pd.Series(50.0 + rng.normal(0, 0.5, n).cumsum(), index=idx)
+    leg = (0.8 * level + rng.normal(0, 0.02, n)).rename("leg")
+
+    raw_b, _, raw_r2 = S.rolling_vol_beta(leg, nvol, window=n, min_periods=200)
+    c_b, c_t, c_pr2 = S.rolling_vol_beta_controlled(
+        leg, nvol, level, slope, window=n, min_periods=200)
+    assert abs(float(raw_b.dropna().iloc[-1])) > 1.0     # spurious, ~1.6
+    assert float(raw_r2.dropna().iloc[-1]) > 0.9         # and it looks great
+    assert abs(float(c_b.dropna().iloc[-1])) < 0.1       # the truth: no vol beta
+    assert float(c_pr2.dropna().iloc[-1]) < S.VOL_BETA_PARTIAL_R2_MIN
+
+
+def test_ca_theta_is_the_derivative_of_the_time_weight():
+    """``dCA/dt = -sigma^2*mean(T1)/1e4`` must equal a finite difference of the
+    Ho-Lee level as every contract ages by one day."""
+    from RVUtils.ConvexityRV.holee import pack_ca_bp
+    sig, h = 117.8, 1.0 / 365.0
+    t1s = [3.25, 3.50, 3.75, 4.00]
+    fd = (pack_ca_bp(sig, [t - h for t in t1s])
+          - pack_ca_bp(sig, [t + h for t in t1s])) / (2 * h)
+    got = S.ca_theta_bp_per_year(pd.Series([sig]),
+                                 pd.Series([float(np.mean(t1s))])).iloc[0]
+    assert got == pytest.approx(fd, rel=1e-9)
+    assert got < 0
+
+
+def test_ca_theta_matches_the_measured_roll_jump_in_size():
+    """The quarterly roll jump IS the theta being paid back: a quarter of decay
+    must equal the level step when every contract rolls out one quarter."""
+    from RVUtils.ConvexityRV.holee import pack_ca_bp
+    sig = 117.8
+    t1s = [3.25, 3.50, 3.75, 4.00]
+    step = pack_ca_bp(sig, [t + 0.25 for t in t1s]) - pack_ca_bp(sig, t1s)
+    quarter_decay = -S.ca_theta_bp_per_year(
+        pd.Series([sig]), pd.Series([float(np.mean(t1s))])).iloc[0] * 0.25
+    assert step == pytest.approx(quarter_decay, rel=0.05)
+    assert 0.9 < step < 1.6     # the measured BLUES roll jump is +0.946 bp
+
+
+def test_episode_decomposition_separates_carry_from_residual():
+    idx = pd.bdate_range("2021-01-04", periods=21)
+    pnl = pd.Series(1000.0, index=idx)          # +$21,000 total
+    theta = pd.Series(-0.02, index=idx)         # -0.02 bp/bd
+    d = S.episode_decomposition(pnl, theta, side=-1, ca_dv01=100_000.0)
+    assert d["total_usd"] == pytest.approx(21_000.0)
+    # short CA earns the decay: -1 * (21 * -0.02) * 100k = +$42,000
+    assert d["carry_usd"] == pytest.approx(42_000.0)
+    assert d["residual_usd"] == pytest.approx(-21_000.0)
+    assert d["carry_share"] == pytest.approx(2.0)
+    long_ = S.episode_decomposition(pnl, theta, side=+1, ca_dv01=100_000.0)
+    assert long_["carry_usd"] == pytest.approx(-42_000.0)
 
 
 def test_level_and_change_betas_can_disagree_in_sign_and_the_rules_show_it():
@@ -264,3 +348,34 @@ def test_every_declared_rule_is_reachable_and_unknown_ones_refuse():
         assert len(b) == len(idx) and len(ok) == len(idx)
     with pytest.raises(ValueError, match="unknown sizing rule"):
         S.sizing_beta("magic", _inputs(ca, leg))
+
+
+def test_vega_match_rule_itself_uses_the_controlled_fit():
+    """Not just the primitive -- the RULE.  A fly that is pure level with no vol
+    content must be REFUSED by ``sizing_beta("vega_match")``.  An uncontrolled
+    fit accepts it (high raw R2 through the vol/level correlation) and hands
+    back a large spurious hedge, so this is the assertion that separates the
+    two estimators at the rule boundary."""
+    n = 700
+    idx = pd.bdate_range("2015-01-01", periods=n)
+    rng = np.random.default_rng(23)
+    shock = rng.normal(0, 1.0, n).cumsum()
+    level = pd.Series(400.0 + shock, index=idx)
+    nvol = pd.Series(100.0 + 0.5 * shock + rng.normal(0, 0.05, n), index=idx)
+    slope = pd.Series(50.0 + rng.normal(0, 0.5, n).cumsum(), index=idx)
+    leg = pd.Series(0.8 * level.to_numpy() + rng.normal(0, 0.02, n), index=idx)
+    ca = pd.Series(9.0 + rng.normal(0, 0.3, n), index=idx)
+
+    inp = S.SizingInputs(ca=ca, ca_denoised=ca, leg=leg, nvol=nvol,
+                         w=pd.Series(12.363, index=idx),
+                         level=level, slope=slope)
+    _, ok = S.sizing_beta("vega_match", inp)
+    assert float(ok.mean()) < 0.05, (
+        "a pure-level fly must be refused; an uncontrolled dleg/dsigma would "
+        "accept it on the vol/level correlation alone")
+
+    # and the uncontrolled fit is exactly what WOULD accept it -- shown, not
+    # asserted from memory, so the contrast is on the record.
+    _, t_raw, r2_raw = S.rolling_vol_beta(leg, nvol, window=n, min_periods=200)
+    raw_gate = (t_raw.abs() >= S.VOL_BETA_T_MIN) & (r2_raw >= S.VOL_BETA_R2_MIN)
+    assert float(raw_gate[t_raw.notna()].mean()) > 0.9

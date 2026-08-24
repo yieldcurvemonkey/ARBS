@@ -342,3 +342,130 @@ exactly those words.
    the fraction of days the `vega_match` gate refuses. If that regression is
    empty, the brief's premise ("butterflies are vol proxies in linear space") is
    answered by measurement rather than by a backtest.
+
+---
+
+## 11. Amendment A3 (2026-08-24, before any scoring) — what the options literature says the CA actually is
+
+The brief frames this as *"convexity adjustment is pure gamma, swap butterflies
+are vol proxies in linear space, we are trading gamma vs vega."* An extraction
+of the options-theory reading set (`docs/convexityrv/research/corpus3/`,
+13 Quantitative Finance Stack Exchange threads on the gamma/vega link,
+delta-hedging at fixed vs floating implied vol, and break-even vol) says the
+first half of that needs a correction, and the correction has three consequences
+that change what this block measures.
+
+### A3.1 The CA is a VEGA-side object, not a gamma
+
+The literature's split is between a *price* and an *accrual*:
+
+* **Gamma P&L** accrues through the path — `½Γ·S²·((ΔS/S)² − σ_i²Δt)` per step,
+  integrating to `∫½ΓS²(σ_r² − σ_i²)dt`. It is a bet on **realised** variance and
+  it arrives only by rebalancing or settlement.
+* **Vega P&L** is a re-mark of an implied quote: `ν·Δσ_i`. Realised vol does not
+  touch it.
+
+`CA_bp = σ_bp²·w/2e4` is a deterministic function of an **implied/model** σ. It
+references no path. Its holding-period P&L is exact, because the CA is exactly
+quadratic in σ and the expansion terminates:
+
+```
+ΔCA_bp = (σ₀·w/1e4)·Δσ   +   (w/2e4)·(Δσ)²
+         └── vega ────┘       └── volga ──┘
+```
+
+So the CA is an option-**premium**-like object. The premium is the integral of
+future gamma P&L, not gamma itself. Which side you actually sit on is set by
+monetisation, and the horizon decides it: `rms(T1) = sqrt(w)` is **2.5 / 3.5 /
+4.5 years** for GREENS / BLUES / GOLDS, and no RV book carries a position to a
+pack's expiry. **At the horizon this block trades, both legs are vega, and the
+trade is a vol-vs-vol basis rather than gamma-vs-vega.**
+
+That is not a reason not to run it — a vol-vs-vol basis across the curve is a
+real RV object, and the desk chat in the corpus describes the long-end leg in
+exactly those terms ("10y10y/20y10y curve flattener … leaves you long vega short
+gamma without having to trade a swaption"; "15y5y vs 20y10y is the pure vega
+expression"). It is a reason to **stop calling the result a convexity trade
+without qualification**, and to size the convexity claim honestly:
+
+| pack | linear (vega) on a ±20 bp/yr vol shock | convex (volga) | convex share |
+|---|---:|---:|---:|
+| GREENS | 1.57 bp | 0.14 bp | 8.8% |
+| BLUES | 3.11 bp | 0.26 bp | 8.8% |
+| GOLDS | 4.90 bp | 0.43 bp | 8.8% |
+
+The convex fraction is `Δσ/(2σ)` and is independent of `w`, so it is 8.8% for
+every structure. **~91% of this trade is linear vol basis.**
+
+### A3.2 The CA has a large deterministic theta, and the roll jump IS that theta
+
+`w = mean_i(T1_i²)` and every `T1_i` shortens with calendar time, so
+`dw/dt = −2·mean_i(T1_i)` and
+
+```
+dCA_bp/dt = −σ_bp² · mean(T1) / 1e4      bp per year
+```
+
+Measured on this panel: **−0.277 / −0.419 / −0.502 bp per MONTH** for
+GREENS / BLUES / GOLDS. That is larger than anything the RV signal is trying to
+catch, and it is deterministic.
+
+A constant-rank CA series hides it, because at each quarterly roll the rank map
+advances, `w` jumps back up and the level recovers. **The roll jump is the theta
+being paid back**, and the two numbers agree: the formula predicts a 1.21 bp
+step for BLUES when every contract rolls out one quarter, and §0 M3 measured
+**+0.946 bp**. They are the same quantity.
+
+Two consequences, both structural:
+
+1. **A roll blackout leaves the decay one-sided.** A two-sided book that never
+   holds through a roll acquires a systematic **short-CA carry**, ≈ +1.2 bp per
+   quarter held short and −1.2 bp per quarter held long. That is Citi's own
+   published trade ("sell Blues CA"), and it is **carry, not alpha**.
+2. **Every headline number is therefore decomposed** into the analytic carry
+   `side·Σθ_t·CA_DV01` and the residual, and the Sharpe of the residual is
+   reported next to the Sharpe of the total. `gv_sizing.episode_decomposition`
+   does this; `carry_usd`, `residual_usd` and `carry_share` are columns of the
+   grid stats frame. A Sharpe quoted on the total alone would report a
+   short-convexity carry trade as relative value.
+
+### A3.3 `vega_match` is estimated with level and slope controls
+
+The CA's vega `σ·w/1e4` is a pure volatility derivative by construction.
+Matching it against an **uncontrolled** `∂leg/∂σ` would match a vega against a
+coefficient that is partly duration — a fly that loads on level and not on vol
+is a duration bet wearing a vol costume, and dividing by its slope points the
+hedge at the wrong risk. `vega_match` therefore fits
+
+```
+Δleg_bp = a + b_v·Δσ_bp + b_L·Δlevel + b_S·Δslope + ε
+```
+
+rolling 252 bd, and gates on `|t(b_v)| ≥ 2.0` **and the partial R² of the vol
+term ≥ 0.05** — the partial, not the regression's raw R², because the raw R² of
+a level-driven fly is high for the wrong reason. Level = spot 10Y, slope =
+10Y − 2Y, both from the leg panel. `rolling_vol_beta` (uncontrolled) is retained
+and reported side by side in the vol-proxy matrix so the gap is visible.
+
+**This changes no declared cell and adds no trials** — it replaces one
+estimator with a correctly specified one. The rule now *refuses to run* without
+the controls rather than silently falling back.
+
+### A3.4 The convexity signature becomes a point prediction, not a shape
+
+Because the CA is exactly quadratic in σ, "a convex payoff must show a smile"
+can be sharpened: bucketing realised pair P&L by **Δσ** must give a fitted
+quadratic coefficient equal to `CA_DV01·w/2e4` USD per (bp/yr)². A U-shape with
+the wrong coefficient is not a pass. Bucketing by **Δrate, orthogonalised to
+Δσ**, must be flat — SOFR vol and level are correlated, so a raw Δrate bucket
+inherits a spurious smile through the vol channel.
+
+### A3.5 What the corpus audit found
+
+`docs/convexityrv/research/corpus3/` also carries a coverage audit of the whole
+Downloads corpus against the block-3 extraction: **97 of 97 markdown files
+covered, 88 distinct documents after de-duplication, 100%**, with the match rate
+reported at each stage. There are no unextracted research documents. The only
+depth gap was `pm_bbgchat.txt`, triaged in block 3 as "not STIR CA"; it has been
+read in full for this block and is the source of the long-end vega framing
+quoted in A3.1.

@@ -60,9 +60,13 @@ __all__ = [
     "rolling_beta_changes",
     "rolling_beta_levels",
     "rolling_vol_beta",
+    "rolling_vol_beta_controlled",
     "rolling_vol_ratio",
+    "ca_theta_bp_per_year",
+    "episode_decomposition",
     "VOL_BETA_T_MIN",
     "VOL_BETA_R2_MIN",
+    "VOL_BETA_PARTIAL_R2_MIN",
     "SIZING_RULES",
     "sizing_beta",
 ]
@@ -78,6 +82,10 @@ BURN_IN_BD = 252
 #: fails either gate cannot open a position and the refusal is counted.
 VOL_BETA_T_MIN = 2.0
 VOL_BETA_R2_MIN = 0.20
+#: Gate on the PARTIAL R2 of the vol term after level/slope controls.  A fly
+#: that loads on level and not on vol is a duration bet wearing a vol costume;
+#: the raw R2 of the controlled regression cannot tell the two apart.
+VOL_BETA_PARTIAL_R2_MIN = 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +226,27 @@ def ca_implied_vol_bp(ca_bp, w) -> pd.Series:
     return np.sqrt(v.where(v > 0))
 
 
+def ca_theta_bp_per_year(sigma_bench_bp, t1_mean) -> pd.Series:
+    r"""``dCA_bp/dt = -sigma_bp^2 * mean(T1) / 1e4`` -- the CA's own decay.
+
+    ``w = mean_i(T1_i^2)`` and every ``T1_i`` shortens with calendar time, so
+    ``dw/dt = -2*mean_i(T1_i)`` and ``CA = sigma^2*w/2e4`` decays deterministically
+    even with the vol and the curve frozen.  Measured on this panel it is
+    **0.28 / 0.42 / 0.50 bp per MONTH** for GREENS / BLUES / GOLDS, which is
+    larger than anything the RV signal is trying to catch.
+
+    A constant-rank CA series hides it: at each quarterly roll the rank map
+    advances, ``w`` jumps back up, and the level recovers.  That jump — measured
+    +0.946 bp on BLUES, and predicted 1.21 bp from this same formula — IS the
+    theta being paid back.  So a blackout that removes the roll jump leaves the
+    decay one-sided, and a two-sided book acquires a systematic short-CA bias
+    that is **carry, not alpha**.  It must be decomposed out before any Sharpe
+    is quoted, which is what :func:`episode_decomposition` does.
+    """
+    s = pd.Series(sigma_bench_bp).astype(float)
+    return -(s ** 2) * pd.Series(t1_mean).astype(float) / 1e4
+
+
 def ca_vega_bp_per_bp(sigma_bench_bp, w) -> pd.Series:
     """``dCA_bp / dsigma_bp = sigma * w / 1e4``, evaluated at the BENCHMARK vol.
 
@@ -284,6 +313,66 @@ def rolling_vol_beta(leg: pd.Series, nvol: pd.Series, *, window: int = 252,
     return _roll_ols(pd.Series(leg), pd.Series(nvol), window, mp)
 
 
+def rolling_vol_beta_controlled(leg: pd.Series, nvol: pd.Series,
+                                level: pd.Series, slope: pd.Series, *,
+                                window: int = 252,
+                                min_periods: Optional[int] = None
+                                ) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    r"""``dleg/dsigma`` **after** removing the level and slope channels.
+
+    ``dfly = a + b_v*dsigma + b_L*dlevel + b_S*dslope + e``, rolling.  Returns
+    ``(b_v, t_v, partial_r2_of_sigma)``.
+
+    Why the controls matter for a *sizing* rule: the CA's vega
+    ``sigma*w/1e4`` is a pure volatility derivative by construction.  Matching
+    it against an uncontrolled ``dfly/dsigma`` would match a vega against a
+    coefficient that is partly duration — a fly that loads on level and not on
+    vol is a duration bet wearing a vol costume, and dividing by its slope
+    produces a hedge pointed at the wrong risk.  The gate is on the **partial**
+    R2 of the vol term, not the regression's raw R2, for the same reason.
+    """
+    mp = min_periods or max(60, window // 2)
+    dy = pd.Series(leg).astype(float).diff()
+    X = pd.concat([pd.Series(nvol).astype(float).diff().rename("v"),
+                   pd.Series(level).astype(float).diff().rename("L"),
+                   pd.Series(slope).astype(float).diff().rename("S")], axis=1)
+    j = pd.concat([dy.rename("y"), X], axis=1)
+    idx = j.index
+    bv = np.full(len(idx), np.nan)
+    tv = np.full(len(idx), np.nan)
+    pr2 = np.full(len(idx), np.nan)
+    arr = j.to_numpy(dtype=float)
+    for i in range(len(idx)):
+        lo = max(0, i - window + 1)
+        blk = arr[lo:i + 1]
+        blk = blk[np.isfinite(blk).all(axis=1)]
+        n = blk.shape[0]
+        if n < mp:
+            continue
+        y = blk[:, 0]
+        Xf = np.column_stack([np.ones(n), blk[:, 1], blk[:, 2], blk[:, 3]])
+        try:
+            beta_f, *_ = np.linalg.lstsq(Xf, y, rcond=None)
+        except np.linalg.LinAlgError:                        # pragma: no cover
+            continue
+        rss_f = float(((y - Xf @ beta_f) ** 2).sum())
+        Xr = np.column_stack([np.ones(n), blk[:, 2], blk[:, 3]])
+        beta_r, *_ = np.linalg.lstsq(Xr, y, rcond=None)
+        rss_r = float(((y - Xr @ beta_r) ** 2).sum())
+        dfree = n - 4
+        if dfree <= 0 or rss_f <= 0:
+            continue
+        bv[i] = beta_f[1]
+        s2 = rss_f / dfree
+        xtx_inv = np.linalg.pinv(Xf.T @ Xf)
+        se = math.sqrt(max(s2 * xtx_inv[1, 1], 1e-300))
+        tv[i] = beta_f[1] / se if se > 0 else np.nan
+        pr2[i] = max(0.0, (rss_r - rss_f) / rss_r) if rss_r > 0 else np.nan
+    return (pd.Series(bv, index=idx, name="beta_vol_c"),
+            pd.Series(tv, index=idx, name="t_vol_c"),
+            pd.Series(pr2, index=idx, name="partial_r2_vol"))
+
+
 def rolling_vol_ratio(ca_denoised: pd.Series, leg: pd.Series, *,
                       window: int = 252, min_periods: Optional[int] = None
                       ) -> pd.Series:
@@ -322,6 +411,11 @@ class SizingInputs:
     nvol: pd.Series               # matched ATMF normal vol, bp/yr
     w: pd.Series                  # mean_i(T1_i^2), years^2
     window: int = 252
+    #: level and slope controls for the vega regression.  Required by
+    #: ``vega_match``; absent, that rule falls back to the uncontrolled fit and
+    #: SAYS SO by refusing the partial-R2 gate rather than silently skipping it.
+    level: Optional[pd.Series] = None
+    slope: Optional[pd.Series] = None
 
 
 def sizing_beta(rule: str, inp: SizingInputs
@@ -346,12 +440,47 @@ def sizing_beta(rule: str, inp: SizingInputs
     elif r == "vol_ratio":
         b = rolling_vol_ratio(inp.ca_denoised, inp.leg, window=inp.window)
     elif r == "vega_match":
-        vb, t, r2 = rolling_vol_beta(inp.leg, inp.nvol, window=inp.window)
-        ok = (t.abs() >= VOL_BETA_T_MIN) & (r2 >= VOL_BETA_R2_MIN)
+        if inp.level is None or inp.slope is None:
+            raise ValueError(
+                "vega_match needs level and slope controls; an uncontrolled "
+                "dleg/dsigma is partly duration and dividing by it points the "
+                "hedge at the wrong risk (pre-reg amendment A3)")
+        vb, t, pr2 = rolling_vol_beta_controlled(
+            inp.leg, inp.nvol, inp.level, inp.slope, window=inp.window)
+        ok = ((t.abs() >= VOL_BETA_T_MIN)
+              & (pr2 >= VOL_BETA_PARTIAL_R2_MIN))
         ca_vega = ca_vega_bp_per_bp(inp.nvol, inp.w)
         b = (ca_vega / vb.where(ok)).rename("beta_vega_match")
-        return b, ok.fillna(False) & np.isfinite(b)
+        ok = ok.astype(object).where(ok.notna(), False).astype(bool)
+        return b, ok & np.isfinite(b)
     else:                                                       # pragma: no cover
         raise ValueError(f"unknown sizing rule {rule!r}; declared {SIZING_RULES}")
     b = b.rename(f"beta_{r}")
     return b, pd.Series(np.isfinite(b), index=b.index)
+
+
+# ---------------------------------------------------------------------------
+# 5. Carry vs residual — the decomposition every headline number needs
+# ---------------------------------------------------------------------------
+def episode_decomposition(pnl_daily: pd.Series, theta_bp_per_bd: pd.Series,
+                          side: int, ca_dv01: float) -> Dict[str, float]:
+    """Split one episode's realised P&L into deterministic CA carry and residual.
+
+    The carry leg is ``side * sum_t(theta_t) * ca_dv01`` over the episode's own
+    marks, with ``theta_t`` the analytic decay of :func:`ca_theta_bp_per_year`
+    divided by 252.  It is not an estimate — it is what the Ho-Lee level does
+    with the vol and the curve held fixed — so anything left over is the part
+    the signal can claim.
+
+    Quoting a Sharpe on the total without this split reports a short-convexity
+    carry trade as relative value.  Citi's own published book is the carry
+    trade; this block is supposed to be measuring whether there is anything
+    else.
+    """
+    p = pd.Series(pnl_daily).astype(float)
+    th = pd.Series(theta_bp_per_bd).astype(float).reindex(p.index)
+    carry = float(side) * float(th.sum()) * float(ca_dv01)
+    total = float(p.sum())
+    return {"total_usd": total, "carry_usd": carry,
+            "residual_usd": total - carry,
+            "carry_share": (carry / total) if total else float("nan")}

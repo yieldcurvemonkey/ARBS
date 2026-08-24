@@ -241,3 +241,19 @@ def test_roll_dates_are_where_the_ca_panel_actually_jumps():
         on = d[[t in rolls for t in d.index]]
         off = d[[t not in rolls for t in d.index]]
         assert on.abs().mean() > 1.5 * off.abs().mean(), lab
+
+
+def test_ca_col_ties_out_to_the_tb_naming_for_every_declared_structure():
+    """One naming scheme, not two.  A second scheme that merely looks right
+    produces a KeyError on a real panel -- ``BUNDLE4Y`` is tagged ``BUNDLES``,
+    not ``PACKS``, and this test is what found that."""
+    from TB.IRSwapsTB import _cvx_col_name
+    for lab in U.STRUCTURES:
+        assert U.ca_col(lab) == _cvx_col_name(U.CURVE, lab), lab
+
+
+@pytest.mark.skipif(not CA_PANEL.exists(), reason="CA panel not built")
+def test_every_declared_structure_has_a_column_in_the_real_ca_panel():
+    ca = pd.read_parquet(CA_PANEL)
+    missing = [l for l in U.STRUCTURES if U.ca_col(l) not in ca.columns]
+    assert not missing, missing

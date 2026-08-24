@@ -42,7 +42,9 @@ from RVUtils.ConvexityRV.gv_sizing import (
     SIZING_RULES,
     SizingInputs,
     ca_implied_variance_bp2,
+    ca_theta_bp_per_year,
     denoise,
+    episode_decomposition,
     sizing_beta,
 )
 from RVUtils.ConvexityRV.gv_universe import (
@@ -54,9 +56,14 @@ from RVUtils.ConvexityRV.gv_universe import (
     ca_col,
     leg_cost_dv01,
     leg_series,
+    mean_t1_series,
     roll_segments,
     time_weight_series,
 )
+
+#: Panel columns used as the level and slope controls in the vega regression.
+LEVEL_COL = f"{CURVE} 10Y OUTRIGHT RATE"
+SLOPE_COLS = (f"{CURVE} 2Y OUTRIGHT RATE", f"{CURVE} 10Y OUTRIGHT RATE")
 
 __all__ = [
     "COST_MULTS",
@@ -126,6 +133,10 @@ class CellResult:
     per_episode_usd: List[float]
     n_gate_refusals: int = 0
     n_dates: int = 0
+    #: deterministic CA decay booked by the episodes, USD -- carry, not alpha
+    carry_usd: float = 0.0
+    #: mean |beta| and the resulting hedge notional, for the before/after table
+    mean_abs_beta: float = float("nan")
 
     @property
     def n_episodes(self) -> int:
@@ -201,9 +212,15 @@ def run_cell(spec: CellSpec, ca_panel: pd.DataFrame, legs: pd.DataFrame,
 
     nvol = legs[vol_bench_col(spec.structure)].astype(float).reindex(idx)
     w = time_weight_series(idx, spec.structure)
+    t1m = mean_t1_series(idx, spec.structure)
+    theta_bd = ca_theta_bp_per_year(nvol, t1m) / 252.0
+
+    level = legs[LEVEL_COL].astype(float).reindex(idx)
+    slope = (legs[SLOPE_COLS[1]].astype(float)
+             - legs[SLOPE_COLS[0]].astype(float)).reindex(idx) * 100.0
 
     inp = SizingInputs(ca=ca_raw, ca_denoised=ca_dn, leg=leg, nvol=nvol, w=w,
-                       window=spec.cfg.window)
+                       window=spec.cfg.window, level=level, slope=slope)
     beta, gate = sizing_beta(spec.sizing, inp)
     beta = beta.reindex(idx)
     gate = gate.reindex(idx).fillna(False).astype(bool)
@@ -237,11 +254,16 @@ def run_cell(spec: CellSpec, ca_panel: pd.DataFrame, legs: pd.DataFrame,
     daily = {m: book_daily(eps, ca_raw, leg, leg_id=spec.leg_id, index=idx,
                            cost_mult=m, exec_lag_bd=spec.cfg.exec_lag_bd)
              for m in cost_mults}
-    per_ep = [float(episode_pnl(e, ca_raw, leg,
-                                exec_lag_bd=spec.cfg.exec_lag_bd).sum())
-              for e in eps]
+    per_ep = []
+    carry = 0.0
+    for e in eps:
+        p = episode_pnl(e, ca_raw, leg, exec_lag_bd=spec.cfg.exec_lag_bd)
+        per_ep.append(float(p.sum()))
+        carry += episode_decomposition(p, theta_bd, e.side, e.ca_dv01)["carry_usd"]
     refusals = int((~gate).sum())
-    return CellResult(spec, eps, daily, per_ep, refusals, len(idx))
+    mab = float(np.mean([abs(e.beta_entry) for e in eps])) if eps else float("nan")
+    return CellResult(spec, eps, daily, per_ep, refusals, len(idx),
+                      float(carry), mab)
 
 
 def run_grid(cells: Sequence[CellSpec], ca_panel: pd.DataFrame,
@@ -279,8 +301,14 @@ def grid_stats_frame(results: Sequence[CellResult], *,
         holds = [int(np.busday_count(e.entry.date(), e.exit.date()))
                  for e in r.episodes]
         mean_hold = float(np.mean(holds)) if holds else float("nan")
-        n_eff = (span_years * ANN / mean_hold) if mean_hold and mean_hold > 0 \
-            else float("nan")
+        # Two clocks, and the SMALLER one is the honest count.  ``span*252/hold``
+        # assumes the book is always in the market; a roll-blackout book with 9
+        # episodes over 5.6 years has made 9 bets, not 48, and quoting the larger
+        # number understates every null bar this grid is graded against.
+        n_eff_hold = ((span_years * ANN / mean_hold)
+                      if mean_hold and mean_hold > 0 else float("nan"))
+        n_eff = (float(min(n_eff_hold, len(r.episodes)))
+                 if r.episodes and np.isfinite(n_eff_hold) else float("nan"))
         pe = np.asarray(r.per_episode_usd, dtype=float)
         gross_cost_dv01 = float(sum(
             (2.0 * e.ca_dv01) +
@@ -292,7 +320,8 @@ def grid_stats_frame(results: Sequence[CellResult], *,
             "signal": s.signal, "structure": s.structure, "leg_id": s.leg_id,
             "sizing": s.sizing, "book_scale": s.book_scale,
             "n_episodes": r.n_episodes, "mean_hold_bd": mean_hold,
-            "n_eff": n_eff, "gate_refusal_frac": r.n_gate_refusals / max(1, r.n_dates),
+            "n_eff": n_eff, "n_eff_hold_clock": n_eff_hold,
+            "gate_refusal_frac": r.n_gate_refusals / max(1, r.n_dates),
             "hit_rate": float((pe > 0).mean()) if len(pe) else float("nan"),
             "mean_beta": float(np.mean([e.beta_entry for e in r.episodes]))
             if r.episodes else float("nan"),
@@ -300,6 +329,8 @@ def grid_stats_frame(results: Sequence[CellResult], *,
                 [abs(e.beta_entry) * e.ca_dv01 for e in r.episodes]))
             if r.episodes else float("nan"),
             "gross_dv01_traded": gross_cost_dv01,
+            "carry_usd": r.carry_usd,
+            "mean_abs_beta": r.mean_abs_beta,
         }
         for m in sorted(r.daily_by_mult):
             d = r.daily_by_mult[m]
@@ -307,6 +338,8 @@ def grid_stats_frame(results: Sequence[CellResult], *,
             row[f"sharpe_{m}"] = _sharpe(d)
         g = row.get("net_0.0", np.nan)
         row["breakeven_bp"] = (g / gross_cost_dv01) if gross_cost_dv01 else np.nan
+        row["residual_usd"] = g - r.carry_usd
+        row["carry_share"] = (r.carry_usd / g) if g else np.nan
         rows.append(row)
     return pd.DataFrame(rows)
 
