@@ -16,7 +16,8 @@ long holds — either dies on cost or isn't a real sample. See §7.
 
 The SR3 (3-month SOFR futures) strip prices a single "peak" contract — the point on the
 8-contract curve carrying the highest implied rate — and that peak migrates over time as
-rate-path expectations shift. The thesis: the peak carries embedded premium from a
+rate-path expectations shift, empirically observed moving from the H7 cluster through M7
+toward U7 over this sample (H7→M7→U7). The thesis: the peak carries embedded premium from a
 bimodal or skewed rate-path distribution (a genuine hump in the term structure, not
 noise), and that premium should decay as the bimodality resolves, either because the
 peak's rate falls relative to its neighbor (fade the calendar spread) or because the
@@ -55,8 +56,8 @@ Full grid — every row from `analysis_outputs/strip_peak/linear_grid.csv`, 116-
 | 10 | 1.0 | 47 | 42.6% | -0.15 | -0.11 | -0.50 | -7.0 | -41.50 |
 | 10 | 2.0 | 47 | 27.7% | -1.15 | -0.85 | -1.50 | -54.0 | -55.50 |
 | **21** | **0.0** | **36** | **80.6%** | **+3.86** | **1.97** | +3.25 | 139.0 | -8.00 |
-| **21** | **2.0** | **36** | **63.9%** | **+1.86** | **0.95** | +1.25 | 67.0 | -19.00 |
 | 21 | 1.0 | 36 | 77.8% | +2.86 | 1.46 | +2.25 | 103.0 | -13.00 |
+| **21** | **2.0** | **36** | **63.9%** | **+1.86** | **0.95** | +1.25 | 67.0 | -19.00 |
 | 42 | 0.0 | 18 | 100.0% | +12.65 | 18.77 | +12.88 | 227.75 | 0.00 |
 | 42 | 1.0 | 18 | 100.0% | +11.65 | 17.29 | +11.88 | 209.75 | 0.00 |
 | 42 | 2.0 | 18 | 100.0% | +10.65 | 15.80 | +10.88 | 191.75 | 0.00 |
