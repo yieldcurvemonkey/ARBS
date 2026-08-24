@@ -24,7 +24,11 @@ synthesis, and two execution-convention amendments described below).
 `BUNDLE{N}Y` (front-anchored ranks 1..4N — the CME convention) was added to
 the TB vocabulary; the legacy `BUNDLE{b}` 16-quarter windows are a different
 object and both are pinned side by side in
-`tests/test_convexity_rv_cavf_vocab.py`.
+`tests/test_convexity_rv_cavf_vocab.py`. On the brief's fourth word,
+"packages": every CA structure here IS a futures-plus-matched-swap package
+(CME's own sense of the word — packs and bundles are execution strategies
+over the same legs), and arbitrary multi-contract windows are the rank spans
+the vocabulary already expresses; no separate "package" object exists to add.
 
 The curve MDP convention for the block is `IRSwapsMDP(source="citivelo_excel_rl")`
 (user preference, 2026-08-24), measured bit-identical to the `CITIVELO_EXCEL`
@@ -75,8 +79,12 @@ stated:
   **below** the annualised E[max SR | null, 515 trials] of **1.29**, before a
   basis point of cost. Per-hold null 0.51 at median n_eff 36.
 * Deflated Sharpe of the best of the traded cells (Bailey effective-N over the
-  actual cross-cell correlation): fails the 0.95 bar (asserted in the
-  notebook).
+  actual cross-cell correlation): **0.22**, far below the 0.95 bar.
+* The pre-registration's declared resampling null — SHARED sign flips, which
+  keep the grid's cross-cell correlation (a row permutation leaves a Sharpe
+  exactly unchanged) — gives the best cell a family-wise **p = 0.42**: the
+  observed best per-observation Sharpe (0.587) equals the null max's own mean
+  (0.592).
 * Placebo: lagging the signal +20bd kills the top cells' gross.
 * The only positive-median family is the **fly-only control** — not a
   convexity trade at all, and negative at 1× its own per-leg costs, consistent

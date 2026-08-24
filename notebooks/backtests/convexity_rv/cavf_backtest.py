@@ -382,6 +382,23 @@ print(f"\ndeflated Sharpe of the best of {len(trial_cols)} traded cells "
 assert dsr["dsr"] < 0.95, (
     "the winner clears DSR 0.95 — the verdict below is stale")
 
+# the pre-registration's declared resampling null: SHARED Rademacher flips
+# (a row permutation leaves every Sharpe exactly unchanged; the shared flip
+# keeps the grid's cross-cell correlation, so the family max is honest)
+from RVUtils.StatisticalFinance.mcpt import shared_sign_flip_null
+
+X = rets[trial_cols].replace(0.0, np.nan)     # 0 = did not trade that date
+obs_best_po = float(np.nanmax((X.mean() / X.std(ddof=1)).to_numpy()))
+_null = shared_sign_flip_null(X, draws=1000, rng=np.random.default_rng(7))
+_null_max = np.nanmax(_null, axis=1)
+p_flip = float((_null_max >= obs_best_po).mean())
+print(f"\nshared sign-flip family null (1,000 draws, {len(trial_cols)} cells):")
+print(f"  observed best per-obs Sharpe {obs_best_po:.4f} vs null-max mean "
+      f"{_null_max.mean():.4f}  ->  p = {p_flip:.3f}")
+assert p_flip > 0.05, (
+    f"the best cell clears the sign-flip family null (p={p_flip:.3f}) — "
+    "re-derive the verdict")
+
 print("\nplacebo (signal lagged +20bd) on the top cells:")
 for k, v in META["placebo_lag20"].items():
     print(f"  {k}: live ${v['gross_live']:,.0f} -> lag20 ${v['gross_lag20']:,.0f}")

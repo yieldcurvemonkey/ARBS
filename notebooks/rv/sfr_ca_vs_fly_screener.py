@@ -134,20 +134,42 @@ else:
         _d -= pd.Timedelta(days=1)
     _instant = dt.datetime(_d.year, _d.month, _d.day, 14, 0, tzinfo=CT)
 
-live_rows, refused = {}, {}
-try:
-    CA_LIVE = tb.sfr_cvx_adj_intraday(COLOURS, [_instant])
-    from RVUtils.ConvexityRV import ca_intraday as CI
-    CI.assert_single_price_source(CA_LIVE, CI.PRICE_SOURCE_INTRADAY)
-    for _, r in CA_LIVE.iterrows():
-        live_rows[r["label"]] = {"ca_live_bp": float(r["cvx_adj_bp"]),
-                                 "mark": "intraday",
-                                 "instant": str(r["timestamp"])}
-    print(f"intraday CA at {_instant}: {sorted(live_rows)}")
-except Exception as exc:                                      # noqa: BLE001
-    refused["__session__"] = f"{type(exc).__name__}: {str(exc)[:160]}"
-    print(f"intraday unavailable ({refused['__session__']}); "
-          "screening on the last settle")
+from RVUtils.ConvexityRV import ca_intraday as CI
+
+
+def _try_live(instant):
+    """One colour per call, so a deep refusal cannot kill the servable front.
+
+    The intraday API's refusal is per RANK by design — GOLDS needing depth 20
+    on a depth-17 tape must not take WHITES/REDS/GREENS/BLUES down with it
+    (the first committed run of this screener did exactly that with one
+    batched call, and showed zero live rows on a session serving four).
+    """
+    rows, refs = {}, {}
+    for colour in COLOURS:
+        try:
+            one = tb.sfr_cvx_adj_intraday([colour], [instant])
+            CI.assert_single_price_source(one, CI.PRICE_SOURCE_INTRADAY)
+            r = one.iloc[0]
+            rows[colour] = {"ca_live_bp": float(r["cvx_adj_bp"]),
+                            "mark": "intraday", "instant": str(r["timestamp"])}
+        except Exception as exc:                              # noqa: BLE001
+            refs[colour] = f"{type(exc).__name__}: {str(exc)[:120]}"
+    return rows, refs
+
+
+live_rows, refused = _try_live(_instant)
+if not live_rows and CFG.intraday_instant is None:
+    # the default instant's session may simply not be warmed; fall back once
+    # to the most recent session the depth warm is known to have covered
+    _fallback = dt.datetime(2026, 8, 19, 14, 0, tzinfo=CT)
+    print(f"no colour served at {_instant}; retrying the known-warmed "
+          f"session {_fallback}")
+    live_rows, refused = _try_live(_fallback)
+    _instant = _fallback
+print(f"intraday CA at {_instant}: served {sorted(live_rows)}")
+for k, v in refused.items():
+    print(f"  REFUSED {k}: {v}")
 
 settle_ca = {lab: float(s.iloc[-1]) for lab, s in ca_raw.items()}
 print(f"settle mark: {LAST.date()}")
