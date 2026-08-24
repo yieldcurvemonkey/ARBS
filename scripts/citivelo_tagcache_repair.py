@@ -63,7 +63,11 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from MDP.CitiVelocityExcel.cache import default_cache_dir  # noqa: E402
-from MDP.CitiVelocityExcel.sanity import band_for_tag, implausible_rows  # noqa: E402
+from MDP.CitiVelocityExcel.sanity import (  # noqa: E402
+    UNBANDABLE_BUT_POISONABLE,
+    band_for_tag,
+    implausible_rows,
+)
 from utils.atomic_replace import replace_with_retry  # noqa: E402
 
 _logger = logging.getLogger("citivelo_tagcache_repair")
@@ -136,11 +140,26 @@ def _rewrite_sidecar(path: pathlib.Path, series: pd.Series, *, removed: int) -> 
 
 
 def _donor_pool(directory: pathlib.Path) -> List[pathlib.Path]:
+    """Candidate donor series, ACROSS frequencies.
+
+    The sibling ``DAILY/<price point>`` directory is searched as well as this
+    one, and that is not defensive breadth - it is where the MI01 donors actually
+    live. The blocks that merged sat on one worksheet, so a DAILY vol block could
+    and did land in a minute-frequency region: every poisoned row in the MI01
+    bond tags is ``00:00:00``-stamped, and its donor is a DAILY
+    ``RATES.VOL.USD.*`` tag. Searching only the victim's own frequency finds
+    nothing and reports the tag clean.
+    """
+    dirs = [directory]
+    daily = directory.parent.parent / "DAILY" / directory.name
+    if daily.is_dir() and daily != directory:
+        dirs.append(daily)
     out: List[pathlib.Path] = []
-    for p in directory.glob("*.parquet"):
-        if any(p.stem.startswith(pref) for pref in DONOR_PREFIXES):
-            out.append(p)
-    return sorted(out)
+    for d in dirs:
+        for p in d.glob("*.parquet"):
+            if any(p.stem.startswith(pref) for pref in DONOR_PREFIXES):
+                out.append(p)
+    return sorted(out, key=lambda p: str(p))
 
 
 def find_donor(
@@ -158,27 +177,78 @@ def find_donor(
     """
     if out_of_band.empty:
         return None, 0
+
+    # PROBE FIRST. The full intersection against ~2,000 donors costs minutes per
+    # victim and the answer is decided by three lookups: the donor is a bitwise
+    # copy, so it must reproduce EVERY probe exactly. Probes are spread through
+    # the suspect set rather than taken from one end, because a victim's suspects
+    # can span two different donors' eras.
+    n = len(out_of_band)
+    probes = [out_of_band.index[i] for i in dict.fromkeys(
+        (0, n // 2, n - 1, n // 4, 3 * n // 4)) if i < n]
+    probe_vals = [float(out_of_band.loc[p]) for p in probes]
+
     best: Optional[str] = None
     best_n = 0
     for path in pool:
-        s = cache.get(path.stem)
+        s = cache.get(str(path))
         if s is None:
             s = _load(path)
             if s is None:
                 continue
-            cache[path.stem] = s
-        common = out_of_band.index.intersection(s.index)
-        if len(common) < best_n:
+            cache[str(path)] = s
+        # A MAJORITY of probes, not all of them. The suspect set can legitimately
+        # contain a row the donor never wrote - an intraday series may carry a
+        # real 00:00 bar - and demanding every probe would let one such row veto
+        # the true donor. Three exact float64 agreements do not happen by chance.
+        hits = 0
+        for p, want in zip(probes, probe_vals):
+            try:
+                got = s.at[p]
+            except KeyError:
+                continue
+            if abs(float(got) - want) < 1e-9:
+                hits += 1
+        if hits < max(2, len(probes) - 2):
             continue
+        common = out_of_band.index.intersection(s.index)
         agree = int(((out_of_band.loc[common] - s.loc[common]).abs() < 1e-9).sum())
         if agree > best_n:
-            best, best_n = path.stem, agree
+            best, best_n = str(path), agree
     if best is None or best_n < 0.9 * len(out_of_band):
         return None, best_n
     return best, best_n
 
 
-def scan(directory: pathlib.Path) -> List[dict]:
+def _suspects(tag: str, series: pd.Series, *, intraday: bool) -> pd.Series:
+    """The rows worth searching a donor for.
+
+    Two entry criteria, because one is not enough:
+
+    **Out of band.** Certain, and it is all a daily series offers.
+
+    **An exact-midnight stamp in an INTRADAY series.** ``cache.py``'s own
+    docstring says daily and intraday "are never mixed", so a ``00:00:00`` row in
+    a minute series is already a contract violation - and it is the ONLY thing
+    that flags the bond PRICE family, where a vol of 89.9 landing in a price
+    column is indistinguishable from an ordinary price by value alone. Measured:
+    every poisoned row in the MI01 bond tags is midnight-stamped, because the
+    block that merged into them was a DAILY one.
+
+    Being a suspect is not a verdict. Nothing is removed on this alone - tier 2
+    still has to find a donor that reproduces the rows exactly.
+    """
+    out = implausible_rows(tag, series)
+    if intraday and len(series):
+        midnight = series[series.index.normalize() == series.index]
+        if len(midnight):
+            parts = [x for x in (out, midnight) if len(x)]
+            out = pd.concat(parts) if len(parts) > 1 else parts[0]
+            out = out[~out.index.duplicated(keep="first")].sort_index()
+    return out
+
+
+def scan(directory: pathlib.Path, *, intraday: bool = False) -> List[dict]:
     """One record per tag that holds foreign rows."""
     pool = _donor_pool(directory)
     donor_cache: Dict[str, pd.Series] = {}
@@ -189,28 +259,40 @@ def scan(directory: pathlib.Path) -> List[dict]:
         tag = path.stem
         if any(tag.startswith(pref) for pref in DONOR_PREFIXES):
             continue
-        if band_for_tag(tag) is None:
+        banded = band_for_tag(tag) is not None
+        poisonable = any(p.match(tag) for p in UNBANDABLE_BUT_POISONABLE)
+        if not banded and not (intraday and poisonable):
             continue
         s = _load(path)
         if s is None:
             continue
-        oob = implausible_rows(tag, s)
+        oob = _suspects(tag, s, intraday=intraday)
         if oob.empty:
             continue
         donor, agree = find_donor(s, oob, pool, donor_cache)
 
-        drop = oob.index
-        in_band_extra = 0
+        # WHAT IS SAFE TO REMOVE. Only two things: a value that cannot belong to
+        # the family at all, and a value that is bit-for-bit the donor's. A
+        # midnight-stamped SUSPECT that matches no donor and sits inside the band
+        # is left alone - it is evidence of a frequency mix, not proof of one,
+        # and a minute series may legitimately carry a 00:00 bar.
+        certain = implausible_rows(tag, s).index
+        matched = pd.DatetimeIndex([])
         if donor is not None:
             d = donor_cache[donor]
             common = s.index.intersection(d.index)
-            exact = common[(s.loc[common] - d.loc[common]).abs() < 1e-9]
-            in_band_extra = len(exact.difference(oob.index))
-            drop = oob.index.union(exact)
+            matched = common[(s.loc[common] - d.loc[common]).abs() < 1e-9]
+            # The pool is keyed on the full path, because the same stem exists at
+            # two frequencies. What anyone reads is the tag.
+            donor = pathlib.Path(donor).stem
+        drop = certain.union(matched)
+        in_band_extra = len(matched.difference(certain))
+        if len(drop) == 0:
+            continue
 
         records.append({
             "tag": tag, "path": path, "rows": len(s),
-            "out_of_band": len(oob), "donor": donor, "donor_agree": agree,
+            "out_of_band": len(certain), "donor": donor, "donor_agree": agree,
             "in_band_extra": in_band_extra, "drop": drop,
             "first_bad": drop.min(), "last_bad": drop.max(),
         })
@@ -258,7 +340,8 @@ def main(argv=None) -> int:
         return 2
     print(f"cache: {directory}\n")
 
-    records = scan(directory)
+    from MDP.CitiVelocityExcel.frequencies import is_intraday
+    records = scan(directory, intraday=is_intraday(args.freq))
     _report(records)
 
     if args.phase == "report":

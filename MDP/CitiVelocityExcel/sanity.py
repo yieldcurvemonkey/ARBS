@@ -80,6 +80,23 @@ _BANDS: Tuple[Tuple[re.Pattern, Tuple[float, float], str], ...] = (
         (-500.0, 2000.0),
         "a normal volatility in basis points",
     ),
+    # A government-bond yield in percent. Same band as a par rate and for the
+    # same reason: the widest legitimate print across the currencies this cache
+    # carries is low double digits, and the poisoned values ran 25 to 690.
+    (
+        re.compile(r"^RATES\.BOND\.[^.]+\.(YIELD|YTM)$", re.I),
+        (-5.0, 25.0),
+        "a bond yield in percent",
+    ),
+)
+
+#: Families whose unit is unambiguous but whose RANGE overlaps the poison, so a
+#: band cannot separate them. Listed rather than banded on purpose: a bond price
+#: of 89.9 is perfectly ordinary AND is exactly what a normal vol of 89.9bp looks
+#: like once it lands in the wrong column. Only an exact match to the donor
+#: series settles those, which is what the repair tool's tier 2 does.
+UNBANDABLE_BUT_POISONABLE = (
+    re.compile(r"^RATES\.BOND\.[^.]+\.(PRICE|DIRTY_PRICE)$", re.I),
 )
 
 

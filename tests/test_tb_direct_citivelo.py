@@ -31,6 +31,7 @@ workbook; ``ARBS_SUPABASE_ENABLED=0``.
 from __future__ import annotations
 
 import datetime
+import os
 import pathlib
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -56,8 +57,20 @@ CURVE = "USD_SOFR"
 TENOR = "10Y"
 TAG = f"RATES.OIS.{CURVE}.PAR.{TENOR}"
 
+#: Two sentinels chosen so a cached value and a wire value are unmistakable.
+#:
+#: ``FRESH`` is 11.1 rather than 111.0 because ``cache.write`` now refuses a
+#: series whose values cannot belong to its tag family, and the CACHED path -
+#: unlike the direct one - really does write what it fetched. 11.1 is still a
+#: number no ``PAR`` grid in this file produces (the realistic levels are 3.0 and
+#: 8.0) but it is inside the band, so the control test that asserts the cached
+#: path still banks can still bank.
+#:
+#: ``POISON`` stays at 999.0 on purpose: it is only ever written by
+#: :func:`_poisoned_cache`, which seeds through the documented escape hatch
+#: because it is manufacturing a state the cache will no longer create.
 POISON = 999.0
-FRESH = 111.0
+FRESH = 11.1
 
 START = datetime.date(2026, 1, 5)  # Mon
 END = datetime.date(2026, 1, 9)  # Fri
@@ -160,11 +173,30 @@ def _no_com_no_supabase(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path)
 
 
 def _poisoned_cache(base_dir: pathlib.Path, tags: Sequence[str] = (TAG,)) -> CitiVeloTagCache:
-    """A tag cache holding a value no real market number could occupy."""
+    """A tag cache holding a value no real market number could occupy.
+
+    Seeded with ``ARBS_CITIVELO_SANITY=off``, and that is the point rather than a
+    workaround: ``cache.write`` now REFUSES a series whose values cannot belong to
+    its tag family, so 999.0 on a ``PAR`` tag cannot be written through the front
+    door any more. This fixture has to manufacture a state the cache will no
+    longer create, which is exactly the state these tests exist to read from - the
+    poisoned files that are already on disk. The env var is the documented escape
+    hatch for deliberately writing one, and it is scoped to the seeding call so
+    every assertion below still runs with the gate armed.
+    """
     cache = CitiVeloTagCache(base_dir=base_dir)
     idx = pd.bdate_range(POISON_FROM, pd.Timestamp(END))
-    for tag in tags:
-        cache.write(tag, "DAILY", pd.Series([POISON] * len(idx), index=idx), price_point="CLOSE")
+    prior = os.environ.get("ARBS_CITIVELO_SANITY")
+    os.environ["ARBS_CITIVELO_SANITY"] = "off"
+    try:
+        for tag in tags:
+            cache.write(tag, "DAILY", pd.Series([POISON] * len(idx), index=idx),
+                        price_point="CLOSE")
+    finally:
+        if prior is None:
+            os.environ.pop("ARBS_CITIVELO_SANITY", None)
+        else:
+            os.environ["ARBS_CITIVELO_SANITY"] = prior
     return cache
 
 

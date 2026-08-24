@@ -16,8 +16,9 @@ Three families were affected, not one:
 | `RATES.OIS.CAD_CORRA.PAR` (44 of 44) | 167,876 | 41,228 (24.6%) | 2015-10-08 | 2019-07-16 |
 | `RATES.OIS.JPY_TONAR_LCH.PAR` (44 of 44) | 62,611 | 31,591 (50.5%) | 2015-10-08 | 2019-07-16 |
 
-`DAILY`/`CLOSE` only. The `MI01` and `HOURLY` copies of the same tags are clean.
-2015-10-08 is the USD swaption tags' own first day, in every family.
+2015-10-08 is the USD swaption tags' own first day, in every family. The `MI01`
+and `HOURLY` copies of these OIS tags are clean — but `MI01` is **not** clean in
+general: 57 bond PRICE/YIELD tags carry the same vol and are covered below.
 
 It survived because the poisoned days are **interleaved** with good ones — the
 cache merges rather than replaces — so the series still plotted as a plausible
@@ -56,28 +57,61 @@ Measured, and reproduced offline in
 
 ### The fingerprint that identifies it
 
-Par slot *i* maps to `cube_tags('USD')` ATM position *i*, for all 44, on every
-one of 2,600 poisoned days, **bit-exact** (max |diff| = 0.0 against the
-`RATES.VOL` parquets).
+Every poisoned value is **bit-exact** (max |diff| = 0.0) against that same day's
+`RATES.VOL.USD.ATM_RFR.NORMAL` series. 100% of them, in all three families.
 
-The decisive detail is the **8 clean tenors**: 3W, 4M, 11M, 21M, 8Y, 12Y, 19Y,
-35Y — positions 3, 7, 14, 18, 25, 29, 36, 40. Those are exactly the requested vol
-tags whose tenor is 4Y or 12Y, which Citi does not quote. Their columns came back
-empty, `coerce_float(None)` returned `None`, and the row was skipped — leaving
-that par tag untouched **at its exact position**. A Python `zip` of the served
-series would have compacted those 8 away and shifted every later tenor. It is
-that gap-preserving signature that proves the mapping happens at column position
-inside one region, and not in any Python re-keying.
+**For USD_SOFR**, par slot *i* maps to `cube_tags('USD')` ATM position *i* for
+all 44, on every one of 2,600 poisoned days — and the decisive detail is the
+**8 clean tenors** (3W, 4M, 11M, 21M, 8Y, 12Y, 19Y, 35Y at positions
+3, 7, 14, 18, 25, 29, 36, 40). Those are exactly the requested vol tags whose
+tenor is 4Y or 12Y, which Citi does not quote. Their columns came back empty,
+`coerce_float(None)` returned `None`, and the row was skipped — leaving that par
+tag untouched **at its exact position**. A Python `zip` of the *served* series
+would have compacted those 8 away and shifted every later tenor.
 
-CAD_CORRA took served vol tags 44–87 and JPY_TONAR_LCH 132–152 then 109–131 —
-the same defect on other chunks in other runs. All three carry **USD** vol, which
-is why a per-currency explanation cannot be right.
+**That gap-preserving argument applies to USD only — 36 of the 124 tags.** CAD
+and JPY are **compacted**: their par slots walk the *served* index contiguously
+(CAD 44–87, JPY 132–152 then 109–131) with no gaps at all. Both patterns are the
+same mechanism in two different cache states, and `cache.get`'s span grouping is
+what produces them:
+
+`get` groups tags by identical missing span. On a **cold** cache all 187
+requested vol tags share one span and chunk at 44 into requested 0–43, 44–87, …,
+so a victim sees the *request* grid with its dead 4Y/12Y slots preserved — event
+A, USD. Once the 153 real tags are banked, the 34 never-banked 4Y/12Y tags have
+`coverage() is None` and form their **own** span group, leaving a 153-tag group
+that chunks into **served** 0–43 / 44–87 / 88–131 / 132–152. That last chunk is
+ragged, 21 wide — and JPY's slots 21–43 are empty for event B, exactly as a
+21-wide chunk predicts. CAD took chunk 1; JPY event C took chunk 2 at column
+position (par slot 21 ← served 88+21 = 109).
+
+All three carry **USD** vol, which is why no per-currency explanation works.
+
+### It was at least 18 separate events, not one
+
+Poisoned-date sets are bit-identical within an event and distinct between them:
+
+- **A** — 2,600 days, 2015-10-08 … 2026-07-29: USD_SOFR, 36 tags, request grid 0–43.
+- **B** — 937 days, 2015-10-08 … 2019-07-16: CAD_CORRA 44 tags (served 44–87) *and* JPY 21 tags (served 132–152), on the *same* 937 dates.
+- **C** — 518 days, 2015-10-08 … 2017-11-08: JPY 23 tags, served 109–131.
+- **plus 15 more** in the MI01 bond families (below).
+
+Every one of the 124 daily tags has exactly one donor; none has two. The same
+donor node serves two different bonds with different day counts, which a single
+merged region cannot do — so these are independent recurrences of one defect, not
+one catastrophic run.
 
 ## What was ruled out
 
-- **A positional `zip` in Python.** Falsified. Every `zip(`, `dict(zip(`,
-  `.columns =` and `.write(` site was searched; nothing renames a vol series to a
-  par tag, and the 8 gaps disprove compaction.
+- **A positional `zip` in Python.** Falsified, and by exhaustion rather than by
+  the gap argument alone — the gaps only speak for USD. Across 3,131 worktree
+  `.py` files there are exactly **3** production `cache.write` sites and **8**
+  `cache.get` fetcher sites, and every one keys the tag from a dict's `.items()`
+  or delegates the tag list verbatim to the wire. Extended to all 90 top-level
+  directories of `clee`, every branch, deletion and stash, 54 checkouts'
+  uncommitted diffs, and the entire 48,906-line IPython history spanning the
+  cache's whole life: **zero** occurrences of `ois_par_grid`, `cube_tags`,
+  `cache.write(` or any `RATES.OIS.*.PAR.` literal. There is no such code.
 - **A stale or wrong-anchor block read on its own.** `_column_for_tag` matches by
   header text with three textual fallbacks and no positional one, so a foreign
   block's headers produce "no column" failures — loud, not silent.
@@ -90,13 +124,43 @@ is why a per-currency explanation cannot be right.
   on every write. The 2026-08-24 15:46 stamps on all 44 tags were a live VS Code
   Jupyter kernel doing an ordinary tail refresh.
 
-**Not established:** *which historical run* delivered it. The mechanism is proven
-and reproducible; the vehicle is ranked (`harvest_curve_modes.fetch_and_bank` for
-the deep history, `citivelo_swaption_vol_warm.fetch` as the vol side) but the
-wire-level overlap was never observed live, because driving Excel over COM is a
-measured hazard in this repo and was out of budget. Confirming it live would mean
-forcing a `CVTSHIST` timeout, writing the next chunk 38 rows below, and dumping
-`_extent(anchor).Value`.
+### Reproduced end to end, on pinned code
+
+Not just at the parser. A 17-day PAR request driven through the real
+`fetch_timeseries → parse_tshist_block → cache.get` chain, on a `git archive` of
+the **pre-fix** commit, banked 2,709 rows reaching back to 2015-10-08 and
+poisoned exactly 36 of 44 tenors — and **92,820 of 92,820 values are bitwise
+identical float64 to the pre-repair production parquets** on their own poisoned
+days, with the 8 clean tenors exactly right. The identical script on the fixed
+code writes 17 rows per tag, the requested window, zero poisoned tenors.
+
+Each guard was then shown to stop it *independently*: the parser returns
+`foreign_rows=2710` and a 17-row series; `cache.write` refuses the vol series
+under a par tag; `cache.get` refuses the unrequested key. No COM, temp cache only.
+
+**Refuted along the way — the block ordering first written in commit `da132c54`.**
+"Vol block first, par planted second" does **not** produce it: `CurrentRegion`
+floods *upward* as well as down, so the first `Date` header found is the vol
+block's and all 44 par tags come back "no column" — loud, not silent. The order
+must be par block first with the older block's rows continuing below it, which is
+the layout the window guard models.
+
+**Not established:** *which historical run* delivered it, and by which of the
+overlap routes. The mechanism is proven and reproducible from the point the
+client reads a merged region; what was never observed live is the sheet event
+that creates one, because driving Excel over COM is a measured hazard here and
+was out of budget. The remaining live check is small and specific: write a tall
+`CVTSHIST` at an anchor, let it settle, re-issue a short one at the *same* anchor
+and see whether the add-in republishes `CvFunction_<row>_<col>` exactly or leaves
+it stale — if it always republishes, `_extent` never falls back to
+`CurrentRegion` at a reused anchor and the merged region must arise another way.
+
+A separate exhaustive negative supports the mechanism by elimination: across
+3,131 worktree `.py` files (3 production `cache.write` sites, 8 `cache.get`
+fetcher sites, all dict-keyed), all 90 top-level directories of `clee`, every
+branch, deletion and stash, 54 checkouts' uncommitted diffs, and the **entire
+48,906-line IPython history spanning the cache's whole life** — there is **no**
+Python code anywhere that pairs a par tag list with vol values.
 
 ## The fix
 
@@ -148,7 +212,8 @@ clothes. The donor is *searched for*, not assumed, and must explain ≥90% of th
 out-of-band rows; one was identified for all 124 tags, and the map recovered is
 the expected one.
 
-Applied to `DAILY`/`CLOSE`: **166,419 rows removed across 124 tags.**
+Applied to `DAILY`/`CLOSE`: **166,419 rows removed across 124 tags** — plus
+117,509 more in `MI01` and 8 isolated ticks, for **283,936 across 186 tags**.
 
 Rows are **deleted, not rebuilt**. The clean par rate is recomputable from the
 CurveStore's discount factors, but it is a derived number ~0.2bp off the quoted
@@ -185,29 +250,64 @@ the nightly. The sidecars were rewritten to match (`n_rows`, `first`, `last`);
 `first`/`last` were in fact unchanged, so the nightly's `_sidecar_last` was never
 reading a wrong date.
 
-## The rest of the cache
+## The rest of the cache — and the part that also had to be repaired
 
 16,678 parquets (14,535 `DAILY`/`CLOSE`, 1,850 `MI01`, 293 `HOURLY`),
-~144.9M rows. `MI01` and `HOURLY` were swept with the same tool and the same
-donor search: **no foreign rows**. The three OIS PAR families above are the whole
-of this defect.
+~144.9M rows.
 
-**One unrelated finding, reported not repaired.** 58 `MI01` `RATES.BOND.*`
-YIELD/PRICE tags carry exact-midnight rows with impossible values — e.g.
-`US91282CHT18.YIELD` maxes at 146.99% with 2,687 midnight rows, against a
-non-midnight range that is ordinary. These are **not** this defect: an exhaustive
-donor search over every tag in the cache found **no** match to the swaption vol
-family, to the tag's own PRICE sibling, or to its own DAILY series. Two facts are
-solid — the values are impossible, and 100% of them are 00:00:00-stamped, which
-contradicts `cache.py`'s "daily and intraday are never mixed". The source is
-unidentified and it deserves its own investigation. It was not repaired, because
-without an identified donor the tier-2 criterion cannot run and a band-only
-deletion would be a guess.
+**`MI01` is NOT clean, and an earlier draft of this note said it was.** 57
+`MI01` `RATES.BOND.*` PRICE/YIELD tags carry the same USD ATM swaption vol, on
+exact-midnight rows, reaching **2026-08-20/21** — much more recent than the daily
+damage. **117,509 further rows, 57 tags, now repaired.**
 
-**One genuinely isolated print:** `RATES.OIS.DKK_TNDKK.PAR.5Y` at
-2026-08-05 07:27 reads 17.7948 between neighbours of 2.46595 and 2.46300. A
-single-minute spike with no donor — a bad tick, not this defect. It sits inside
-the band and is left alone.
+Two things make this the sharpest illustration in the whole investigation:
+
+- **58% of those rows (68,239) are INSIDE any plausible band**, and every one of
+  the PRICE tags is *entirely* in-band — `out_of_band = 0` for all of them. A
+  value check finds **nothing** there. Only the donor match does. A bond price of
+  89.9 and a normal vol of 89.9bp are the same float.
+- **Each bond's PRICE and YIELD take ADJACENT vol nodes** — `CQE48.PRICE ← vol
+  3Y.1Y` and `CQE48.YIELD ← vol 3Y.2Y`, `CQG95.PRICE ← 3Y.5Y` and
+  `.YIELD ← 3Y.7Y`, and so on down the list. Adjacent columns in the victim block
+  take adjacent columns in the foreign one. That is the column-position signature
+  again, on a different family.
+
+It is also a **frequency** mix: 100% of the poisoned rows are `00:00:00`-stamped
+DAILY rows sitting in a minute-frequency key, which `cache.py`'s docstring says
+never happens ("daily and intraday ... are **never** mixed"). The blocks shared a
+worksheet, so a DAILY vol block could merge into an `MI01` region — which is why
+the repair tool searches for donors **across** frequencies. Searching only the
+victim's own frequency finds nothing and reports the tag clean, which is exactly
+the false negative that produced the earlier wrong claim.
+
+That makes the total **at least 18 separate poison events**: 3 daily and 15 more
+in the bond families, distinguished by bit-identical poisoned-date-set hashes and
+by donor runs starting at served indices 36, 72, 108 and 144.
+
+`HOURLY` was swept the same way and is clean.
+
+**8 isolated bad prints, also removed.** Five `RATES.BOND.*.YIELD` tags each held
+one or two impossible values with no donor at all — 1,460% and 1,463% on
+`US91282CQY02` against a 4.20% median, 10,040% on `CND10008R1W1` against 1.65%,
+-6.52% on `US9128284X55`. Bad ticks rather than this defect, but a yield that
+cannot be a yield does not get to stay just because its cause is different.
+
+**One left alone:** `RATES.OIS.DKK_TNDKK.PAR.5Y` at 2026-08-05 07:27 reads
+17.7948 between neighbours of 2.46595 and 2.46300. A single-minute spike, no
+donor, and inside the band — flagged here rather than deleted, because nothing
+about it is provably foreign.
+
+### Totals
+
+| | tags | rows removed |
+|---|---:|---:|
+| `DAILY` OIS PAR (3 currencies) | 124 | 166,419 |
+| `MI01` bond PRICE/YIELD | 57 | 117,509 |
+| `DAILY` bond YIELD, isolated ticks | 5 | 8 |
+| **total** | **186** | **283,936** |
+
+Re-run of the sweep after the repair: `DAILY`, `MI01` and `HOURLY` all report
+**no foreign rows**.
 
 ## Blast radius
 
