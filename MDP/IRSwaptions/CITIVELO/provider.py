@@ -359,13 +359,9 @@ def get_citivelo_vol_objects(
                 "citivelo vol: %d/%d date(s) served from the swaption cube store",
                 len(stored), len(wanted),
             )
-            # Only ask once the store has answered for something. A cold store
-            # answers for nothing, and there the Excel fallback is the whole
-            # point - `use_cube_store=False` and a hermetic test must both keep
-            # reaching it.
-            missing = [d for d in wanted if d not in stored]
-            if missing:
-                gap_dates = stored_gap_dates(ccy, missing, store=cube_store)
+        missing = [d for d in wanted if d not in stored]
+        if missing:
+            gap_dates = stored_gap_dates(ccy, missing, store=cube_store)
 
     skipped_gaps: List[dt.date] = []
 
