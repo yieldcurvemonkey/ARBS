@@ -388,9 +388,46 @@ attenuation would give: it means the studies could not have detected a real
 effect, not that a real effect would have shown up smaller. Both concluded the
 relationship does not reach the price, and both are still owed an honest test.
 
+## Test state
+
+`tests/test_citivelo_tagcache_poison.py` — 23 cases. Every guard was mutated out
+in turn and its tests confirmed red, each one **isolated**: two of them initially
+overlapped (a 2,700-row spill is cleared by the constant floor whether or not
+`_advance_past` runs), so the cases were split — a 12,000-row spill isolates
+`_advance_past`, an `_extent` that raises isolates the constant.
+
+Fast gate on the merged tree: **9,993 passed, 4 failed, 122 skipped**, 39m06s.
+All four are accounted for and none is this branch's:
+
+| failure | verdict |
+|---|---|
+| `test_a_batch_of_matured_bonds_…` | **was mine** — fixture fed a price to a YIELD tag; fixed, file passes 8/8 |
+| `test_fixings_kwargs_resolve_once_per_wrapper` | the known flake; passes in isolation, verified |
+| `…default_base_dir_is_repo_root_relative` | pre-existing — verified failing on unmodified code in another worktree |
+| `test_252_dates_200_tenors_under_5s` | a 5s budget measured under my own concurrent jobs; passes alone, verified |
+
+The gate caught **three** fixtures that fed convenience sentinels to tags whose
+units now matter — a 39% par rate, a 111% par rate and a 100% bond yield. In each
+case the guard was right and the fixture was fixed, never the other way round.
+
 ## Operational note
 
-The fix is on a branch. Until it merges and long-lived processes restart, the
-repaired data can be re-poisoned: the nightly par refresh runs from the primary
-checkout, and the VS Code Jupyter kernel that wrote at 15:46 today is still
-running the old code in memory. **Merge, then restart that kernel.**
+**The nightly still works.** The repair rewrote 186 sidecars, and
+`citivelo_daily_par_refresh._sidecar_last` reads the sidecar rather than the
+parquet — its docstring calls it authoritative — so this was worth checking
+rather than assuming. All five curves plan `refresh` from 2026-08-14, a 10-day
+span, with no tag reporting "never banked" and no 21-year re-request:
+
+```
+USD-SOFR-1D       tags=44  sidecar-None=0  banked_to=2026-08-21  refresh  span=10d
+CAD-CORRA-1D      tags=44  sidecar-None=0  banked_to=2026-08-21  refresh  span=10d
+JPY-TONAR-1D-LCH  tags=44  sidecar-None=0  banked_to=2026-08-21  refresh  span=10d
+EUR-ESTR-1D       tags=44  sidecar-None=0  banked_to=2026-08-21  refresh  span=10d
+GBP-SONIA-1D      tags=44  sidecar-None=0  banked_to=2026-08-21  refresh  span=10d
+```
+
+**But the fix is on a branch, and the repaired data can be re-poisoned until it
+lands.** The nightly par refresh runs from the primary checkout, and the VS Code
+Jupyter kernel that wrote at 15:46 today is still holding the old code in memory.
+**Merge, then restart that kernel.** Nothing else needs doing — the interior
+holes are the only lasting cost, and only a deep re-harvest fills those.
