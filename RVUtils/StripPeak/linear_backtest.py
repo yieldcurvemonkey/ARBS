@@ -128,6 +128,134 @@ def backtest_butterfly(
     return pd.DataFrame(records)
 
 
+def backtest_spread_rolling(
+    rates_wide: pd.DataFrame,
+    active: pd.DataFrame,
+    peak_df: pd.DataFrame,
+    hold_days: int = 21,
+    cost_bp: float = 2.0,
+    require_interior: bool = True,
+) -> pd.DataFrame:
+    """Rolling-contract spread backtest: sell peak, buy peak+1.
+
+    Unlike ``backtest_spread`` (which uses positional indexing into a fixed strip),
+    this version looks up the actual contract symbols from ``active`` and prices
+    each leg from ``rates_wide``. Handles contract transitions across the hold period.
+    """
+    dates = list(peak_df.index)
+    records = []
+
+    for i, (date, row) in enumerate(peak_df.iterrows()):
+        if require_interior and not row["is_interior"]:
+            continue
+        peak_idx = int(row["peak_idx"])
+        n_slots = len(active.columns)
+        if peak_idx >= n_slots - 1:
+            continue
+
+        exit_i = i + hold_days
+        if exit_i >= len(dates):
+            continue
+        exit_date = dates[exit_i]
+
+        peak_sym = active.at[date, f"slot_{peak_idx}"]
+        next_sym = active.at[date, f"slot_{peak_idx + 1}"]
+
+        if peak_sym is None or next_sym is None:
+            continue
+        if peak_sym not in rates_wide.columns or next_sym not in rates_wide.columns:
+            continue
+
+        entry_peak = rates_wide.at[date, peak_sym]
+        entry_next = rates_wide.at[date, next_sym]
+        if pd.isna(entry_peak) or pd.isna(entry_next):
+            continue
+
+        # at exit: use the SAME contract symbols (not the exit date's active set)
+        exit_peak = rates_wide.at[exit_date, peak_sym] if exit_date in rates_wide.index else np.nan
+        exit_next = rates_wide.at[exit_date, next_sym] if exit_date in rates_wide.index else np.nan
+        if pd.isna(exit_peak) or pd.isna(exit_next):
+            continue
+
+        pnl = (entry_peak - exit_peak) + (exit_next - entry_next)
+        pnl_bp = pnl * 100 - cost_bp
+
+        records.append({
+            "entry_date": date,
+            "exit_date": exit_date,
+            "peak_contract": peak_sym,
+            "next_contract": next_sym,
+            "entry_spread_bp": (entry_peak - entry_next) * 100,
+            "exit_spread_bp": (exit_peak - exit_next) * 100,
+            "pnl_bp": pnl_bp,
+            "prominence": row["prominence"],
+        })
+
+    return pd.DataFrame(records)
+
+
+def backtest_butterfly_rolling(
+    rates_wide: pd.DataFrame,
+    active: pd.DataFrame,
+    peak_df: pd.DataFrame,
+    hold_days: int = 21,
+    cost_bp: float = 4.0,
+    require_interior: bool = True,
+) -> pd.DataFrame:
+    """Rolling-contract butterfly backtest: buy peak-1, sell 2x peak, buy peak+1."""
+    dates = list(peak_df.index)
+    records = []
+
+    for i, (date, row) in enumerate(peak_df.iterrows()):
+        if require_interior and not row["is_interior"]:
+            continue
+        peak_idx = int(row["peak_idx"])
+        n_slots = len(active.columns)
+        if peak_idx == 0 or peak_idx >= n_slots - 1:
+            continue
+
+        exit_i = i + hold_days
+        if exit_i >= len(dates):
+            continue
+        exit_date = dates[exit_i]
+
+        prev_sym = active.at[date, f"slot_{peak_idx - 1}"]
+        peak_sym = active.at[date, f"slot_{peak_idx}"]
+        next_sym = active.at[date, f"slot_{peak_idx + 1}"]
+
+        if any(s is None for s in [prev_sym, peak_sym, next_sym]):
+            continue
+        if any(s not in rates_wide.columns for s in [prev_sym, peak_sym, next_sym]):
+            continue
+
+        entry_vals = [rates_wide.at[date, s] for s in [prev_sym, peak_sym, next_sym]]
+        if any(pd.isna(v) for v in entry_vals):
+            continue
+
+        exit_vals = []
+        for s in [prev_sym, peak_sym, next_sym]:
+            v = rates_wide.at[exit_date, s] if exit_date in rates_wide.index else np.nan
+            exit_vals.append(v)
+        if any(pd.isna(v) for v in exit_vals):
+            continue
+
+        entry_fly = 2 * entry_vals[1] - entry_vals[0] - entry_vals[2]
+        exit_fly = 2 * exit_vals[1] - exit_vals[0] - exit_vals[2]
+        pnl = (entry_fly - exit_fly) * 100 - cost_bp
+
+        records.append({
+            "entry_date": date,
+            "exit_date": exit_date,
+            "peak_contract": peak_sym,
+            "entry_fly_bp": entry_fly * 100,
+            "exit_fly_bp": exit_fly * 100,
+            "pnl_bp": pnl,
+            "prominence": row["prominence"],
+        })
+
+    return pd.DataFrame(records)
+
+
 def summary_stats(bt_df: pd.DataFrame) -> dict:
     """Compute summary statistics for a backtest result DataFrame."""
     if bt_df.empty:
