@@ -38,22 +38,30 @@
 # 4. **What does survive twenty-one years is +2 weeks, and it is small.** In
 #    weekly changes the argmax is **+2w, r 0.122**, at **p 0.0009** — which is
 #    the resolution floor of an exact 1,079-rotation test, i.e. **no rotation of
-#    the series reproduced it** — with a **one-lag plateau**, the tightest in
-#    either study. Era-adjusted scores give the same **+2w** (r 0.1029, also at
+#    the series reproduced it** — with a **one-lag paired plateau**, the tightest
+#    in either study. (The plateau is not the same statement as a point estimate:
+#    the block-bootstrap argmax interval is **[+2, +7]**, so the peak's *location*
+#    is pinned only to within about five weeks.) Era-adjusted scores give the same **+2w** (r 0.1029, also at
 #    the floor). At five weeks the correlation is **−0.0053**. The test behind
 #    that p is calibrated **at this sample's length**, not study 1's: 1
-#    rejection in 40 at a nominal 5% = **2.5%**, so the null is conservative
-#    here. It survives Bonferroni across this notebook's six primary cells
+#    rejection in 40 at a nominal 5% = **2.5%**, whose Wilson interval is
+#    [0.4%, 12.9%] -- consistent with nominal and with mildly inflated, so it
+#    licenses "not obviously broken" and not "conservative". It survives
+#    Bonferroni across this notebook's six primary cells
 #    (**0.0056**), and a Wednesday week anchor moves the spike only to **+1w**
 #    (r 0.093, also at the floor) — inside the "one to two weeks" this is
 #    described as.
 # 5. **Net of the pipeline's own offset, that is about one week.** G6 re-run at
 #    FedLock's 2.52 speeches/week returns a zero-lead argmax of **+1w** in
-#    changes. So +2w measured − ~1w filter ≈ **one week of genuine lag** — a
-#    speech-writing lag, not a forecastable lead. The Fed talks about last
-#    week's data.
+#    changes. So +2w measured − ~1w filter ≈ **one week** on a Friday anchor and
+#    **zero** on a Wednesday one: indistinguishable from contemporaneous once the
+#    pipeline's own offset is removed. A drafting lag is the obvious mechanism,
+#    but what was measured is a correlation argmax, not a mechanism — the
+#    supportable claim is "no forecastable lead", not "the Fed talks about last
+#    week's data".
 # 6. **The stable relationship is the one that has faded.** The +2w link is
-#    positive in **85%** of 3-year rolling windows and ran ~+0.20 through
+#    positive in **85%** of 3-year rolling windows, with a median of **+0.135**
+#    over the whole span and yearly means in the 0.11-0.21 band through
 #    2010–2022 — but reads **−0.09 in 2025 and −0.05 in 2026**. The
 #    historically robust effect is currently absent; the currently strong one is
 #    historically absent. They are mirror images.
@@ -65,7 +73,9 @@
 #    p 0.004)**. That second one is the block containing study 1's window, and
 #    it peaks at **+13w in changes as well as levels** — so study 1's horizon is
 #    a real feature of that era specifically, not of the twenty-one years. The
-#    +2w result needs the pooled sample to be visible at all.
+#    +2w peak itself recurs in **two disjoint blocks** (2009-2013 and 2017-2021,
+#    both argmax +2w, r 0.170 and 0.200) without reaching significance in either
+#    -- consistent with a small effect that only the pooled sample can resolve.
 # 8. **Cross-model agreement is moderate, not high.** On the 372 speeches both
 #    corpora scored: **r 0.656** (Spearman 0.620) at the speech level and
 #    **0.677** at the index level — about **43% shared variance**. Two systems
@@ -75,9 +85,12 @@
 # 9. **Changing the judge moves the whole history at once.** V2 (Gemini 2.0
 #    Flash) → V3 (Llama 3.3 70B): mean |move| **3.545 points = 51% of one
 #    standard deviation**, p90 7.36, max 17.08, Spearman **0.828** — which ties
-#    out to FedLock's own published ρ = 0.82. The first study's JPM revision was
-#    39% of a standard deviation; this is worse, and unlike a vintage it cannot
-#    be gated, because it is not a vintage — it is a different model.
+#    out to FedLock's own published ρ = 0.82. Study 1's JPM revision was 39% of a
+#    standard deviation, but that was measured on the weekly INDEX (~46 speeches
+#    averaged) while this is per SPEECH, so the two are not like-for-like and
+#    neither is "worse" than the other on this evidence. The difference that does
+#    hold: a JPM revision is a vintage and can be gated; a judge swap is not, and
+#    cannot.
 # 10. **This dataset can never be point-in-time**, through three separate
 #    channels: one global `builtOn` stamp with no row-level date; TrueSkill
 #    fitting every rating jointly against speeches from the whole corpus,
@@ -95,9 +108,12 @@
 #    63.49 — while the surprise composite reads −0.373.
 #
 # **Verdict.** The five-week lead is not there. The eleven-to-thirteen week lead
-# is real in 2023–2026 and in no other three-year window in two decades — the
-# first study caught it at its maximum, which is why two independent models
-# agreed on it. What twenty-one years actually contains is a **one-to-two week
+# is strongest in 2023–2026 by a wide margin — it is where the 3-year rolling
+# correlation peaks, and the first study caught it there, which is why two
+# independent models agreed on it. It is not unique to that window: the
+# 2017-2021 block also peaks at +13w. What it is not is a property of the
+# twenty-one years, and no levels p-value here settles it either way, because
+# that null rejects 12-20% of the time on nothing. What twenty-one years actually contains is a **one-to-two week
 # response lag with r ≈ 0.12**: Fedspeak reacting to data on the timetable you
 # would expect from how speeches get written. That has faded to zero over the
 # last two years, explains 1.5% of the variance when it is present, and never
@@ -250,8 +266,11 @@ JH = SP[(SP["date"] >= "2022-08-24") & (SP["date"] <= "2022-08-28")]
 print(f"\npublished example: Powell's Aug-2022 Jackson Hole scores 78")
 print(f"  V3 gives m = {JH['m'].iloc[0]:.1f} (era-adjusted {JH['ma'].iloc[0]:.1f}). The 78 is a")
 print("  V2-era figure; FedLock's own methodology page warns its numbers predate V3.")
-print("\nSo the cross-section validates on the published construction and the")
-print("timeline reproduces exactly. The timeline is the series this study reads.")
+print("\nSo the cross-section MOSTLY validates on the published construction: the")
+print("four named ZIRP-era hawks land 1-4 and Evans lands 44/47, but Brainard is")
+print("middle rather than bottom-quartile and Raskin is untestable, and two of")
+print("FedLock's own roster labels invert. The TIMELINE reproduces exactly, and")
+print("the timeline is the series this study actually reads.")
 
 # %% [markdown]
 # ### How far the history moves when the judge changes
@@ -538,10 +557,15 @@ for tr in ("levels", "changes"):
           f"median {np.median(vals):+.1f}w  range {min(vals):+d}..{max(vals):+d}")
 off = int(np.median(offsets["changes"]))
 print(f"\nSo the changes result reads: measured {ch['argmax']:+d}w minus a filter offset")
-print(f"of {off:+d}w = about {ch['argmax'] - off} week of relationship. A speech is")
-print("drafted days ahead and delivered on a calendar fixed weeks ahead; a one-week")
-print("lag between data landing and Fedspeak reflecting it is what the mechanics of")
-print("speech-writing predict. It is a response time, not a forecastable lead.")
+print(f"of {off:+d}w = about {ch['argmax'] - off} week of relationship on a Friday anchor,")
+print(f"and 0 weeks on the Wednesday one, which peaked at +1w. The honest statement is")
+print("ZERO TO ONE week -- i.e. indistinguishable from contemporaneous once the")
+print("pipeline's own offset is removed, with the sign of any residual lag unresolved")
+print("at this resolution.")
+print("\nA drafting lag is the obvious MECHANISM -- speeches are written days ahead and")
+print("scheduled weeks ahead -- but this notebook measures a correlation argmax, not a")
+print("mechanism. A shared weekly sampling artefact would look the same, and caveat 3")
+print("says so. Read it as 'no forecastable lead', which is what was tested.")
 
 # %% [markdown]
 # ## 5. Why the first study saw thirteen weeks
@@ -691,8 +715,10 @@ print("peak was 2026-07-10, since when this index has gone from 54.97 to 59.66."
 # %% [markdown]
 # ## 8. Does it reach the price?
 #
-# The first study could only test this over 168 weeks, leaving an effective n of
-# 12-42 after HAC. Twenty-one years leaves 86-281.
+# Study 1 already ran this on the full 2005+ sample for the *surprise composite*
+# -- that is not new here. What is new is the same test on a **sentiment** series
+# over twenty-one years: study 1's sentiment leg had 168 weeks and an effective n
+# of 12-42 after HAC, against 86-281 here.
 
 # %%
 R2Y = D.read_cached_rate(D.TAG_SOFR_2Y)

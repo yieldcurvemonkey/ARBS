@@ -267,8 +267,16 @@ def known_answer_speaker_ranking(
     ranks = {name: i + 1 for i, name in enumerate(g.index)}
 
     def _rank(surname: str) -> Optional[int]:
+        """Match on a whole NAME TOKEN, never a substring.
+
+        ``"Schmid" in "Susan Schmidt Bies"`` is true, and it would silently
+        resolve one of FedLock's named hawks to a different speaker -- which
+        would move the pair-separation statistic that licenses using this series
+        at all. Tokenising the full name closes it.
+        """
+        target = surname.lower()
         for full, r in ranks.items():
-            if surname.lower() in str(full).lower():
+            if target in [tok.lower().strip(".,") for tok in str(full).split()]:
                 return r
         return None
 
@@ -316,9 +324,18 @@ def compare_vintages(v2: pd.DataFrame, v3: pd.DataFrame) -> Dict[str, object]:
     at once, and every historical score moves together.
     """
     key = ["date", "speaker", "title"]
-    have = [k for k in key if k in v2.columns and k in v3.columns]
-    m = v2[have + ["m", "ma"]].merge(v3[have + ["m", "ma"]], on=have, how="inner",
-                                     suffixes=("_v2", "_v3"))
+    missing = [k for k in key if k not in v2.columns or k not in v3.columns]
+    # Falling back to a shorter key is not a graceful degradation here: a speaker
+    # with two speeches on one day would CROSS-JOIN, pairing V2's score for one
+    # against V3's score for the other, and this merge is the sole input to the
+    # 51%-of-a-standard-deviation headline. Refuse instead.
+    assert not missing, (
+        f"compare_vintages needs {key}; missing {missing} from one of the "
+        f"snapshots. A shorter key cross-joins same-day speeches and would "
+        f"inflate the measured move."
+    )
+    m = v2[key + ["m", "ma"]].merge(v3[key + ["m", "ma"]], on=key, how="inner",
+                                    suffixes=("_v2", "_v3"))
     if len(m) < 50:
         return {"matched": int(len(m)), "note": "too few matches to compare"}
     out: Dict[str, object] = {"matched": int(len(m)), "n_v2": int(len(v2)),
