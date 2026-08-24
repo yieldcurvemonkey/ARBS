@@ -39,7 +39,12 @@
 #    weekly changes the argmax is **+2w, r 0.122, p 0.0027** — exact over 1,105
 #    rotations — with a **one-lag plateau**, the tightest in either study.
 #    Era-adjusted scores give the same **+2w** (r 0.1029, p 0.0027). At five
-#    weeks the correlation is **−0.005**.
+#    weeks the correlation is **−0.0053**. The test behind that p is calibrated
+#    **at this sample's length**, not study 1's: 1 rejection in 40 at a nominal
+#    5% = **2.5%**, so the null is conservative here rather than inflated. It
+#    also survives Bonferroni across this notebook's six primary cells
+#    (**0.0163**), and a Wednesday week anchor moves the spike only to **+1w**
+#    (r 0.093, p 0.0018) — inside the "one to two weeks" this is described as.
 # 5. **Net of the pipeline's own offset, that is about one week.** G6 re-run at
 #    FedLock's 2.52 speeches/week returns a zero-lead argmax of **+1w** in
 #    changes. So +2w measured − ~1w filter ≈ **one week of genuine lag** — a
@@ -55,8 +60,10 @@
 #    The +2w result needs the pooled sample to be visible at all.
 # 8. **Cross-model agreement is moderate, not high.** On the 372 speeches both
 #    corpora scored: **r 0.656** (Spearman 0.620) at the speech level and
-#    **0.677** at the index level. "Fed sentiment" is roughly two-thirds a
-#    property of the Fed and one-third a property of the model reading it.
+#    **0.677** at the index level — about **43% shared variance**. Two systems
+#    that both claim to measure "how hawkish was this speech" agree on well under
+#    half of it, so a lead measured on either is materially a property of the
+#    model as well as of the Fed.
 # 9. **Changing the judge moves the whole history at once.** V2 (Gemini 2.0
 #    Flash) → V3 (Llama 3.3 70B): mean |move| **3.545 points = 51% of one
 #    standard deviation**, p90 7.36, max 17.08, Spearman **0.828** — which ties
@@ -287,8 +294,11 @@ for c, label in (("m", "raw"), ("ma", "era-adjusted")):
     d = CM[f"speech_level_{c}"]
     print(f"  FedLock {label:12s} vs JPM hawk_dove_score: "
           f"pearson {d['pearson']:.3f}  spearman {d['spearman']:.3f}")
-print("\nAbout two-thirds. Not the near-identity a reader might assume from two")
-print("systems that both claim to measure 'how hawkish was this speech'.")
+_r = CM["speech_level_m"]["pearson"]
+print(f"\nr = {_r:.3f} is {_r**2:.0%} shared variance -- well under half. Not the")
+print("near-identity a reader might assume from two systems that both claim to")
+print("measure 'how hawkish was this speech'. Whatever either one measures, a")
+print("majority of its variation is not shared with the other.")
 
 # %% [markdown]
 # ## 3. The series
@@ -434,6 +444,57 @@ print("The significant result is at TWO weeks, with a one-lag plateau, and it is
 print("the only cell in either study whose peak the bootstrap can actually pin.")
 
 # %% [markdown]
+# ### The null's size at THIS sample's length
+#
+# The +2w result is the only significant headline in either study, so the test
+# behind it has to be calibrated at the length it actually runs on. Study 1
+# measured the shift null's size at n = 170 weeks; this sample is 1,133, with
+# 1,105 rotations rather than 189, and the splice artefact that rotation
+# introduces does not have to scale the same way. So it is re-measured here
+# rather than inherited.
+
+# %%
+SIZE = D.measure_null_size(CFG, transform="changes", which="shift",
+                           n_weeks=len(SAMPLES["raw"]), trials=40, draws=1200,
+                           seed=2000)
+print(f"shift null on changes at n = {len(SAMPLES['raw'])} weeks: "
+      f"{SIZE['rejected']}/{SIZE['trials']} rejections at a nominal 5% = "
+      f"{SIZE['size']:.1%}  [Wilson {SIZE['wilson_lo']:.1%}, {SIZE['wilson_hi']:.1%}]")
+_p2 = RES[("raw", "changes")]["p_shift"]
+print(f"\nthe +2w p-value is {_p2:.4f}. Against six primary cells (2 score columns x")
+print(f"3 transforms) a Bonferroni correction gives {min(1.0, _p2 * 6):.4f}, so it")
+print("survives paying for the search across this notebook's own grid.")
+print("It does NOT survive being treated as the winner of a search over every")
+print("lag AND transform AND sample split in both studies -- but it was not")
+print("selected that way: it is the cell the estimator was pointed at, on the")
+print("transform study 1 had already committed to before this data existed.")
+
+# %% [markdown]
+# ### Does the +2w spike depend on which day the week ends?
+#
+# A single-lag spike under Friday-ending weeks deserves one check against a
+# different anchor. The study's wording is "one to two weeks", so +1 or +3 under
+# a Wednesday anchor is a pass; a jump to +8 would not be.
+
+# %%
+_c2 = D.LeadConfig(week_anchor="W-WED")
+_x2 = D.weekly_last(COMPOSITE, _c2.week_anchor)
+_g2 = D.weekly_grid("2004-01-02", COMPOSITE.dropna().index.max(), _c2.week_anchor)
+_y2 = D.sentiment_index(BOOKS["raw"], _g2, _c2, point_in_time=False)["sentiment"]
+_j2 = pd.concat([_x2.rename("x"), _y2.rename("y")], axis=1).dropna()
+_xt, _yt, _ = D.transform_pair(_j2["x"], _j2["y"], "changes")
+_Xm, _Ym, _ = D.lag_matrix(_xt, _yt, LAGS)
+_cc = D.lag_curve_common(_Xm, _Ym, LAGS)
+_k = int(np.nanargmax(_cc["corr"].to_numpy()))
+_nl = D.shift_null(_j2["x"], _j2["y"], LAGS, CFG, transform="changes", draws=1400,
+                   rng=np.random.default_rng(63))
+print(f"W-WED anchor, changes: n={len(_Ym)} argmax "
+      f"{int(_cc['lag_weeks'].iloc[_k]):+d}w  r {_cc['corr'].iloc[_k]:.3f}  "
+      f"p {D.surrogate_pvalue(float(_cc['corr'].iloc[_k]), _nl):.4f}")
+print(f"W-FRI anchor, changes: argmax {ch['argmax']:+d}w  r {ch['corr']:.3f}  "
+      f"p {ch['p_shift']:.4f}")
+
+# %% [markdown]
 # ### G6 — the pipeline's own offset, re-measured at this corpus's density
 #
 # The first study found that a backward EWMA manufactures ~3 weeks of apparent
@@ -475,7 +536,10 @@ print("speech-writing predict. It is a response time, not a forecastable lead.")
 # %%
 BRIDGE = []
 sub = SAMPLES["raw"][SAMPLES["raw"].index >= pd.Timestamp(CFG.corpus_start)]
-for tr, s1 in (("levels", "+13w, r 0.737, p 0.096"), ("changes", "+13w, r 0.153, p 0.568")):
+# FedLock is as-published by construction, so the strictly like-for-like row
+# from study 1 is its AS-PUBLISHED same-window panel, not only its PIT one.
+for tr, s1 in (("levels", "PIT +13w r 0.737 p 0.096 | as-pub +12w r 0.652 p 0.089"),
+               ("changes", "PIT +13w r 0.153 p 0.568 | as-pub  +0w r 0.104 p 0.986")):
     xt, yt, _ = D.transform_pair(sub["x"], sub["y"], tr)
     Xm, Ym, _ = D.lag_matrix(xt, yt, LAGS)
     cc = D.lag_curve_common(Xm, Ym, LAGS)
@@ -499,9 +563,11 @@ print(f"\nindex-level agreement over {len(BOTH)} weeks: "
       f"pearson {BOTH.corr().iloc[0,1]:.4f}, "
       f"spearman {BOTH.corr(method='spearman').iloc[0,1]:.4f} "
       f"(speech level was {CM['speech_level_m']['pearson']:.3f})")
-print("\nSo the models AGREE. On that window, two unrelated scoring systems both")
-print("put the peak at +11-13w with r ~0.74 and p ~0.09. The first study's number")
-print("was not an artefact of JPM's model. It is an artefact of the WINDOW.")
+print("\nSo the models AGREE. On that window, two unrelated scoring systems put the")
+print("peak at +11-13w with p ~0.08-0.10; against study 1's as-published panel --")
+print("the like-for-like vintage, since FedLock has no other -- FedLock is if")
+print("anything the STRONGER of the two (r 0.744 vs 0.652). The first study's")
+print("number was not an artefact of JPM's model. It is an artefact of the WINDOW.")
 
 # %% [markdown]
 # ### Which window? The most favourable one in two decades.

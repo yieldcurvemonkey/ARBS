@@ -12,8 +12,16 @@ to appear verbatim in some executed cell's text output. It runs as part of
 zero-unrun checks.
 
 Figures that legitimately come from elsewhere are whitelisted with a reason --
-JWS's own numbers, quoted from the note under test, and the existing intraday
-speaker backtest's economics, which this notebook cites but does not recompute.
+the first study's published results, quoted here for comparison, and FedLock's
+own methodology figures.
+
+**This is a drift tripwire, not a proof.** Two known limits, both deliberate.
+Matching is by substring against the concatenated cell output, so a prose figure
+can be satisfied by coincidental digits elsewhere in the notebook. And a
+whitelist token SHADOWS any figure it is a substring of -- whitelisting "0.005"
+would silently exempt "-0.005" from checking. Keep whitelist tokens long and
+specific, and quote prose figures at the precision the cells print rather than
+rounding, which is what makes the substring unique.
 
 Usage::
 
@@ -45,8 +53,8 @@ WHITELIST = {
     "0.096": "study 1, JPM levels p",
     "0.153": "study 1, JPM changes r",
     "0.568": "study 1, JPM changes p",
-    "0.005": "study 1, as-published p floor",
     "2.65": "study 1, JPM mean revision in points",
+    "0.0053": "study 1, as-published p floor is 0.005 -- kept distinct on purpose",
     "147": "study 1, sample weeks",
     "189": "study 1, rotation count",
     # FedLock's own published figures, quoted from its methodology page
