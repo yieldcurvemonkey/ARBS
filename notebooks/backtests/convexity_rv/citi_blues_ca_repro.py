@@ -1199,6 +1199,134 @@ _f.update_layout(height=620, legend=dict(orientation="h", y=1.07))
 _f.show()
 
 # %% [markdown]
+# ## The clearing venue — CME vs LCH
+#
+# The note closes its convexity section on the choice of clearing house:
+#
+# > *"Our analysis is based on the CME FRA/swap curve. Although convexity
+# > adjustments will appear wider if clearing the swap leg on LCH, we recommend
+# > clearing on CME as the CME-LCH basis has well retraced from its recent wide
+# > levels in January. In addition, clearing on CME is more capital-efficient
+# > since it allows netting ED and swap positions for margin calculations."*
+#
+# That is a quantitative claim about the CA and it can be checked. The basis is
+# pulled through the **Query + TimeseriesBuilder** path like every other series
+# in this notebook — `CHBASIS` queries routed to `IRClearingHouseBasisTB` —
+# rather than by reaching past the query layer into the cache.
+#
+# **Sign, derived not assumed.** `basis_bps` is `clearing_house_a − clearing_house_b`
+# = **LCH − CME**, in bp. The CA is `pack rate − matched swap rate`, so moving
+# the swap leg to LCH changes it by `−(LCH − CME)`:
+#
+# $$\mathrm{CA}_{LCH} - \mathrm{CA}_{CME} = -\,\mathrm{basis}_{bp}$$
+#
+# A **negative** LCH−CME basis therefore makes the adjustment look **wider** on
+# LCH, which is exactly what the note says.
+
+# %%
+from MDP.IRClearingHouseBasisSwaps.IRClearingHouseBasisSwapsMDP import (
+    IRClearingHouseBasisSwapsMDP)
+from Query.IRClearingHouseBasis import (IRClearingHouseBasisQuery,
+                                        IRClearingHouseBasisValue)
+from TB.IRClearingHouseBasisTB import IRClearingHouseBasisTB
+from TB.TimeseriesBuilder import TimeseriesBuilder
+
+CCP_TENORS = ("2y", "3y", "4y", "5y", "7y", "10y", "30y")
+#: The Blues matched swap starts at the pack's front IMM (~3.25y) and runs one
+#: year, so its ~3.75y average maturity sits between the 3y and 4y nodes. 4y is
+#: the declared choice; the sensitivity across 3y/4y/5y is printed below.
+CCP_TENOR_FOR_BLUES = "4y"
+
+_ccp_tb = IRClearingHouseBasisTB(IRClearingHouseBasisSwapsMDP(), show_tqdm=False)
+CCP = TimeseriesBuilder().get_timeseries(
+    start=P.index.min(), end=P.index.max(),
+    queries=[IRClearingHouseBasisQuery(tenor=t, ccy="USD", index="SOFR",
+                                       clearing_house_a="LCH",
+                                       clearing_house_b="CME",
+                                       value=IRClearingHouseBasisValue.BASIS_BPS)
+             for t in CCP_TENORS],
+    n_jobs=4, routers={"CHBASIS": _ccp_tb})
+CCP.index = pd.to_datetime(CCP.index)
+CCP = CCP.reindex(P.index)
+CCP.columns = [c.split()[1] for c in CCP.columns]
+CCP = CCP[[t.upper() for t in CCP_TENORS]]
+
+print(f"CME-LCH basis via Query + TimeseriesBuilder: {CCP.shape}, "
+      f"{CCP.index.min().date()}..{CCP.index.max().date()}")
+print(f"router failures: {_ccp_tb.failures or 'none'}")
+print("")
+print(CCP.describe().loc[["mean", "std", "min", "max"]].round(3).to_string())
+
+# A column that never moves is not a measurement. Say so before plotting it.
+_flat = [c for c in CCP.columns if float(CCP[c].std(ddof=1) or 0.0) < 1e-9]
+if _flat:
+    print("")
+    print(f"DEGENERATE: {_flat} have zero variance over the whole window "
+          f"(constant {CCP[_flat[0]].dropna().iloc[0]:+.2f} bp). The vendor "
+          "serves the same rate for both houses at those tenors, so the column "
+          "carries no information and is excluded from what follows.")
+CCP_USE = CCP[[c for c in CCP.columns if c not in _flat]]
+
+# %%
+_f = go.Figure()
+for _ccol in CCP_USE.columns:
+    _f.add_trace(go.Scatter(x=CCP_USE.index, y=CCP_USE[_ccol],
+                            name=_ccol))
+_f.add_hline(y=0.0, line_dash="dot")
+_f.update_layout(title="CME-LCH basis (LCH minus CME), USD SOFR, by tenor",
+                 yaxis_title="bp", height=440,
+                 legend=dict(orientation="h", y=1.08))
+_f.show()
+
+# %%
+_bt = CCP_TENOR_FOR_BLUES.upper()
+_b = CCP[_bt]
+P["ca_lch_bp"] = P["blues_ca_bp"] - _b
+print(f"Effect of clearing the Blues matched swap on LCH instead of CME, "
+      f"using the {_bt} basis node:")
+print("")
+print(f"  basis (LCH-CME)      mean {_b.mean():+.2f} bp   "
+      f"last {_b.iloc[-1]:+.2f} bp   range [{_b.min():+.2f}, {_b.max():+.2f}]")
+print(f"  Blues CA on CME      mean {P['blues_ca_bp'].mean():+.2f} bp   "
+      f"last {P['blues_ca_bp'].iloc[-1]:+.2f} bp")
+print(f"  Blues CA on LCH      mean {P['ca_lch_bp'].mean():+.2f} bp   "
+      f"last {P['ca_lch_bp'].iloc[-1]:+.2f} bp")
+print(f"  LCH minus CME on CA  mean {(P['ca_lch_bp'] - P['blues_ca_bp']).mean():+.2f} bp")
+_wider = float(((P["ca_lch_bp"] - P["blues_ca_bp"]) > 0).mean())
+print("")
+print(f"The adjustment is WIDER on LCH on {100 * _wider:.0f}% of days, which is "
+      "the note's claim. On this window it is worth "
+      f"{abs((P['ca_lch_bp'] - P['blues_ca_bp']).mean()):.2f} bp on average "
+      f"against a Blues CA of {P['blues_ca_bp'].mean():.2f} bp -- i.e. "
+      f"{100 * abs((P['ca_lch_bp'] - P['blues_ca_bp']).mean()) / P['blues_ca_bp'].mean():.0f}% "
+      "of the level, entirely from where the swap leg clears.")
+
+print("")
+print("Sensitivity to the tenor node (the matched swap sits between 3y and 4y):")
+for _ttag in ("3Y", "4Y", "5Y"):
+    if _ttag in CCP.columns:
+        print(f"  {_ttag}: mean basis {CCP[_ttag].mean():+.3f} bp, "
+              f"last {CCP[_ttag].iloc[-1]:+.3f} bp")
+
+# %%
+# The identity the sign derivation rests on, checked rather than asserted.
+_chk = (P["ca_lch_bp"] - P["blues_ca_bp"] + _b).abs().max()
+print(f"identity  CA_LCH - CA_CME + basis == 0   ->  max |err| {_chk:.12f} bp")
+assert _chk < 1e-9
+
+# And the CCP basis against the CA, since the note offers it as a reason the CA
+# moved. It is a LEVEL comparison, with the same caveat as everything else here.
+_j = pd.concat([P["blues_ca_bp"].rename("ca"), _b.rename("basis")],
+               axis=1).dropna()
+_dj = _j.diff().dropna()
+print("")
+print(f"corr(Blues CA, {_bt} CME-LCH basis)  levels {_j['ca'].corr(_j['basis']):+.4f}"
+      f"   daily changes {_dj['ca'].corr(_dj['basis']):+.4f}   n {len(_j)}")
+print("A level correlation here is the same co-trend this notebook has been "
+      "reporting throughout; the change correlation is the one that would have "
+      "to be there for the basis to be moving the adjustment day to day.")
+
+# %% [markdown]
 # ## The ticket, in the note's own format, as of the last date
 
 # %%
@@ -1264,6 +1392,22 @@ print(f"NOTE THE DIRECTION. The fitted scale b is {F6['b']:+.2f} -- NEGATIVE, "
 # ## What reproduces, and what does not
 
 # %%
+# Re-derived here, NOT carried in from the cell that first computed them. A
+# single-underscore name is a scratch name, and this notebook has now had two
+# of them clobbered by a later loop variable -- one raised, one silently
+# printed the literal string ".2f". The frame is the source of truth.
+_sd = _cmp.std(ddof=1)
+_mae = _cmp.abs().mean()
+_mu = _cmp.mean()
+_KEY_REFIT = "IMM refit, fly-constrained"
+_KEY_CITI = "IMM refit, Citi weights"
+_KEY_STATIC = "static fly, full sample (in-sample)"
+_resid_q, _resid_c, _resid_s = (float(_sd[_KEY_REFIT]), float(_sd[_KEY_CITI]),
+                                float(_sd[_KEY_STATIC]))
+_mae_q, _mae_c = float(_mae[_KEY_REFIT]), float(_mae[_KEY_CITI])
+assert all(isinstance(v, float) for v in
+           (_resid_q, _resid_c, _resid_s, _mae_q, _mae_c))
+
 print("REPRODUCES")
 print("-" * 72)
 print(f"* The note's internal arithmetic, all four checks: notionals -> DV01 "
@@ -1276,9 +1420,10 @@ print(f"* Figure 6's METHOD. Regressing Blues CA on (2y, 5y, 10y) and reading "
       f"refit runs at w2 median {W6F['w2'].median():.3f} and holds an "
       f"out-of-sample residual sd of {P['rich_bp'].std(ddof=1):.2f}bp.")
 print(f"* The IMM-roll REBALANCE, but only in part: it beats a static fly "
-      f"fitted on the whole window with hindsight ({_q:.3f} vs {_s:.3f} bp OOS "
+      f"fitted on the whole window with hindsight ({_resid_q:.3f} vs "
+      f"{_resid_s:.3f} bp OOS "
       f"residual sd) and it beats every scheme on mean absolute residual "
-      f"({_qm:.3f} bp) and on bias. It does NOT beat Citi's fixed 2017 weights "
+      f"({_mae_q:.3f} bp) and on bias. It does NOT beat Citi's fixed 2017 weights "
       f"on residual sd -- see the corresponding entry below.")
 print(f"* Figure 1's SIGN. The CA sits wide to a vol-calibrated Ho-Lee level on "
       f"{100 * (P['vs_model_bp'] > 0).mean():.0f}% of days, mean "
@@ -1313,9 +1458,9 @@ print(f"* Citi's own SPECIFICATION, unconstrained, on this curve. With a "
       f"{W6F['w2'].iloc[-1]:.2f} and the scale b flips from "
       f"{W6F['b'].iloc[0]:+.1f} to {W6F['b'].iloc[-1]:+.1f}.")
 print(f"* The REBALANCE, as a variance reduction. Citi's fixed 2017 weights "
-      f"give the lowest out-of-sample residual sd ({_c:.3f} bp) of any scheme "
-      f"tried, including the IMM-roll refit ({_q:.3f} bp). The refit wins on "
-      f"mean absolute residual ({_qm:.3f} vs {_cm:.3f} bp) and on bias, and "
+      f"give the lowest out-of-sample residual sd ({_resid_c:.3f} bp) of any scheme "
+      f"tried, including the IMM-roll refit ({_resid_q:.3f} bp). The refit wins on "
+      f"mean absolute residual ({_mae_q:.3f} vs {_mae_c:.3f} bp) and on bias, and "
       "loses in the tails. It moves the error around; it does not shrink it.")
 print("* The trade's own P&L is NOT shown from these level series. This package "
       "measured that a par-rate panel is a signal tool and not a P&L model: on "

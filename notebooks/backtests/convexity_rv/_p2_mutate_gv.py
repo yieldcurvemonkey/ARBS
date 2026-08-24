@@ -32,6 +32,7 @@ SUITES = [
     "tests/test_convexity_rv_gv_signals.py",
     "tests/test_convexity_rv_gv_grid.py",
     "tests/test_convexity_rv_gv_engine.py",
+    "tests/test_ccp_basis_query_tb.py",
 ]
 
 
@@ -162,6 +163,40 @@ MUTATIONS = [
              "    return (s - jumps.cumsum()).rename",
              "    return (s - jumps[::-1].cumsum()[::-1]).rename",
              "engine: roll splice is causal"),
+    Mutation("chbasis-forward-fills-a-missing-date",
+             "TB/IRClearingHouseBasisTB.py",
+             "        if d not in df.index:\n"
+             "            return None                       # missing, NOT forward filled",
+             "        if d not in df.index:\n"
+             "            d = df.index[df.index <= d].max() if (df.index <= d).any() else d\n"
+             "        if d not in df.index:\n"
+             "            return None",
+             "ccp: a missing date is not forward filled"),
+    Mutation("chbasis-refetches-per-query",
+             "TB/IRClearingHouseBasisTB.py",
+             "            if key in panels or key in failures:\n                continue",
+             "            if False:\n                continue",
+             "ccp: one MDP call per instrument"),
+    Mutation("chbasis-instrument-key-splits-on-value",
+             "Query/IRClearingHouseBasis/IRClearingHouseBasisQuery.py",
+             "        return (self.ccy.upper(), self.index.upper(), self.tenor.lower(),\n"
+             "                self.clearing_house_a.upper(), self.clearing_house_b.upper(),\n"
+             "                bool(self.allow_network))",
+             "        return (self.ccy.upper(), self.index.upper(), self.tenor.lower(),\n"
+             "                self.clearing_house_a.upper(), self.clearing_house_b.upper(),\n"
+             "                bool(self.allow_network), self.value)",
+             "ccp: instrument key ignores the value"),
+    Mutation("chbasis-units-always-bp",
+             "Query/IRClearingHouseBasis/IRClearingHouseBasisQuery.py",
+             '    return "bp" if IRClearingHouseBasisValue(value) is \\\n'
+             "        IRClearingHouseBasisValue.BASIS_BPS else \"decimal\"",
+             '    return "bp"',
+             "ccp: bp vs decimal are named"),
+    Mutation("chbasis-network-on-by-default",
+             "Query/IRClearingHouseBasis/IRClearingHouseBasisQuery.py",
+             "    allow_network: bool = False",
+             "    allow_network: bool = True",
+             "ccp: network is opt-in"),
 ]
 
 
