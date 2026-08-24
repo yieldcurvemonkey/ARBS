@@ -1,3 +1,4 @@
 # regenerable from scripts/_curvefly_warm.py and scripts/_curvefly_screen.py
 leg_history.parquet
 screen_*.csv
+sfr_smiles_*.pkl
