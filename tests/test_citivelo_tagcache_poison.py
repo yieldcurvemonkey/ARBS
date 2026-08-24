@@ -245,6 +245,75 @@ def test_an_open_end_bounds_only_the_near_side():
 
 
 # ------------------------------------------------------------------ #
+#            1b. the whole chain, not just the parse                  #
+# ------------------------------------------------------------------ #
+
+
+def test_a_merged_region_banks_nothing_foreign_end_to_end(tmp_path: pathlib.Path):
+    """THE INTEGRATION. Every layer here is the production one.
+
+    A 5-day nightly-tail PAR request whose region also holds 2,700 rows of the
+    first 44-tag vol chunk. Before the fix this banked an 11-year vol history
+    into 36 of the 44 par parquets. It must now bank 44 x 5 rows, none of them
+    older than the requested start, and nothing under a tag nobody asked for.
+    """
+    from MDP.CitiVelocityExcel.tags import ois_par_grid
+    from MDP.CitiVelocityExcel.vol.cube_data import cube_tags
+
+    par = ois_par_grid("USD_SOFR")
+    chunk = [t for t, m in cube_tags(currency="USD").items() if m[0] == "ATM"][:44]
+    unserved = {"4Y", "12Y"}  # Citi quotes no swaption at these tenors
+
+    par_days = pd.bdate_range("2026-08-17", "2026-08-21")
+    vol_days = pd.bdate_range("2015-10-08", "2026-08-21")[::-1][:600]
+
+    rows: list[list] = [["=CVTSHIST(par)"] + [None] * 44,
+                        ["Date"] + [f"{t} - CLOSE" for t in par]]
+    for d in par_days[::-1]:
+        rows.append([d.to_pydatetime()] + [4.0 + i * 0.001 for i in range(44)])
+    rows.append([None] * 45)
+    rows.append(["=CVTSHIST(vol)"] + [None] * 44)
+    rows.append(["Date"] + [f"{t} - CLOSE" for t in chunk])
+    for d in vol_days:
+        rows.append([d.to_pydatetime()] +
+                    [None if t.rsplit(".", 1)[-1] in unserved else 60.0 + j * 0.5
+                     for j, t in enumerate(chunk)])
+
+    def fetcher(span_tags, span_freq, span_start, span_end, span_point):
+        block = parse_tshist_block(
+            rows, list(span_tags), price_point=span_point,
+            window=(span_start, span_end),
+        )
+        assert block.foreign_rows > 0, "the guard did not notice the second block"
+        return dict(block.series)
+
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    cache.get(par, "DAILY", start=datetime.date(2026, 8, 17),
+              end=datetime.date(2026, 8, 21), fetcher=fetcher)
+
+    written = sorted(p.name for p in (tmp_path / "DAILY" / "CLOSE").glob("*.parquet"))
+    assert written, "nothing was banked at all"
+    assert all(n.startswith("RATES.OIS.USD_SOFR.PAR.") for n in written), (
+        f"a tag nobody asked for reached the disk: "
+        f"{[n for n in written if not n.startswith('RATES.OIS.USD_SOFR.PAR.')][:3]}"
+    )
+
+    total = 0
+    for tag in par:
+        s = cache.read(tag, "DAILY")
+        if s is None:
+            continue
+        total += len(s)
+        assert s.index.min() >= pd.Timestamp("2026-08-17"), (
+            f"{tag} was extended back to {s.index.min()} - the vol block's history"
+        )
+        assert not ((s < -1.0) | (s > 15.0)).any(), f"{tag} holds a non-rate"
+    assert total == len(par) * len(par_days), (
+        f"banked {total} rows, expected {len(par) * len(par_days)}"
+    )
+
+
+# ------------------------------------------------------------------ #
 #          2. the cache must not write a tag it was not asked for     #
 # ------------------------------------------------------------------ #
 
