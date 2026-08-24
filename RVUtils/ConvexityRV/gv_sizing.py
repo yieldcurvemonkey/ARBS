@@ -64,6 +64,7 @@ __all__ = [
     "rolling_vol_ratio",
     "ca_theta_bp_per_year",
     "episode_decomposition",
+    "roll_spliced",
     "VOL_BETA_T_MIN",
     "VOL_BETA_R2_MIN",
     "VOL_BETA_PARTIAL_R2_MIN",
@@ -484,3 +485,27 @@ def episode_decomposition(pnl_daily: pd.Series, theta_bp_per_bd: pd.Series,
     return {"total_usd": total, "carry_usd": carry,
             "residual_usd": total - carry,
             "carry_share": (carry / total) if total else float("nan")}
+
+
+def roll_spliced(level: pd.Series, roll_dates: Sequence) -> pd.Series:
+    """Forward-adjusted constant-rank series: remove each roll's jump from all
+    LATER values, using only information available at the time.
+
+    A constant-rank CA label switches contracts at every quarterly roll and its
+    level jumps -- measured +0.741 / +0.946 / +1.223 bp on GREENS / BLUES /
+    GOLDS, which is the same quantity as one quarter of the CA's own theta.  A
+    signal computed on the raw series sees that jump as a move.
+
+    **Forward, not backward.**  The usual continuous-futures convention
+    back-adjusts history, which changes every past value the moment a new roll
+    happens -- fine for a chart, look-ahead for a z-score.  Subtracting the
+    cumulative sum of jumps that have ALREADY occurred leaves the series causal:
+    the value at ``t`` uses only rolls at or before ``t``.
+    """
+    s = pd.Series(level).astype(float)
+    jumps = pd.Series(0.0, index=s.index)
+    d = s.diff()
+    idx = pd.DatetimeIndex(pd.to_datetime(list(roll_dates)))
+    hit = idx.intersection(s.index)
+    jumps.loc[hit] = d.loc[hit].fillna(0.0)
+    return (s - jumps.cumsum()).rename(f"{s.name}_spliced" if s.name else "spliced")

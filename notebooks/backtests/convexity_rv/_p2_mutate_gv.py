@@ -31,6 +31,7 @@ SUITES = [
     "tests/test_convexity_rv_gv_sizing.py",
     "tests/test_convexity_rv_gv_signals.py",
     "tests/test_convexity_rv_gv_grid.py",
+    "tests/test_convexity_rv_gv_engine.py",
 ]
 
 
@@ -136,6 +137,31 @@ MUTATIONS = [
              "    for s in PRIMARY_STRUCTURES[:0]:\n"
              "        for sz in VARBASIS_SIZINGS:",
              "grid: declared count == 298"),
+    Mutation("engine-fly-bpv-not-doubled",
+             "RVUtils/ConvexityRV/gv_engine.py",
+             '                    "bpv": 2.0 * float(L.leg_dv01_signed)},',
+             '                    "bpv": float(L.leg_dv01_signed)},',
+             "engine: fly bpv is 2x the quoted leg DV01"),
+    Mutation("engine-futures-direction-flipped",
+             "RVUtils/ConvexityRV/gv_engine.py",
+             "    direction = float(-spec.side)",
+             "    direction = float(spec.side)",
+             "engine: direction rides the risk weight"),
+    Mutation("engine-abs-beta",
+             "RVUtils/ConvexityRV/gv_engine.py",
+             "                    leg_dv01_signed=-float(side) * float(beta_entry) * ca_dv01)",
+             "                    leg_dv01_signed=abs(float(side) * float(beta_entry) * ca_dv01))",
+             "engine: a negative beta flips the leg"),
+    Mutation("engine-matched-leg-uses-front-rank",
+             "RVUtils/ConvexityRV/gv_engine.py",
+             '        k = {"immF": 1, "imm2": 2}.get(spec.start) or matched_imm_rank(structure)',
+             '        k = {"immF": 1, "imm2": 2}.get(spec.start) or 1',
+             "engine: matched leg uses the structure's rank"),
+    Mutation("roll-splice-backward-adjusted",
+             "RVUtils/ConvexityRV/gv_sizing.py",
+             "    return (s - jumps.cumsum()).rename",
+             "    return (s - jumps[::-1].cumsum()[::-1]).rename",
+             "engine: roll splice is causal"),
 ]
 
 

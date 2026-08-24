@@ -469,3 +469,82 @@ reported at each stage. There are no unextracted research documents. The only
 depth gap was `pm_bbgchat.txt`, triaged in block 3 as "not STIR CA"; it has been
 read in full for this block and is the source of the long-end vega framing
 quoted in A3.1.
+
+---
+
+## 12. Amendment A4 (2026-08-24, after the grid ran, before the verdict) — declared diagnostics
+
+Three diagnostics were added after the grid and before the verdict. None of them
+is a scored cell; each is a control on cells already scored, and each is named
+here so the record is complete.
+
+* **β = 0 control on the top cells** — the same rule with the hedge leg removed.
+  It asks whether the fly contributes to the cells that survived. Answer: the
+  fly adds Sharpe on 2 of the top 8 and removes it on 3.
+* **Always-short / always-long buy-and-hold** inside every tradeable segment,
+  same structure, same leg, same β, signal switched off. It asks how much of a
+  cell is a static position. Answer: 2 of the top 8 are entirely explained by
+  the static short and 2 more are majority-static.
+* **Placebo ladder** at +0/5/10/20/40/60 bd rather than the declared single
+  +20 bd. A timing signal must decay as the lag grows; this separates the two
+  families cleanly and is the single most discriminating control in the block.
+
+## 13. Amendment A5 (2026-08-24, declared before scoring) — the dated, through-roll arm
+
+**6 cells. Trial total 298 → 304.**
+
+The block's own measurement says the residual the brief wants to trade reverts
+with a half-life of **68–99 business days** on the long-end curve pairs, against
+a tradeable segment of only ~56 bd between roll blackouts; 1,738 of the main
+grid's 2,591 episodes exit at `segment_end` rather than on the signal. The trade
+cannot converge inside a roll-flat window.
+
+But "flat across the roll" was only ever a proxy for the real requirement: *do
+not book a contract-switching jump as P&L*. A **dated** package — fixed SR3
+contracts, a fixed matched swap, an IMM-pinned fly, all resolved at entry — has
+no label to switch, so it can be held straight through a roll. What it has
+instead is the CA's own theta, which the engine prices because it prices real
+ageing instruments.
+
+* Cells: `{GREENS, BLUES, GOLDS} × {immM_2s5s10s, le_10y10y_15y10y} × beta_lvl
+  × const_dv01`.
+* Blackout **off**, `max_hold_bd = 126` (two quarters).
+* Signal on the **roll-spliced** CA (`gv_sizing.roll_spliced`, forward-adjusted
+  so it stays causal — a backward adjustment rewrites history at every new roll,
+  which is fine for a chart and look-ahead for a z-score). The known cost of the
+  convention is stated and tested: on a roll date the observed change is the
+  contract switch *plus* that day's market move and the panel cannot separate
+  them, so the splice discards both — about 0.15 bp of level over 22 rolls
+  against the +0.95 bp/roll jump it removes.
+* **P&L on the ENGINE only.** A constant-rank panel cannot represent a dated
+  hold, and the certification measured that the par-rate panel overstates these
+  books (panel Sharpe 2.141 / 0.867 / 0.414 against engine 1.409 / 0.151 /
+  0.131) because it prices par-rate changes rather than struck-instrument P&L
+  and the omitted term is carry.
+
+## 14. Amendment A6 (2026-08-24) — finalist selection, and why not by DSR
+
+Section 9 says finalists are the "top ≤3 by DSR". That is **unimplementable on
+this grid**: every cell has 6–13 episodes and `deflated_sharpe_of_best` returns
+`dsr = NaN` at that sample size (it did, and the run recorded
+`n_trials_effective = 227.9` over `n = 6` observations with an ill-conditioned
+correlation matrix). Rather than substitute a criterion silently, the three
+finalists are named and the reason for each is stated:
+
+1. `S|SFR12|immM_2s5s10s|beta_lvl|const_dv01` — the best cell by gross
+   annualised Sharpe, and the only one of 298 that clears the annualised
+   298-trial null bar.
+2. `A|GREENS|le_10y10y_15y10y|beta_chg|const_dv01` — the cell that *behaves*
+   like a timing signal: the only finalist whose P&L dies under lag
+   (0.851 → −0.247 at 60 bd).
+3. `A|GOLDS|imm2_2s5s10s|beta_lvl|inv_vol` — the **sign-flip null's own best
+   cell** (per-observation Sharpe 2.009, family-wise p = 0.0225). It was not in
+   the Sharpe-ranked top 8, so it would otherwise never have faced the
+   always-short control or the placebo ladder, and a sub-5% p-value left
+   unexamined in the record is exactly the kind of loose thread this package
+   keeps writing down.
+
+Also recorded: the grid summary's `emax_perhold` was first computed with an
+`n_eff` that assumed an always-invested book (median 48.5). The honest `n_eff`
+is `min(n_episodes, span × 252 / mean_hold)` — 6–13, not 48 — and every null bar
+quoted in the results doc uses the corrected figure.
