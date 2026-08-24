@@ -205,12 +205,16 @@ Two criteria, and the second is the one that matters:
 - **Tier 2, an exact match to the donor** — the value equals, to the last bit,
   what the donor tag carried that same day.
 
-**2,892 removed rows were INSIDE the plausibility band** and would have survived
-a value check; `RATES.OIS.USD_SOFR.PAR.1D` alone had 471. A short-expiry normal
-vol dips under 25 in a quiet regime, so a poisoned row can wear a par rate's
-clothes. The donor is *searched for*, not assumed, and must explain ≥90% of the
-out-of-band rows; one was identified for all 124 tags, and the map recovered is
-the expected one.
+**71,131 of the 283,936 removed rows — a quarter of the damage — were INSIDE the
+plausibility band** and would have survived a value check: 2,892 in the daily par
+families (`PAR.1D` alone had 471, because a short-expiry normal vol dips under 25
+in a quiet regime) and 68,239 in MI01, where the bond PRICE tags have *no*
+out-of-band rows at all. Tier 1 alone is not a repair; it is the half of the
+repair that is easy to see.
+
+The donor is *searched for*, not assumed, and must explain ≥90% of a tag's
+suspect rows. One was identified for every affected tag bar five, and those five
+held a single impossible tick each, where only tier 1 fired.
 
 Applied to `DAILY`/`CLOSE`: **166,419 rows removed across 124 tags** — plus
 117,509 more in `MI01` and 8 isolated ticks, for **283,936 across 186 tags**.
