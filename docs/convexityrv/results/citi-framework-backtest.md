@@ -160,9 +160,11 @@ p in the whole block is 0.161.
 Two cautions the numbers demand. First, a per-hold Sharpe on **four**
 observations has enormous estimation error — its own null sd is 0.5, which is
 why the bar is 0.98. Second, three of the eight are drop-one *diagnostics*, and
-`drop_positive_roll` is byte-identical to the headline construction because the
-positive-roll condition passes on 99.9% of dates and so removes nothing. That
-leaves the real content: the `screen_best` z=1.0 family, at four trades.
+`D|z1.0|drop_positive_roll` is byte-identical to
+`P|z1.0|screen_best|fitted_refit` (same 4 episodes, same $589,525 net) because
+the positive-roll condition passes on 99.86% of dates and the days it refuses
+never coincide with the other four passing. That leaves the real content: the
+`screen_best` z=1.0 family, at four trades.
 
 ---
 

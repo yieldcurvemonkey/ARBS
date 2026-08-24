@@ -601,11 +601,17 @@ print(f"\nannualised clock: {int(_join['clears_annualised_gross'].sum())} of "
       f"{int((STATS['sharpe_1.0'] > BAR).sum())} clear NET")
 print(f"per-hold clock:   {int(_join['clears_perhold_gross'].fillna(False).sum())} "
       f"of {len(_join)} clear GROSS, {len(_cn)} clear NET")
-print("\nThree of the eight gross-clearing cells are drop-one DIAGNOSTICS, and "
-      "`drop_positive_roll` is byte-identical to the headline construction "
-      "because that condition passes on 99.9% of dates and removes nothing. "
-      "What is left is the screen_best z=1.0 family, on four trades, whose own "
-      "per-hold null sd is 0.5 -- which is why its bar is 0.98.")
+_a = float(PH.loc[PH.cell_id == "D|z1.0|drop_positive_roll", "net_usd"].iloc[0])
+_b = float(PH.loc[PH.cell_id == "P|z1.0|screen_best|fitted_refit",
+                  "net_usd"].iloc[0])
+assert abs(_a - _b) < 1e-6, "the drop_positive_roll claim below is wrong"
+print(f"\nThree of the {len(_cg)} gross-clearing cells are drop-one "
+      "DIAGNOSTICS, and D|z1.0|drop_positive_roll is IDENTICAL to "
+      f"P|z1.0|screen_best|fitted_refit (both ${_a:,.0f} net) because the "
+      "positive-roll condition passes on 99.86% of dates and the days it "
+      "refuses never coincide with the other four passing. What is left is the "
+      "screen_best z=1.0 family, on four trades, whose own per-hold null sd is "
+      "0.5 -- which is why its bar is 0.98.")
 
 # %% [markdown]
 # ## Engine certification
