@@ -1,0 +1,11 @@
+{
+  "source": "xlsx",
+  "path": "C:\\Users\\chris\\Downloads\\citi_economic_and_inflation_data_suprise_dataset.xlsx",
+  "call": "CVTSHIST DAILY MAX CLOSE",
+  "built": "2026-08-23T23:50:02",
+  "rows": 6247,
+  "tags": 12,
+  "missing_tags": [],
+  "first": "1998-01-31",
+  "last": "2026-08-21"
+}
