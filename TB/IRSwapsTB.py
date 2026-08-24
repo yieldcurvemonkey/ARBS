@@ -526,6 +526,14 @@ def _apply_calendar_weight_adjustment(
 _CVX_IMM_PAT = re.compile(r"^[FGHJKMNQUVXZ]\d{2}$")
 _CVX_CM_PAT = re.compile(r"^SFR(\d{1,2})$")
 _CVX_BUNDLE_PAT = re.compile(r"^BUNDLE(\d+)$")
+#: CME-convention bundle: ``BUNDLE{N}Y`` is the front-anchored strip of the
+#: first ``4N`` quarterlies (CME: "bundle = integer multiples of 4 contracts
+#: spanning 2 to 5 years", always starting at the front). This is NOT the same
+#: object as the legacy ``BUNDLE{b}`` label above, which is a 16-quarter window
+#: starting at rank ``1+4(b-1)`` -- both vocabularies are kept because panels
+#: were built against the legacy one, and a label that silently changed its
+#: window would orphan nothing and corrupt everything.
+_CVX_BUNDLE_Y_PAT = re.compile(r"^BUNDLE([1-9])Y$")
 
 #: Pack colour -> inclusive rank span, 1-indexed from the front IMM contract.
 #: A pack is four consecutive quarterlies, so colour ``(a, b)`` needs contiguous
@@ -553,6 +561,10 @@ def _cvx_pack_span(x: str) -> Optional[Tuple[int, int]]:
     X = x.upper()
     if X in CVX_PACK_MAP:
         return CVX_PACK_MAP[X]
+    m = _CVX_BUNDLE_Y_PAT.match(X)
+    if m:
+        n = int(m.group(1))
+        return (1, 4 * n)
     m = _CVX_BUNDLE_PAT.match(X)
     if m:
         b = int(m.group(1))
@@ -584,7 +596,7 @@ def _cvx_structure_tag(label: str) -> str:
         return "OUTRIGHT"
     if label.upper() in CVX_PACK_MAP:
         return "PACKS"
-    if _CVX_BUNDLE_PAT.match(label.upper()):
+    if _CVX_BUNDLE_PAT.match(label.upper()) or _CVX_BUNDLE_Y_PAT.match(label.upper()):
         return "BUNDLES"
     return "OUTRIGHT"
 
@@ -1428,7 +1440,9 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         ``items`` accepts an IMM code (``"H26"``), a constant-maturity rank
         (``"SFR9"``), a pack colour (``"WHITES"``, ``"REDS"``, ``"GREENS"``,
-        ``"BLUES"``, ``"GOLDS"``, ``"SILVERS"``) or a bundle (``"BUNDLE2"``).
+        ``"BLUES"``, ``"GOLDS"``, ``"SILVERS"``), a legacy 16-quarter bundle
+        window (``"BUNDLE2"`` = ranks 5..20) or a CME-convention front-anchored
+        bundle (``"BUNDLE2Y"`` = ranks 1..8, ``"BUNDLE5Y"`` = ranks 1..20).
 
         **The matched swap is quarterly/quarterly by default, and that is not a
         detail.** Citi specifies it verbatim; the ``usd_irs`` spec these curves
