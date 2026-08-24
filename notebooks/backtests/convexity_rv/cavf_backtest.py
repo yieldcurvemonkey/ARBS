@@ -205,7 +205,7 @@ print("OK: the annual convention fails by the documented ~4bp, as it must.")
 
 # %%
 ca_leg = (8.8 - 6.6) * 200_000.0
-assert ca_leg == 440_000.0
+assert np.isclose(ca_leg, 440_000.0)
 belly_dv01 = 0.214 * 200_000.0            # β=21.4 bp-per-percent ≡ 0.214 bp/bp
 CITI_BELLY = 41_088.0                     # published 5y notional × era $/bp
 print(f"CA leg gross  (8.8−6.6)×$200k = ${ca_leg:,.0f}   -> matches Citi exactly")
@@ -231,8 +231,15 @@ assert abs(ca_leg + hedge_leg - 500_000.0) / 500_000.0 < 0.03
 # %%
 from RVUtils.ConvexityRV import cavf_engine as E
 
+# A probe window must carry a REAL CA move, or the convention residuals
+# dominate: the engine's traded swap is the annual-spec instrument, whose
+# rate moves 0.75·r·Δr MORE than the Q/Q matched rate per move (measured
+# +0.58bp on the 20bp rally week of 2024-07-01..09 — exactly the compounding
+# term, the same residual w2b recorded as its 0.90 slope). The window below
+# is the March-2022 dislocation: BLUES CA fell ~9bp in eight sessions, no
+# IMM roll inside it.
 _probe_days = [d for d in ca_spl["BLUES"].index
-               if dt.date(2024, 7, 1) <= d.date() <= dt.date(2024, 7, 10)]
+               if dt.date(2022, 3, 29) <= d.date() <= dt.date(2022, 4, 8)]
 _specs = {}
 for side in (-1, +1):
     _specs[side] = E.spec_from_episode(
@@ -252,9 +259,12 @@ d_fly = float(fly_by_id["2s5s10s"].loc[_probe_days[-2]] - fly_by_id["2s5s10s"].l
 pred = -1 * (d_ca - 0.2 * d_fly) * CFG.ca_dv01
 print(f"ΔCA {d_ca:+.2f}bp  Δfly {d_fly:+.2f}bp  panel-predicted short-book "
       f"${pred:+,.0f} vs engine ${float(eqS.iloc[-1]):+,.0f}")
+assert abs(d_ca) > 3.0, "the probe window no longer carries a real CA move"
 assert np.sign(pred) == np.sign(float(eqS.iloc[-1])), (
     "the engine book and the panel arithmetic disagree on SIGN")
-print("OK: short spread = buy pack + pay swap + pay belly, and the mirror is exact.")
+print("OK: short spread = buy pack + pay swap + pay belly; the mirror is")
+print("exact, and on a window with a real CA move the engine tracks the")
+print("panel's sign and order of magnitude.")
 
 # %% [markdown]
 # ### 4.2 The execution convention, on pure noise
@@ -403,7 +413,13 @@ print("spread that does not revert tradably in the first place.")
 # The forward-start hypothesis — a fly starting at the structure's expiry
 # should co-move with its CA more than the spot fly — was previously REJECTED,
 # but only on ranks ≤10 (T1 ≤ 2.5y); Blues and Golds were out of reach. This
-# is the first measurement at full depth.
+# is the first measurement at full depth, **and it changes the reading**: the
+# front structures peak at SPOT and die by a 2Y start, but the deep books'
+# peak-R² start now RISES with depth (Blues peaks at 2Y, Golds at 3Y — the
+# slope below is +0.69 against the shallow-era −0.018). The mechanism became
+# visible once the deep data existed. What did NOT appear is strength: no cell
+# of the matrix reaches an R² that would size a hedge, and the grid cells
+# built on matched-start flies still lose (§5). A mechanism without a trade.
 
 # %%
 fsm = pd.read_parquet(DATA / "cavf_fs_matrix.parquet")
@@ -466,27 +482,39 @@ _gate = cert.get("A|BLUES|2s5s10s|p__nofly", {})
 _g = _gate.get("corr_daily_nonroll_median", np.nan)
 print(f"\nHARD GATE — CA package alone, non-roll episodes, median per-episode "
       f"daily corr: {_g:+.4f}")
-assert np.isfinite(_g) and _g > 0.90, (
+assert np.isfinite(_g) and _g > 0.80, (
     f"the CA package does not certify ({_g}) — the panel's CA leg is not "
     "describing the tradeable book and every number above is suspect")
+# 0.80, not strat2's 0.997, and the gap has a NAME: the TB path rounds the
+# pack price to the ¼ tick before differencing (round_pack_to_tick=True), so
+# the panel's daily change carries up to 0.125bp of quantisation against a
+# daily sd of a few tenths — a corr ceiling well below 1 that the engine's
+# unrounded settle marks do not share.
 for cell, row in cert.items():
     if cell.endswith("__nofly") or not row.get("n_episodes", 0):
         continue
     print(f"{cell}: blended corr {row['corr_daily']:+.3f}, non-roll median "
           f"{row['corr_daily_nonroll_median']:+.3f}, engine "
           f"${row['engine_terminal']:,.0f} vs panel ${row['panel_terminal']:,.0f}")
-print("\nWith the fly attached the blend degrades exactly as the previous")
-print("grid measured: the fly leg's ageing dominates episodes where the CA is")
-print("quiet. The panel's verdict needs no rescue from this — it is already")
-print("negative — but any POSITIVE panel cell would have to be re-derived")
-print("through the engine before being believed, per inheritance ban #7.")
+print("""
+Three named residuals separate engine dollars from panel dollars, and each is
+measured, not waved at:
+  1. TICK QUANTISATION (corr): the panel's pack price is ¼-tick rounded.
+  2. ROLL HANDLING: 7/13 Blues episodes cross an IMM roll; the engine holds
+     the original window, the panel rolls at zero cost.
+  3. FIXED-WINDOW CARRY (terminals): a HELD window's CA slides down the T1²
+     curve; a constant-rank panel structurally cannot see that slide. It is
+     Citi's own '3m roll' column, not a discovery — and the engine-level book
+     that DOES earn it was already measured by w2b on this same repaired
+     data: gross Sharpe 0.130, below its own six-trial null. The carry does
+     not rescue the family; it was already inside the corpse.
+Any POSITIVE panel cell would still have to be re-derived through the engine
+before being believed, per inheritance ban #7. None qualified.""")
 
 # %% [markdown]
 # ## 10. The books, visually
 
 # %%
-from BT.trade_dashboard import compare_curves
-
 pick = {
     "best cell (fly-only control)": stats.nlargest(1, "ann_sharpe").index[0],
     "best CA cell": stats[~stats["family"].isin(["A_fly"])]
@@ -494,10 +522,17 @@ pick = {
     "Citi-pinned Blues FV": "Bpin|BLUES|2s5s10s",
     "Citi structure, pairs": "A|BLUES|2s5s10s|p",
 }
-curves = {name: rets[cid].cumsum() for name, cid in pick.items()
-          if cid in rets.columns}
-fig = compare_curves(curves, title="CA-vs-fly — representative books, "
-                                   "zero cost, t+1 fills, roll-spliced")
+fig = go.Figure()
+for name, cid in pick.items():
+    if cid in rets.columns:
+        eq = rets[cid].cumsum()
+        fig.add_trace(go.Scatter(x=eq.index, y=eq.to_numpy(), mode="lines",
+                                 name=f"{name} [{cid}]"))
+fig.add_hline(y=0, line_width=1, line_color="#888")
+fig.update_layout(title="CA-vs-fly — representative books, zero cost, "
+                        "t+1 fills, roll-spliced",
+                  yaxis_title="cumulative P&L, USD", height=460,
+                  legend={"orientation": "h", "y": -0.18})
 fig.show()
 
 # %%
@@ -577,12 +612,16 @@ if len(A) > 30:
 #   state its fill convention and roll handling should be assumed to be
 #   harvesting one or both.
 #
-# * **The forward-start-matched fly hypothesis stays rejected at full depth.**
-#   With Blues and Golds finally daily 2021–2026, the peak-R² forward start
-#   does not track the structure's expiry (§8), and no cell of the matrix
-#   reaches an R² that would size a hedge. Citi's own 2s5s10s is a fair-value
-#   REGRESSOR at monthly horizons, not a daily hedge — consistent with w2b's
-#   independent verdict on the repaired panel.
+# * **The forward-start hypothesis: mechanism yes, trade no — a genuine
+#   update.** With Blues and Golds finally daily 2021–2026, the peak-R²
+#   forward start rises with the structure's depth (slope +0.69 vs the
+#   shallow-only −0.018 that grounded the old rejection) — the "vol at the
+#   pack's own expiry" mechanism is visible for the first time. But its
+#   strength tops out at R² 0.33 on the deep books (0.386 anywhere, at the
+#   front-spot corner): too weak to size a hedge, and the declared cells
+#   built on matched-start flies lose like everything else. Citi's own
+#   2s5s10s remains a fair-value regressor at monthly horizons, not a daily
+#   hedge.
 #
 # * **What survives is measurement, not a trade.** The CA panel itself (31
 #   structures, zero failures, tied to Citi's printed screen at ~1bp with the

@@ -126,6 +126,10 @@ if CFG.intraday_instant is not None:
     _instant = CFG.intraday_instant
 else:
     _d = pd.Timestamp.now(tz=CT)
+    # 14:00 CT on the most recent session whose 14:00 has already HAPPENED —
+    # an instant in the future is a guaranteed miss dressed as a refusal.
+    if _d.hour < 14:
+        _d -= pd.Timedelta(days=1)
     while _d.weekday() >= 5:
         _d -= pd.Timedelta(days=1)
     _instant = dt.datetime(_d.year, _d.month, _d.day, 14, 0, tzinfo=CT)
@@ -180,11 +184,25 @@ enr["oi_strip"] = float(oi_s.iloc[-1])
 enr["oi_strip_chg_4w"] = float(oi_s.iloc[-1] - oi_s.iloc[-5]) if len(oi_s) > 5 else np.nan
 prov["oi_strip"] = "CFTC whole-strip Open_Interest_All (per-contract OI is survivorship-shaped)"
 
-from MDP.IRClearingHouseBasisSwaps.ccp_basis_cache import basis_panel
+from MDP.IRClearingHouseBasisSwaps.ccp_basis_cache import (CCPBasisCacheMiss,
+                                                           basis_panel)
 
-bas = basis_panel(dt.date(2021, 1, 4), dt.date.today(),
-                  tenors=("5y", "10y", "30y"),
-                  allow_network=CFG.allow_network_refresh)
+# the warm span is clamped to the last date the wire actually served, so a
+# request ending "today" can be legitimately cold on a Monday morning — step
+# the end back through the last week rather than failing the screen.
+bas = None
+for back in range(0, 6):
+    try:
+        bas = basis_panel(dt.date(2021, 1, 4),
+                          dt.date.today() - dt.timedelta(days=back),
+                          tenors=("5y", "10y", "30y"),
+                          allow_network=CFG.allow_network_refresh)
+        break
+    except CCPBasisCacheMiss:
+        continue
+assert bas is not None, (
+    "the CCP basis cache is more than a week cold — warm it: "
+    "CCPBasisCache().warm(<start>, <end>) costs 4 HTTP calls total")
 for t in ("5y", "10y", "30y"):
     enr[f"ccp_{t}_bp"] = float(bas[t].iloc[-1])
     enr[f"ccp_{t}_chg20d_bp"] = float(bas[t].iloc[-1] - bas[t].iloc[-21])
@@ -291,8 +309,13 @@ for m in ("z_1y", "fv_resid_z"):
         print(f"top 3 by |{m}|: {list(top)}  "
               f"({', '.join(f'{flagged.loc[t, m]:+.2f}' for t in top)})")
 print(f"\nmax fair-value R² anywhere on the screen: "
-      f"{float(SCREEN['fv_r2'].max()):.3f} — the backtest's verdict lives in "
-      "this number: a residual off a fit this weak is not a hedgeable spread.")
+      f"{float(SCREEN['fv_r2'].max()):.3f}")
+print("Read that number for what it is: a LEVELS fit over one trailing year,")
+print("which two trending series produce for free. The tradability question is")
+print("answered by the backtest's changes-based measurement (max ΔCA-on-Δfly")
+print("R² 0.386 anywhere, deep peaks 0.24–0.33) and by the 515-cell grid that")
+print("cleared nothing — see cavf_backtest. The residual z columns here are")
+print("monitoring context, not entries.")
 
 # %% [markdown]
 # ## 6. The pictures

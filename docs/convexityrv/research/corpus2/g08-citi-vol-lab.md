@@ -368,25 +368,25 @@ File: `Rates_Vol_Lab_Forward_steepener_and_vol_divergence (1).pdf.md`
 
 Efficient frontier: 10y10y/15y15y and 10y10y/20y5y (BE/RV meaningfully > 1).
 
-**SOFR CA table (Fig 58, close 6/9/2023, vs CME swaps)** — first table with SR3 pack codes:
+**SOFR CA table (Fig 58, close 6/9/2023, vs CME swaps)** — first table with SR3 pack codes. This table (unlike the 2016-20 issues) prints both the Ho-Lee **model level** and the CA−model spread:
 
-| Pack | CA bp | 1wk chg | 3m ZS | 1y ZS | VsModel bp | VsM 3m ZS | VsM 1y ZS | 3m roll | Impl | Rlzd | I/R | Cap I/R |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| M4-H5 | 4.03 | 1.23 | 0.78 | 0.45 | 2.94* | 1.09 | 0.92 | 0.54/0.88* | 199.5 | 229.7 | 0.9 | 0.7 |
-| U4-M5 | 4.41 | 0.98 | 0.79 | 0.27 | 3.79* | 0.62 | 0.98 | 0.43/0.38* | 178.1 | 201.4 | 0.9 | 0.8 |
-| Z4-U5 | 5.16 | 0.71 | 0.63 | 0.19 | 4.66* | 0.49 | 0.93 | 0.42/0.74* | 167.7 | 180.3 | 0.9 | 0.8 |
-| H5-Z5 | 6.10 | 0.29 | 0.40 | 0.24 | 5.53* | 0.58 | 0.83 | 0.55/0.95* | 161.6 | 166.3 | 1.0 | 0.9 |
-| M5-H6 | 8.24 | −0.40 | −0.52 | 0.21 | 6.36* | 1.88 | 0.05 | 0.51/2.14* | 168.5 | 156.4 | 1.1 | 0.9 |
-| U5-M6 | 9.77 | −1.22 | −0.73 | 0.36 | 7.16* | 2.60 | 0.06 | 0.82/1.52* | 166.3 | 148.8 | 1.1 | 0.9 |
-| Z5-U6 | 11.70 | −1.89 | −0.82 | 0.55 | 8.02* | 3.67 | 0.13 | 1.10/1.93* | 166.5 | 142.2 | 1.2 | 0.9 |
-| H6-Z6 | 13.70 | −2.37 | −0.80 | 0.70 | 8.96* | 4.74 | 0.22 | 1.25/2.00* | 166.0 | 136.1 | 1.2 | 0.9 |
-| M6-H7 | 15.40 | −3.08 | −0.96 | 0.73 | 9.98* | 5.42 | −0.07 | 1.18/1.70* | 163.1 | 130.9 | 1.2 | 1.0 |
-| U6-M7 | 16.84 | −2.97 | −1.30 | 0.63 | 11.10* | 5.74 | −0.42 | 1.05/1.44* | 159.0 | 126.2 | 1.3 | 1.0 |
-| Z6-U7 | 18.27 | −2.72 | −1.55 | 0.47 | 12.23* | 6.04 | −0.77 | 0.90/1.43* | 155.1 | 121.9 | 1.3 | 1.0 |
-| H7-Z7 | 20.08 | −2.33 | −1.54 | 0.40 | 13.37* | 6.71 | −0.88 | 0.82/1.81* | 152.8 | 118.0 | 1.3 | 1.0 |
-| M7-H8 | 22.29 | −1.78 | −1.35 | 0.45 | 14.50* | 7.79 | −0.69 | 0.90/2.21* | 151.9 | 113.8 | 1.3 | 1.0 |
+| Pack | CA bp | 1wk chg | 3m ZS | 1y ZS | Model bp | VsModel bp | VsM 3m ZS | VsM 1y ZS | 3m roll | Impl | Rlzd | I/R | Cap I/R |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| M4-H5 | 4.03 | 1.23 | 0.78 | 0.45 | 2.94 | 1.09 | 0.92 | 0.54 | 0.88 | 199.5 | 229.7 | 0.9 | 0.7 |
+| U4-M5 | 4.41 | 0.98 | 0.79 | 0.27 | 3.79 | 0.62 | 0.98 | 0.43 | 0.38 | 178.1 | 201.4 | 0.9 | 0.8 |
+| Z4-U5 | 5.16 | 0.71 | 0.63 | 0.19 | 4.66 | 0.49 | 0.93 | 0.42 | 0.74 | 167.7 | 180.3 | 0.9 | 0.8 |
+| H5-Z5 | 6.10 | 0.29 | 0.40 | 0.24 | 5.53 | 0.58 | 0.83 | 0.55 | 0.95 | 161.6 | 166.3 | 1.0 | 0.9 |
+| M5-H6 | 8.24 | −0.40 | −0.52 | 0.21 | 6.36 | 1.88 | 0.05 | 0.51 | 2.14 | 168.5 | 156.4 | 1.1 | 0.9 |
+| U5-M6 | 9.77 | −1.22 | −0.73 | 0.36 | 7.16 | 2.60 | 0.06 | 0.82 | 1.52 | 166.3 | 148.8 | 1.1 | 0.9 |
+| Z5-U6 | 11.70 | −1.89 | −0.82 | 0.55 | 8.02 | 3.67 | 0.13 | 1.10 | 1.93 | 166.5 | 142.2 | 1.2 | 0.9 |
+| H6-Z6 | 13.70 | −2.37 | −0.80 | 0.70 | 8.96 | 4.74 | 0.22 | 1.25 | 2.00 | 166.0 | 136.1 | 1.2 | 0.9 |
+| M6-H7 | 15.40 | −3.08 | −0.96 | 0.73 | 9.98 | 5.42 | −0.07 | 1.18 | 1.70 | 163.1 | 130.9 | 1.2 | 1.0 |
+| U6-M7 | 16.84 | −2.97 | −1.30 | 0.63 | 11.10 | 5.74 | −0.42 | 1.05 | 1.44 | 159.0 | 126.2 | 1.3 | 1.0 |
+| Z6-U7 | 18.27 | −2.72 | −1.55 | 0.47 | 12.23 | 6.04 | −0.77 | 0.90 | 1.43 | 155.1 | 121.9 | 1.3 | 1.0 |
+| H7-Z7 | 20.08 | −2.33 | −1.54 | 0.40 | 13.37 | 6.71 | −0.88 | 0.82 | 1.81 | 152.8 | 118.0 | 1.3 | 1.0 |
+| M7-H8 | 22.29 | −1.78 | −1.35 | 0.45 | 14.50 | 7.79 | −0.69 | 0.90 | 2.21 | 151.9 | 113.8 | 1.3 | 1.0 |
 
-\* PDF-to-markdown column merge on this table makes two adjacent numeric columns ambiguous. Reading the row layout against the 2021 template, the most consistent parse is: cols after the 1y CA z-score are {Model level bp, CA−Model bp, VsM 3m ZS, VsM 1y ZS, 3m roll}. E.g. for M4-H5 the raw cell sequence is `0.45 | 2.94 | 1.09 | 0.92 | 0.54 | 0.88` — i.e. **Model ≈ 2.94bp? or CA−Model ≈ 1.09bp** — the source line is `M4-H5 | 4.03 | 1.23 0.78 0.45 2.94 | 1.09 | 0.92 | 0.54 0.88 | 199.5 | 229.7 | 0.9 0.7`. Treat the {2.94, 1.09} pair for M4-H5 (and analogues down the column) as needing verification against the original PDF before using as a strict tie-out; the CA level, z-scores, implied/realized vols and ratios are unambiguous. The text states Blues CA − model ≈ **+5bp** at this date, consistent with the larger element of the pair for Blues-area rows.
+Column parse of the merged markdown cells verified two ways: the identity CA − Model = VsModel holds row-by-row to ±0.01 (e.g. 4.03−2.94=1.09; 13.70−8.96=4.74; 22.29−14.50=7.79), and the body text's "Blues CA... model fair value... about 5bps lower" matches the Blues rows (H6-Z6 +4.74 / M6-H7 +5.42) under this parse. Same identity holds in the unambiguous 2021 template (5.88−3.82=2.06).
 
 Other tie-outs (close 6/9/23): 3m10y spot vol 143.0nv → 1y fwd 122.6nv (1y2y col: spot 143.0, 1y fwd 122.6); the fwd-vol table spot row: 1y2y 143.0, 1y5y 121.8, 1y10y 103.8, 1y30y 83.2nv; 1y5y/1y30y and vol-slope commentary; conditional-curve tables (3m 2y10y spot curve −102.3bp etc.).
 
@@ -398,7 +398,7 @@ File: `Rates_Vol_Lab_In_search_of_cheap_vol.pdf.md`
 
 Weekly focus: Formosa supply $5.3bn Jan-to-date (~$16mn normal vega swapped, highest since Jan-2018); keep 10y20y/5y30y straddle switch (10y20y 54.6nv / 5y30y 56.6nv, 1pm 1/17/20); buy $30mn USDJPY 108/105 put spreads vs sell $50mn 6m10y ATMF+45bp (2.2%) payers, net cost $35K (USDJPY 110.17, 12pm 1/17/20; regression USDJPY = 0.0266·(US-JP 10y diff) + 103.48, R² 0.32, 2018-19 sample). **Initiate GBP 15y10y/25y10y delta-hedged flatteners: 50K DV01 at −11.2bp (12pm 1/17/2020), hedged at each 25bp move in the 25y10y rate; carry +0.5bp/1y — "an effectively free convexity buy."** (Closed 26 Mar 2020, doc 14.)
 
-Multi-currency flattener screen (Fig 11, close ~1/16/20): USD 15y5y/20y10y curve −13.65bp, 1y carry −2.20bp, BE/RV 0.80; GBP 15y10y/25y10y −14.56bp(≈), 1y carry +0.16bp, BE/RV 0.00; full USD/EUR/GBP/CAD grids in source.
+Multi-currency flattener screen (Fig 11, close ~1/16/20): USD 15y5y/20y10y curve −13.65bp, 1y carry −2.20bp, BE/RV 0.80; GBP 15y10y/25y10y curve −10.37bp, 1y carry +0.52bp, BE/RV 0.00 (consistent with the body text "carries positively by about 0.5bp over 1y"); full USD/EUR/GBP/CAD grids in source.
 
 **ED CA table (Fig 62, close of 1/16/2020, vs CME swaps)** — CAs tightened toward fair in Blues/Golds:
 
@@ -525,10 +525,10 @@ Close-out of the doc-9 trade: entered Jan 2020 (50K DV01 GBP 15y10y/25y10y at �
 
 ## Synthesis for the ARBS convexity-RV build
 
-1. **CA tie-out ladder (Blues-area pack, CA level / vs-model, all vs matched 1y fwd swap):** 12/9/16: Z9-U0 7.31bp (+2.03); 1/6/17: H0-Z0 10.20bp (+4.31, ~3σ); 4/28/17: H0-Z0 6.76bp (+3.27, short-Blues trade live); 3/9/18: H1-Z1 6.00bp (+2.48); 1/11/19: H2-Z2 4.22bp (−0.12, "fair"); 3/22/19: H2-Z2 1.63bp (−1.06); 5/8/19: H2-Z2 2.12bp (−0.35, "Blues cheap"); 1/16/20: H2-Z2 1.93bp (+0.49); 3/27/20: H3-Z3 3.92bp (+1.83); 6/21/21: M4-H5 5.88bp (+2.06, model 3.82, entry 7.9bp spread on the live trade); 6/9/23 (SOFR): H6-Z6 area 13.70bp, Blues ≈ model+5bp. A backtest CA series should reproduce these to within quoting noise **provided the swap leg is CME-cleared** post-2019.
+1. **CA tie-out ladder (Blues-area pack, CA level / vs-model, all vs matched 1y fwd swap):** 12/9/16: Z9-U0 7.31bp (+2.03); 1/6/17: H0-Z0 10.20bp (+4.31, ~3σ); 4/28/17: H0-Z0 6.76bp (+3.27, short-Blues trade live); 3/9/18: H1-Z1 6.00bp (+2.48); 1/11/19: H2-Z2 4.22bp (−0.12, "fair"); 3/22/19: H2-Z2 1.63bp (−1.06); 5/8/19: H2-Z2 2.12bp (−0.35, "Blues cheap"); 1/16/20: H2-Z2 1.93bp (+0.49); 3/27/20: H3-Z3 3.92bp (+1.83); 6/21/21: M4-H5 5.88bp (+2.06, model 3.82, entry 7.9bp spread on the live trade); 6/9/23 (SOFR): Blues H6-Z6 13.70bp (model 8.96, +4.74). A backtest CA series should reproduce these to within quoting noise **provided the swap leg is CME-cleared** post-2019.
 2. **Citi's CA fair value is vol, not fly**: Ho-Lee on cap/floor vols, CA≈σ²T²/2. The fly enters Citi's framework only implicitly — via the "long-dated forward curve ⇄ vol" inverse relationship (10y10y/20y10y vs 2y10y vol regression, doc 1; 2y30y vol vs 20y5y−10y10y spread, doc 8). A CA-vs-fly regression is an ARBS construction to be validated, not a Citi citation from this corpus.
 3. **The two symmetric franchises**: short CA (futures vs CME swap; short vol, positive roll, target/stop in bp of CA) and long delta-hedged flattener (swap curve; long vol, negative roll, BE/RV entry gate ≤~0.8, exit ≥~0.8–1.0 as carry decays). Same Ho-Lee/breakeven algebra prices both; Citi flips between them depending on whether CA-implied (or BE) vol is above or below realized.
 4. **Positioning conditioning**: CFTC AM+LF net %OI (inverted) vs Blues CA−model is the published conditioning variable (doc 10, Fig 12) — matches the parent's TFF-conditioned variation.
 5. **CME-LCH**: no LCH CA is ever published; the CME choice is justified by futures/swap margin netting (portfolio-margining capital efficiency), i.e. the CA and the CME-LCH basis are entangled at the swap leg. Building CA vs both CCP curves and differencing them recovers the clearing-basis term structure at the pack maturities.
 6. **Costs for backtests**: swaps 0.3bp (2017+) scaling up to 1.6-2bp in the 1990s (doc 2 table); flattener initiation 0.75-1bp / hedge-roll 0.3-0.4bp one-way (doc 1); realized all-in drag on the 2019 flattener ≈ $32K per $50K-DV01 round trip incl. ~7 months of hedging.
-7. **Data-quality flags**: 6/9/23 CA table has a merged-column ambiguity (flagged in §8); doc-12 notional typo ("$81.97", "25y10y"); initiation-date 5/9 vs 5/10 discrepancy; hedge threshold 20bp (alerts) vs 25bp (backtest/GBP trade); Citi fly quotes are −0.5/1/−0.5 (half of ARBS's 2·belly−front−back).
+7. **Data-quality flags**: 6/9/23 CA table's merged markdown columns were disambiguated via the CA−Model=VsModel identity (§8); doc-12 notional typo ("$81.97", "25y10y"); initiation-date 5/9 vs 5/10 discrepancy; hedge threshold 20bp (alerts) vs 25bp (backtest/GBP trade); Citi fly quotes are −0.5/1/−0.5 (half of ARBS's 2·belly−front−back).
