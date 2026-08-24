@@ -107,7 +107,7 @@ Two more sizing defects, both measured before the freeze:
 
 298 declared cells, $100k CA DV01, t+1 fills, roll blackout on, zero cost:
 
-| sizing rule | cells | median gross | median net @1× | median gross Sharpe | max | median hedge DV01 |
+| sizing rule | cells (z_resid only) | median gross | median net @1× | median gross Sharpe | max | median hedge DV01 |
 |---|---:|---:|---:|---:|---:|---:|
 | **`none` (no hedge)** | 42 | **+$1,006,769** | **+$106,769** | **0.571** | 0.662 | $0 |
 | `beta_chg` | 42 | +$800,707 | −$449,527 | 0.336 | 0.851 | $13,215 |
@@ -117,7 +117,9 @@ Two more sizing defects, both measured before the freeze:
 | `vega_match` | 42 | $0 | $0 | 0.015 | 0.144 | (gated out) |
 
 **No hedge (0.571) beats the incumbent hedge (0.251) beats the correctly-sized
-hedge (0.203), monotonically in hedge size.** `none` is also the only family
+hedge (0.203), monotonically in hedge size.** (The 42 counted here are the
+`z_resid` cells; the `none` *family* is 48 cells across all signals, and §6b
+shows those are only **6 distinct books**.) `none` is also the only family
 still positive at 1× its own costs. This is the answer to the sizing objection
 in one line: the sizing was wrong, and correcting it makes things worse, because
 the leg being sized carries no information about the thing it is hedging.
@@ -515,6 +517,20 @@ engine only**, because a constant-rank panel cannot represent a dated hold.
 **Best engine Sharpe 0.184 against a 304-trial annualised bar of 1.2225. Median
 −0.014. Three of six positive.** The version of the brief's structure that
 removes the roll constraint entirely is dead too.
+
+**One measurement bias, stated because it is real, and its direction.** The A5
+signal is a z of the *spliced level*, and the spliced level carries the theta
+drift (−14.9 to −21.2 bp over the sample). A drifting-down level sits below its
+own trailing mean, which tilts z negative and therefore tilts entries toward
+**long CA** — measured: **24 long-CA against 11 short-CA episodes**, with mean z
+of −0.11 to −0.82 across the six books. A long-CA dated position *pays* theta on
+the engine, roughly 0.9 bp per three-month hold, so 13 net long episodes give up
+about $1.2M that a side-balanced book would not. **The bias runs against the
+trade, not for it**, and it is an order of magnitude smaller than the gap
+between 0.184 and the 1.2225 bar, so it cannot flip the verdict. The
+variance-space formulation (`v = 2e4·CA/w`, in which the decay lives in `w` and
+σ² is the stationary object) removes the tilt and is the right construction if
+this arm is ever revisited.
 
 ---
 
