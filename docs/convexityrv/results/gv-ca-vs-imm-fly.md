@@ -305,6 +305,7 @@ made 9 bets, not 48. Median honest `n_eff` = **11.0** (span-clock median 48.5).
 | headline | 12 | 0.5020 | **0.7019** |
 | full grid | 298 | 0.8724 | **1.2198** |
 | grid + A5 | 304 | 0.8737 | **1.2225** |
+| distinct books (see 6b) | 208 | 0.8377 | **1.1713** |
 
 **The best PRIMARY cell in the whole grid is 0.851 against an annualised bar of
 1.220.** Nothing in the primary universe clears, at any cost level, before the
@@ -353,6 +354,93 @@ median **56 business days**:
 the brief's R² = 0.505 regression is about — reverts in 68–99 business days, and
 the roll-flat window is 56. It *cannot converge inside one*, which is exactly
 what the 67% `segment_end` exit share was saying.
+
+---
+
+## 6b. The last gap: the CA-only book, and a trial count that runs against the verdict
+
+The grid's strongest family is `none` — no hedge at all. If there is an edge
+anywhere in this data it is there, so it gets the same battery the hedged
+finalists got, plus one thing they did not need.
+
+### How many of the 298 declared cells are distinct books?
+
+A `none` cell has β = 0, so the leg is not in the position at all:
+`A|GREENS|immF_2s5s10s|none` and `A|GREENS|le_10y10y_15y10y|none` are the **same
+book with different labels**. Fingerprinting every cell by its realised episode
+set (entry, exit, side, β, DV01):
+
+| | count |
+|---|---:|
+| declared cells | 298 |
+| cells that produced episodes | 256 |
+| **distinct episode sets** | **208** |
+| cells collapsed by duplication | 48 |
+| `none` family: declared / distinct | 48 / **6** |
+
+The `none` family's 48 cells are 6 things: 3 structures × 2 book scales.
+
+| trials | E[max SR \| null] per-hold | annualised |
+|---|---:|---:|
+| as declared, 298 | 0.8724 | **1.2198** |
+| distinct books, 208 | 0.8377 | **1.1713** |
+
+**This correction LOWERS the null bar** — it runs against this block's own
+verdict, which is exactly why it is on the record rather than left implicit. It
+moves the annualised bar by 0.05 and changes nothing.
+
+### The six CA-only books
+
+| structure | book scale | n_ep | hit | gross | ann SR | net @1× | SR @1× | breakeven |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| GREENS | const_dv01 | 12 | 0.50 | +$791,375 | **0.662** | −$108,625 | −0.080 | 0.33 bp |
+| GREENS | inv_vol | 12 | 0.50 | +$735,290 | 0.634 | −$423,748 | −0.296 | 0.24 bp |
+| GOLDS | inv_vol | 12 | 0.83 | +$2,556,353 | 0.579 | +$1,527,286 | +0.345 | 0.93 bp |
+| GOLDS | const_dv01 | 12 | 0.83 | +$2,610,681 | 0.564 | +$1,710,681 | **+0.370** | 1.09 bp |
+| BLUES | const_dv01 | 12 | 0.67 | +$1,222,162 | 0.301 | +$322,162 | +0.078 | 0.51 bp |
+| BLUES | inv_vol | 12 | 0.67 | +$727,661 | 0.183 | −$271,642 | −0.068 | 0.27 bp |
+
+**The best CA-only book scores 0.662 against the 12-trial annualised bar of
+0.7019.** It does not clear even the *headline* bar, let alone the grid's.
+
+### The battery
+
+| book | always-short SR | signal adds | lag 0 | 10 | 20 | 40 | 60 | early | late |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| GREENS const_dv01 | +0.359 | **−$103,250** | 0.662 | 0.064 | 0.214 | −0.327 | 0.047 | **0.992** | **−0.088** |
+| GREENS inv_vol | +0.359 | **−$159,335** | 0.634 | 0.094 | 0.163 | −0.330 | −0.004 | 1.009 | −0.018 |
+| GOLDS inv_vol | +0.099 | +$1,525,665 | 0.579 | 0.006 | −0.144 | −0.365 | −0.138 | 0.543 | 0.628 |
+
+Two clean readings:
+
+* **On GREENS the signal SUBTRACTS.** Buying and holding the short position
+  through every segment makes **more** ($894,625 at 0.359) than the z-rule
+  does ($791,375). And its Sharpe is 0.992 before 2024 and **−0.088** after.
+* **On GOLDS the signal genuinely adds** (+$1.53M over the static short), the
+  placebo dies properly (0.579 → −0.138 at 60 bd), and the sub-periods are
+  stable (0.543 / 0.628). This is the single most respectable book in the
+  block — and it scores 0.564–0.579 against a bar of 0.70 at twelve trials.
+
+### And the engine disagrees with the panel entirely
+
+| book | engine terminal | panel terminal | gap | **daily corr** | engine SR | panel SR |
+|---|---:|---:|---:|---:|---:|---:|
+| GREENS const_dv01 | $2,387,567 | $802,563 | **+197.5%** | **+0.162** | **0.384** | 0.705 |
+| GREENS inv_vol | $2,823,632 | $750,686 | **+276.1%** | **+0.089** | 0.296 | 0.681 |
+
+The engine makes 2–3.8× *more* money at roughly *half* the Sharpe, with almost
+no daily correlation to the panel. That is not a rounding difference — for an
+unhedged CA package the panel is **not measuring the traded object**. `ΔCA ×
+DV01` omits the carry and accrual of the struck matched swap and of the futures
+legs, and over 12 episodes at $100k DV01 that term is millions.
+
+**The consequence is general and it is the most transferable thing in this
+block:** a par-rate / level-difference panel is a signal construction tool, not
+a P&L model. Every panel-only convexity number this package has published —
+including block 1's and block 3's — carries that caveat, and the direction of
+the error is not even constant: it *overstated* the three hedged finalists by
+1.5–6× in Sharpe (§7) and *understated* the unhedged book's dollars by 2–3.8×
+while halving its Sharpe.
 
 ---
 

@@ -762,6 +762,115 @@ print(f"\nThe tradeable segment between roll blackouts is a median "
       "what the segment_end exit share said.")
 
 # %% [markdown]
+# ## 8b. The last gap: the CA-only book, and a trial count that runs the wrong way
+#
+# The grid's strongest family is `none` — no hedge at all. If there is an edge
+# anywhere in this data it is there. But first: a `none` cell has β = 0, so the
+# leg is not in the position and every `leg_id` gives the **same book**.
+
+# %%
+_fp = {}
+for _cid, _g in EP.groupby("cell_id"):
+    _g = _g.sort_values("entry")
+    _key = tuple(zip(_g["entry"].astype("int64"), _g["exit"].astype("int64"),
+                     _g["side"], np.round(_g["beta"].astype(float), 10),
+                     np.round(_g["ca_dv01"].astype(float), 6)))
+    _fp.setdefault(_key, []).append(_cid)
+N_DISTINCT = len(_fp)
+_none_ids = set(ST.loc[ST["sizing"] == "none", "cell_id"]) & set(EP["cell_id"])
+_none_fp = {k: [c for c in v if c in _none_ids] for k, v in _fp.items()}
+_none_fp = {k: v for k, v in _none_fp.items() if v}
+print(f"declared cells                 {len(CELLS)}")
+print(f"cells that produced episodes   {len(set(EP['cell_id']))}")
+print(f"DISTINCT episode sets          {N_DISTINCT}")
+print(f"`none` family declared/distinct {len(_none_ids)} / {len(_none_fp)}")
+for _label, _n in (("as declared", len(CELLS)), ("distinct books", N_DISTINCT)):
+    _b = GG.null_bars(_n, n_eff=_neff, span_years=SPAN_Y)
+    print(f"  E[max SR|null, {_label:14s} = {_n:3d}]  annualised "
+          f"{_b['emax_annualised']:.4f}")
+print("\nThe correction LOWERS the bar -- it runs AGAINST this block's own "
+      "verdict, which is why it is reported rather than left implicit. It moves "
+      "the annualised bar by 0.05 and changes nothing.")
+
+# %%
+_rows = []
+for _k, _v in _none_fp.items():
+    _r = ST[ST["cell_id"] == _v[0]].iloc[0]
+    _rows.append({"cell_id": _v[0], "structure": _r["structure"],
+                  "book_scale": _r["book_scale"], "n_episodes": _r["n_episodes"],
+                  "hit_rate": _r["hit_rate"], "net_0": _r["net_0.0"],
+                  "sharpe_0": _r["sharpe_0.0"], "net_1": _r["net_1.0"],
+                  "sharpe_1": _r["sharpe_1.0"], "breakeven_bp": _r["breakeven_bp"]})
+NONE = pd.DataFrame(_rows).sort_values("sharpe_0", ascending=False)
+print(NONE.round(3).to_string(index=False))
+_bar12 = GG.null_bars(CFG.n_trials_headline, n_eff=_neff,
+                      span_years=SPAN_Y)["emax_annualised"]
+print(f"\nbest CA-only annualised Sharpe {NONE['sharpe_0'].max():.4f} vs the "
+      f"TWELVE-trial annualised bar {_bar12:.4f}  ->  clears: "
+      f"{bool(NONE['sharpe_0'].max() > _bar12)}")
+
+
+# %%
+def _hold_ca(structure, side):
+    _ca = CA[U.ca_col(structure)].dropna()
+    _z = pd.Series(0.0, index=_ca.index)
+    _eps = [GS.Episode(a, b, side, 0.0, CFG.ca_dv01, 0.0, "hold", i)
+            for i, (a, b) in enumerate(SEGS)]
+    return GS.book_daily(_eps, _ca, _z, leg_id=None, index=_ca.index)
+
+
+_rows = []
+for _cid in list(NONE["cell_id"].head(3)):
+    _sp = CELLMAP[_cid]
+    _base = ST[ST["cell_id"] == _cid].iloc[0]
+    _sh = _hold_ca(_sp.structure, -1)
+    _row = {"cell_id": _cid, "cell_sharpe": _base["sharpe_0.0"],
+            "always_short_sharpe": _sharpe(_sh),
+            "signal_adds_usd": _base["net_0.0"] - float(_sh.sum())}
+    for _lag in (0, 10, 20, 40, 60):
+        _r = GG.run_cell(_replace(_sp, cfg=GS.SignalConfig(
+            **{**_sp.cfg.__dict__, "signal_lag_bd": _lag})), CA, LEGS,
+            halflives=HL, ca_dv01=CFG.ca_dv01)
+        _row[f"sr_lag{_lag}"] = _sharpe(_r.daily_by_mult[0.0])
+    _d = GG.run_cell(_sp, CA, LEGS, halflives=HL,
+                     ca_dv01=CFG.ca_dv01).daily_by_mult[0.0]
+    _cut = pd.Timestamp("2024-01-01")
+    _row["sharpe_early"] = _sharpe(_d.loc[:_cut])
+    _row["sharpe_late"] = _sharpe(_d.loc[_cut:])
+    _rows.append(_row)
+CAONLY = pd.DataFrame(_rows)
+print(CAONLY.round(3).to_string(index=False))
+print("\nOn GREENS the signal SUBTRACTS -- buying and holding the short through "
+      "every segment makes more than the z-rule does -- and its Sharpe is 0.99 "
+      "before 2024 and -0.09 after. On GOLDS the signal genuinely adds, the "
+      "placebo dies properly, and the sub-periods are stable: the single most "
+      "respectable book in the block, and it scores 0.56-0.58 against a bar of "
+      f"{_bar12:.2f} at twelve trials.")
+
+# %%
+_cao = DATA / "p2_ca_only.json"
+if _cao.exists():
+    _c = json.loads(_cao.read_text()).get("certification", {})
+    _rows = [{"cell_id": k, **{kk: vv for kk, vv in v.items()
+                               if kk in ("engine_terminal", "panel_terminal",
+                                         "terminal_gap_pct", "daily_change_corr",
+                                         "engine_sharpe", "panel_sharpe")}}
+             for k, v in _c.items() if v.get("status") == "ok"]
+    if _rows:
+        print(pd.DataFrame(_rows).round(4).to_string(index=False))
+        print("\nThe engine makes 2-3.8x MORE money at roughly HALF the Sharpe, "
+              "with almost no daily correlation to the panel. For an unhedged "
+              "CA package the panel is not measuring the traded object at all: "
+              "`dCA x DV01` omits the carry and accrual of the struck matched "
+              "swap and of the futures legs.\n\nA par-rate panel is a signal "
+              "construction tool, not a P&L model. The direction of its error "
+              "is not even constant -- it OVERSTATED the three hedged "
+              "finalists by 1.5-6x in Sharpe and UNDERSTATED the unhedged "
+              "book's dollars by 2-3.8x while halving its Sharpe.")
+else:
+    print("run `python notebooks/backtests/convexity_rv/_p2_ca_only.py` first")
+
+# %% [markdown]
 # ## 9. Engine certification, and the SFR12 adjudication
 #
 # The grid's only cell that clears its annualised 298-trial bar is
@@ -923,6 +1032,10 @@ print(f"vol-proxy legs clearing the gate  "
 print(f"vega-matched / incumbent hedge    {SIZING['ratio'].median():.2f}x median")
 print(f"best PRIMARY gross ann Sharpe     {float(PRIM['sharpe_0.0'].max()):.4f}")
 print(f"E[max SR|null, {CFG.n_trials_grid} trials, ann]  {_bar:.4f}")
+print(f"distinct books (not 298)          {N_DISTINCT}, bar "
+      f"{GG.null_bars(N_DISTINCT, n_eff=_neff, span_years=SPAN_Y)['emax_annualised']:.4f}")
+print(f"best CA-only (unhedged) book      {NONE['sharpe_0'].max():.4f} vs a "
+      f"TWELVE-trial bar of {_bar12:.4f}")
 print(f"best cell overall                 "
       f"{SCORED.sort_values('sharpe_0.0', ascending=False).iloc[0]['cell_id']} "
       f"({float(SCORED['sharpe_0.0'].max()):.4f}), a secondary structure whose "
