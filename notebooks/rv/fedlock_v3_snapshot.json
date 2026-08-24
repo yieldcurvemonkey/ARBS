@@ -1,0 +1,32 @@
+{
+  "dataset": "fedlock_v3",
+  "url": "https://jnathan9.github.io/fedlock/v3/data.json",
+  "fetched": "2026-08-24T08:38:19",
+  "first": "1985-07-25",
+  "last": "2026-08-13",
+  "built_on": "2026-08-17",
+  "data_through": "2026-08-13",
+  "n_rows": 4000,
+  "n_dated": 3673,
+  "n_undated": 327,
+  "undated_by_speaker": {
+    "Richard W Fisher": 89,
+    "Janet L Yellen": 79,
+    "John C Williams": 79,
+    "Mary C Daly": 24,
+    "Robert S Kaplan": 19,
+    "Austan D Goolsbee": 13,
+    "Ben S Bernanke": 7,
+    "Jerome H Powell": 7
+  },
+  "undated_by_source": {
+    "frbsf.org": 162,
+    "dallasfed.org": 108,
+    "fraser.stlouisfed.org": 40,
+    "chicagofed.org": 13,
+    "newyorkfed.org": 3,
+    "bostonfed.org": 1
+  },
+  "undated_mean_score": 49.9482874617737,
+  "dated_mean_score": 50.12749523550231
+}
