@@ -721,6 +721,21 @@ def warm_frb_fedinvest_eod(start, end):
     return df
 
 
+#: ``stirf_curve_service`` reporting how many days it actually processed.
+#:
+#: Emitted once per curve at the end of ``_run_backfill_mode``
+#: (``scripts/stirf_curve_service.py``, "Backfill summary for %s: windows=%s"),
+#: and it counts the days that reached the pricing loop. A child that dies on
+#: import never prints it at all, which is exactly the distinction this reads.
+_STIRF_BANKED = re.compile(r"Backfill summary for \S+: windows=(\d+)")
+
+
+def _stirf_windows_banked(out, err):
+    """How many days a STIRF child says it processed. ``None`` if it never said."""
+    found = _STIRF_BANKED.findall((out or "") + "\n" + (err or ""))
+    return sum(int(n) for n in found) if found else None
+
+
 def warm_stirf_cme_session(start, end):
     """Job 4: STIRF intraday CME session curves via stirf_curve_service.py.
 
@@ -728,6 +743,17 @@ def warm_stirf_cme_session(start, end):
     at 1-minute resolution for the full CME Globex session (17:00 CT prior
     day through 16:00 CT trade date). The default tenors for STIRT curves
     are the 12 IMM relative pairs (IMM_1xIMM_2 through IMM_12xIMM_13).
+
+    A LOST CURVE IS NOT A WARNING. ``record=False`` on the call below is correct
+    for what it was written for - a curve that priced some days and reported a
+    partial on others has always been survivable here - but it also covered the
+    case where a curve produced nothing at all. On 2026-08-23 source was edited
+    mid-run, the first curve's child died importing a half-written module, and
+    the job reported ``OK (98.7s)`` having banked two curves of three.
+
+    So the child is asked what it BANKED rather than only what it exited with.
+    Both a dead curve and a partial one exit 1; only the dead one has no
+    ``Backfill summary`` line and no processed day behind it.
     """
     import pandas as pd
     import QuantLib as ql
@@ -765,6 +791,7 @@ def warm_stirf_cme_session(start, end):
     # deadline at 5,400 s - 3.3x the worst normal night, enough for a multi-day
     # backfill's first curves, and half the three-hour worst case.
     deadline = time.monotonic() + _STIRF_TOTAL_BUDGET_S
+    lost = []
     for curve in curves:
         label = f"stirf_curve_service {curve}"
         remaining = deadline - time.monotonic()
@@ -777,6 +804,7 @@ def warm_stirf_cme_session(start, end):
                 label, "NOT RUN",
                 f"the {_STIRF_TOTAL_BUDGET_S:.0f}s STIRF budget was spent by earlier curves",
             ))
+            lost.append(label)
             continue
 
         cmd = [
@@ -787,8 +815,32 @@ def warm_stirf_cme_session(start, end):
             "--cme-session",
         ]
         cap = min(_STIRF_CURVE_TIMEOUT_S, remaining)
+        banked = {"windows": None}
+
+        def _read_summary(out, err, rc, _banked=banked):
+            _banked["windows"] = _stirf_windows_banked(out, err)
+
         try:
-            _run(cmd, label, timeout=cap, record=False)
+            rc = _run(cmd, label, timeout=cap, record=False, on_output=_read_summary)
+            if rc == _NOT_LAUNCHED:
+                # The source guard already recorded why, and there is no child
+                # output to read. Counted as lost so the tally below is honest.
+                lost.append(label)
+            elif rc != 0 and not banked["windows"]:
+                # NOTHING banked and a non-zero exit. Not a partial, not a slow
+                # day: this curve produced no timeseries at all, and the job must
+                # not report OK for a curve it lost. A curve that banked SOME
+                # days keeps the old warning - that is what record=False is for.
+                lost.append(label)
+                said = "it printed no backfill summary at all" if banked["windows"] is None \
+                    else "it reported 0 window(s)"
+                log.error("  %s: LOST CURVE - exited %s and %s", label, rc, said)
+                _SUBPROCESS_FAILURES.append(_StepFailure(
+                    label, rc,
+                    f"banked no day at all for {curve} ({said}); the other curves "
+                    f"in this job may have succeeded, so check the sidecar before "
+                    f"re-running the whole job",
+                ))
         except subprocess.TimeoutExpired:
             # Caught rather than propagated, so ONE slow curve stops costing the
             # other two. On 2026-08-15 the third curve timed out and the job died
@@ -798,11 +850,23 @@ def warm_stirf_cme_session(start, end):
             # non-zero exit, which has always been treated as a warning here.
             log.error("  %s timed out after %.0fs; continuing with the next curve",
                       label, cap)
+            got = banked["windows"]
+            if not got:
+                lost.append(label)
             _SUBPROCESS_FAILURES.append(_StepFailure(
-                label, "TIMEOUT", f"timed out after {cap:.0f}s (child output in the sidecar)",
+                label, "TIMEOUT",
+                f"timed out after {cap:.0f}s having banked "
+                f"{got if got else 'NO'} day(s) (child output in the sidecar)",
             ))
 
-    return f"STIRF backfill: {len(bdates)} days x {len(curves)} curves"
+    # The count is IN the status line, so a lost curve is visible in SUMMARY even
+    # to a reader who does not scroll up to the per-curve errors. The job is
+    # already FAILED by then - each loss is in _SUBPROCESS_FAILURES - and this is
+    # what makes it legible rather than what makes it fail.
+    banked_curves = len(curves) - len(lost)
+    tail = f", {len(lost)} LOST ({', '.join(lost)})" if lost else ""
+    return (f"STIRF backfill: {len(bdates)} days x {banked_curves}/{len(curves)} "
+            f"curves banked{tail}")
 
 
 def warm_sr3_settles_eod(start, end):
@@ -1134,6 +1198,287 @@ _EXCEPTION_LINE = re.compile(
     r"^[A-Za-z_][\w.]*(?:Error|Exception|Interrupt|SystemExit|Warning)\b"
 )
 
+#: A child that could not LOAD its own code, as opposed to one that ran and
+#: failed. Anchored to the start of a line so it matches a traceback's exception
+#: line rather than the word appearing inside a message.
+_FATAL_IMPORT_LINE = re.compile(
+    r"^(?:[A-Za-z_][\w.]*\.)?"
+    r"(SyntaxError|IndentationError|TabError|ImportError|ModuleNotFoundError)\b.*$",
+    re.MULTILINE,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Source guard — this process is safe, its CHILDREN are not
+# ─────────────────────────────────────────────────────────────────────
+#
+# The running warm has already imported its modules and holds them in memory, so
+# editing a file under it cannot hurt IT. Its subprocesses import from DISK.
+#
+# Measured, 2026-08-23, and the reason this exists: source was edited while the
+# catch-up warm was running, a ``stirf_curve_service`` child imported a
+# half-written ``TB/TimeseriesBuilder.py``, and STIRF's first curve died with a
+# ``SyntaxError``. The run logged a WARNING and reported ``OK (98.7s)``, because
+# that call site passes ``record=False``. A curve was lost and the night stayed
+# green - the same "green while wrong" shape the rest of this file has been
+# clearing out.
+#
+# Three guards, cheapest first:
+#   1. PRE-FLIGHT   every source file parses, before three hours of work is
+#                   committed to a tree that cannot be imported.
+#   2. STABILITY    the tree is re-checked before every child launch, and a file
+#                   that changed AND no longer parses stops that child.
+#   3. CLASSIFY     a child whose traceback says it could not load its code is
+#                   never survivable, whatever ``record=`` says. See :func:`_run`.
+#
+# ``ARBS_WARM_SOURCE_GUARD=0`` turns 1 and 2 off. 3 is a reporting fix and has no
+# switch: it changes what a lost step is CALLED, not whether the step ran.
+
+#: The trees a warm's children import from. Not the whole repo: a broken file in
+#: a tree no child imports is not this run's problem, and a guard that fails on
+#: one is a guard that gets switched off.
+_SOURCE_ROOTS = ("TB", "Caching", "MDP", "Query", "Utils", "utils", "scripts",
+                 "BT", "RVUtils")
+
+def _source_guard_enabled() -> bool:
+    """Read at CALL time, not at import.
+
+    Bound at import, the switch could only be tested by patching the module
+    attribute - which proves the branch works and not that the VARIABLE an
+    operator sets does anything. Renaming the env var here used to leave the
+    whole suite green.
+    """
+    return os.environ.get("ARBS_WARM_SOURCE_GUARD", "1") != "0"
+
+#: What :func:`_run` returns when the source guard refused to launch a child.
+#:
+#: Deliberately not an integer. There IS no exit code - the child never started -
+#: and every caller's ``rc != 0`` still reads correctly, while ``rc in
+#: skip_codes`` cannot accidentally match it.
+_NOT_LAUNCHED = "NOT LAUNCHED"
+
+#: ``{path: (mtime_ns, size)}`` as of run start. Filled by :func:`_preflight_source`.
+_SOURCE_SNAPSHOT: dict[str, tuple[int, int]] = {}
+
+
+
+def _rel(path):
+    """``path`` relative to the repo when it is inside it, else as it stands.
+
+    ``os.path.relpath`` raises on Windows when the two are on different drives,
+    which is exactly what a tmp-dir test does to it.
+    """
+    try:
+        return os.path.relpath(path, REPO_ROOT)
+    except ValueError:
+        return str(path)
+
+
+def _source_files():
+    """Every ``.py`` under :data:`_SOURCE_ROOTS`, as absolute paths.
+
+    An entry may be absolute, so a test can point the guard at a tree it built
+    without also moving ``REPO_ROOT`` - which ``_run`` uses as the child's cwd,
+    so moving it would break the very subprocess the test is about.
+    """
+    out = []
+    # De-duplicated by normalised path. ``_SOURCE_ROOTS`` names both "Utils" and
+    # "utils"; only the lowercase tree is tracked, but NTFS resolves both, so
+    # without this its 8 files are walked, stat'ed and parsed under two path
+    # strings - and a broken one is reported twice, under two spellings, with the
+    # abort line saying "2 source file(s)" for one file. Measured: 1,504 paths
+    # collapsing to 1,496 unique.
+    seen = set()
+    for root in _SOURCE_ROOTS:
+        base = root if os.path.isabs(root) else os.path.join(REPO_ROOT, root)
+        if not os.path.isdir(base):
+            continue
+        key = os.path.normcase(os.path.abspath(base))
+        if key in seen:
+            continue
+        seen.add(key)
+        for dirpath, dirnames, filenames in os.walk(base):
+            # A worktree under .claude/ is a stale copy of this repo and nothing
+            # imports from it; __pycache__ holds no source at all.
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in ("__pycache__", ".git", "node_modules", ".claude")
+            ]
+            for name in filenames:
+                if name.endswith(".py"):
+                    out.append(os.path.join(dirpath, name))
+    return out
+
+
+def _source_snapshot(paths):
+    """``{path: (mtime_ns, size)}``. Measured at 0.3 s over 1,496 files."""
+    snap = {}
+    for path in paths:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        snap[path] = (st.st_mtime_ns, st.st_size)
+    return snap
+
+
+def _compile_failures(paths):
+    """``[(path, lineno, msg)]`` for every file that does not parse.
+
+    ``compile`` rather than ``import``: importing runs module-level code, which
+    for this repo means opening Excel and touching the network. Parsing is the
+    question actually being asked - can a child load this file - and it is the
+    whole of what a half-written file fails.
+    """
+    bad = []
+    for path in paths:
+        try:
+            with open(path, "rb") as fh:
+                source = fh.read()
+            compile(source, path, "exec", dont_inherit=True)
+        except SyntaxError as exc:
+            bad.append((path, exc.lineno, exc.msg))
+        except OSError as exc:  # unreadable is not un-parseable, but it is not fine
+            bad.append((path, None, f"{type(exc).__name__}: {exc}"))
+    return bad
+
+
+def _preflight_source():
+    """Guard 1. Every source file parses; snapshot the tree for guard 2.
+
+    Returns the list of failures. Measured on this machine: 2.9 s to parse 1,496
+    files warm (13.9 s cold), against a nightly span of 2,600-3,500 s.
+
+    Once per run, and it stays that way: a nightly calls :func:`main` exactly
+    once. Tests that call it repeatedly and are not about this guard neutralise
+    it by pointing ``_SOURCE_ROOTS`` at nothing, the same way they already
+    neutralise the Excel pre-flight - a per-process memo was tried instead and
+    bought nothing, because those fixtures re-import the module per test.
+    """
+    if not _source_guard_enabled():
+        log.info("source guard disabled (ARBS_WARM_SOURCE_GUARD=0)")
+        return []
+    t0 = time.perf_counter()
+    paths = _source_files()
+    _SOURCE_SNAPSHOT.clear()
+    _SOURCE_SNAPSHOT.update(_source_snapshot(paths))
+    bad = _compile_failures(paths)
+    log.info("source pre-flight: %d file(s) parsed in %.1fs%s",
+             len(paths), time.perf_counter() - t0,
+             f", {len(bad)} BROKEN" if bad else "")
+    for path, lineno, msg in bad:
+        log.error("  BROKEN SOURCE %s:%s %s",
+                  _rel(path), lineno, msg)
+    return bad
+
+
+def _source_changed_since_start():
+    """Guard 2. ``([changed], [(path, lineno, msg)])`` since the run began.
+
+    A DELTA, never "the tree is dirty". The primary checkout is routinely dirty
+    with in-flight work - it is dirty right now - so a guard that fires on any
+    uncommitted file fires every single night and gets turned off. Only ``.py``
+    files under the import roots are watched, so notebook churn cannot trip it.
+
+    A changed file that still parses is reported and stepped over: someone landed
+    a clean edit, which is legal and worth knowing about. A changed file that no
+    longer parses is the hazard, and it stops the child.
+    """
+    if not _source_guard_enabled() or not _SOURCE_SNAPSHOT:
+        return [], []
+    now = _source_snapshot(_source_files())
+    changed = sorted(
+        set(now) ^ set(_SOURCE_SNAPSHOT)
+        | {p for p in (set(now) & set(_SOURCE_SNAPSHOT)) if now[p] != _SOURCE_SNAPSHOT[p]}
+    )
+    if not changed:
+        return [], []
+    return changed, _compile_failures([p for p in changed if p in now])
+
+
+def _assert_source_stable(label):
+    """Guard 2's decision. ``""`` to launch, or the reason not to.
+
+    Records a failure and refuses the child only when a file that CHANGED no
+    longer parses - the one condition under which the child is certain to import
+    something half-written. Everything else is loud and survivable.
+    """
+    changed, broken = _source_changed_since_start()
+    if not changed:
+        return ""
+    shown = ", ".join(_rel(p) for p in changed[:5])
+    more = f" and {len(changed) - 5} more" if len(changed) > 5 else ""
+    if not broken:
+        log.warning(
+            "  SOURCE CHANGED under a running warm: %s%s. Every file still "
+            "parses, so %s is launched - but this process is running the code it "
+            "imported at start-up and its children are not, so the two are no "
+            "longer the same warm.", shown, more, label,
+        )
+        # Re-baseline: a clean edit is reported ONCE, not before every child for
+        # the rest of the night.
+        #
+        # ``update`` alone cannot do it. ``_source_snapshot`` skips any path whose
+        # ``os.stat`` raises, so a DELETED file yields no key, stays in the
+        # snapshot for the life of the process, and keeps appearing in the
+        # symmetric difference - so the warning would fire before every remaining
+        # child, which is the opposite of what the line above promises. Log noise
+        # rather than a wrong decision (no child is refused and nothing is
+        # recorded), but the promise should hold. Merging a branch that removes a
+        # .py while a warm runs is enough to trigger it, and this branch removes
+        # one.
+        fresh = _source_snapshot(changed)
+        for path in changed:
+            if path in fresh:
+                _SOURCE_SNAPSHOT[path] = fresh[path]
+            else:
+                _SOURCE_SNAPSHOT.pop(path, None)
+        return ""
+    where = "; ".join(
+        f"{_rel(p)}:{lineno} {msg}" for p, lineno, msg in broken[:3]
+    )
+    reason = (
+        f"source changed mid-run and {len(broken)} changed file(s) no longer "
+        f"parse ({where}). A child imports from DISK, so this one would have "
+        f"died on the half-written file rather than on anything about the data."
+    )
+    log.error("  NOT LAUNCHING %s: %s", label, reason)
+    _SUBPROCESS_FAILURES.append(_StepFailure(label, "NOT RUN", reason))
+    return reason
+
+
+def _child_died_on_import(out, err):
+    """Guard 3. The child could not LOAD its code, so nothing it says is data.
+
+    ``SyntaxError`` and friends are never a market condition, never a transport
+    fault, and never survivable: the child did no work at all. Reported whatever
+    the call site's ``record=`` says, because ``record=False`` encodes "a
+    non-zero exit here has always been a warning" - which is true of a curve that
+    priced badly and false of one that never started.
+
+    THE TEST IS AN UNHANDLED TRACEBACK, not the word appearing on stderr, and
+    the difference is not pedantry - the first draft of this got it wrong and a
+    test caught it. :func:`_child_raised` accepts a last line that merely LOOKS
+    like an exception line, because that is the right rule for "what should I
+    quote as the cause". It is the wrong rule here: a child that catches an
+    ImportError and logs ``f"{type(exc).__name__}: {exc}"`` - which is what
+    ``logging`` and every hand-rolled reporter produce, on stderr - would be read
+    as a child that died importing, and a survivable data failure would be
+    escalated into a lost curve on nights nothing is wrong.
+
+    So: search only from the LAST traceback marker onward. A handled error logged
+    before it cannot match, and an exception line that terminates a real
+    traceback can. Anchored to the start of a line via :data:`_FATAL_IMPORT_LINE`,
+    so ``RuntimeError: the vendor bridge reported ImportError`` does not match
+    either.
+    """
+    text = err or ""
+    start = text.rfind("Traceback (most recent call last)")
+    if start < 0:
+        return ""
+    match = _FATAL_IMPORT_LINE.search(text, start)
+    return _clip(match.group(0).strip()) if match else ""
+
 
 def _job_status(elapsed, result):
     """The SUMMARY line for a job that returned, including what it SAID.
@@ -1250,7 +1595,7 @@ def _archive_child_output(label, cmd, returncode, out, err):
         log.warning("  could not archive %s output (%s)", label, exc)
 
 
-def _run(cmd, label, timeout=None, record=True, skip_codes=()):
+def _run(cmd, label, timeout=None, record=True, skip_codes=(), on_output=None):
     """Run a warm script as a subprocess and report, without killing the run.
 
     Captures the child's streams rather than letting them inherit the scheduled
@@ -1275,7 +1620,15 @@ def _run(cmd, label, timeout=None, record=True, skip_codes=()):
     ``citivelo_excel_warm.py`` and "stopped at the Excel memory ceiling" to
     ``citivelo_excel_intraday_warm.py``, and the second of those IS worth a
     red line. A blanket "3 means skip" would silently reclassify it.
+
+    ``on_output`` is handed ``(stdout, stderr, returncode)`` after the child
+    exits. The STIRF job uses it to read the child's own account of what it
+    banked, which is the only way to tell a curve that priced nothing from one
+    that priced badly - the return code cannot, because both are 1.
     """
+    blocked = _assert_source_stable(label)
+    if blocked:
+        return _NOT_LAUNCHED
     log.info("  %s: %s", label, " ".join(cmd[2:]))
     env = dict(os.environ)
     # The children print em-dashes and box-drawing characters. A captured pipe on
@@ -1295,12 +1648,26 @@ def _run(cmd, label, timeout=None, record=True, skip_codes=()):
         t_out = _as_text(exc.stdout)
         t_err = _as_text(exc.stderr)
         _archive_child_output(f"{label} (TIMEOUT)", cmd, "timeout", t_out, t_err)
+        if on_output is not None:
+            # A timeout that banked six of eight days is a different event from
+            # one that banked none, and only the child's own output can tell
+            # them apart. Offered here too, so the caller is not blind to the
+            # one failure mode where the work is most likely to be partial.
+            try:
+                on_output(t_out, t_err, "TIMEOUT")
+            except Exception as inner:  # noqa: BLE001
+                log.warning("  could not read %s output (%s)", label, inner)
         for line in _tail(t_out) or _tail(t_err):
             log.warning("    [%s last output] %s", label, line)
         raise
     out = _as_text(getattr(result, "stdout", ""))
     err = _as_text(getattr(result, "stderr", ""))
     _archive_child_output(label, cmd, result.returncode, out, err)
+    if on_output is not None:
+        try:
+            on_output(out, err, result.returncode)
+        except Exception as exc:  # noqa: BLE001 - bookkeeping must not break the warm
+            log.warning("  could not read %s output (%s)", label, exc)
     if result.returncode in tuple(skip_codes) and result.returncode != 0:
         # The child's own last line is the actionable half - it names what a
         # human has to run. Carried into SUMMARY verbatim rather than replaced
@@ -1322,9 +1689,21 @@ def _run(cmd, label, timeout=None, record=True, skip_codes=()):
                 log.warning("    [stderr] %s", line)
         if _CHILD_LOG_PATH:
             log.warning("    full output: %s", _CHILD_LOG_PATH)
-        if record:
+        # Guard 3. A child that could not LOAD its own code did no work, so the
+        # call site's "a non-zero exit here has always been a warning" does not
+        # apply: that convention was written for a curve that priced badly, and
+        # this is a curve that never started. Escalated regardless of ``record``.
+        fatal = _child_died_on_import(out, err)
+        if fatal and not record:
+            log.error(
+                "  %s could not load its own code, which is never a data "
+                "condition - reporting it as FAILED even though this step "
+                "treats a non-zero exit as a warning: %s", label, fatal,
+            )
+        if record or fatal:
             _SUBPROCESS_FAILURES.append(
-                _StepFailure(label, result.returncode, _last_meaningful_line(out, err))
+                _StepFailure(label, result.returncode,
+                             fatal or _last_meaningful_line(out, err))
             )
     return result.returncode
 
@@ -2412,6 +2791,18 @@ def warm_citivelo_frb_values(start, end):
     Requires the bond tag warm. Reads only what Citi serves per bond, so the
     quote-only values (SPREAD_TSY, OAS, ASW) are asked for alongside the ones
     rebuilt locally from PRICE.
+
+    A STRICT SUBSET of "CITIVELO UST timeseries values EOD", and kept anyway.
+    Verified 2026-08-23: its 14 aliases are 14 of that job's 28, its 3 values are
+    3 of that job's 10, and all 42 computed-store symbols are IDENTICAL. What
+    this job has that the other does not is ``offline=bool(blocked)`` below - it
+    degrades when Excel is down but goes LIVE when Excel is up, where the other
+    is ``offline=True`` always. This runs first, so the other job's offline value
+    wins wherever it has one; this job's live value survives only on a tag-cache
+    miss, which is the case it is being kept for. Cost: seconds, "4 rows x 42
+    cols". See ``tests/test_warm_frb_job_overlap.py``, which fails if the two
+    ever start writing DIFFERENT symbols - lookalike series are worse than
+    duplicates.
     """
     from Query.Unified.UnifiedQuery import UnifiedQuery
     from Query.Unified.registry import UnifiedValue
@@ -2492,12 +2883,28 @@ def warm_citivelo_ust_timeseries(start, end):
     lives beside the tag cache, NOT in the repo - this runs from the primary
     checkout and must not leave a tracked file dirty every morning.
 
-    Overlaps job "CITIVELO FRB values EOD" on 14 aliases x 2 values. That is
-    waste, not damage: both jobs compute the same numbers from the same tag cache
-    into the same ``(symbol, date)`` keys, and ``append_many_rows`` upserts rather
-    than replacing a partition. Folding the older job into this one is the
-    obvious follow-up; it is left alone here so this change adds coverage without
-    altering what already runs.
+    Overlaps job "CITIVELO FRB values EOD" on 14 aliases x THREE values, and the
+    overlap is exact rather than approximate. Verified 2026-08-23 by computing
+    both sides: 14 of this job's 28 aliases, 3 of its 10 ``DEFAULT_BUILD_VALUES``
+    (``FRB_YTM``, ``FRB_CLEAN_PRICE``, ``FRB_SPREAD_TSY``), and all 42 resulting
+    computed-store symbols IDENTICAL - same ``USTS_CITIVELO-RL`` source, same
+    ``UnifiedQuery(cusip=, value=)`` construction, same sha1 fingerprint. (An
+    earlier note here said "x2 values"; it was wrong.)
+
+    It is waste, not damage: both write the same numbers to the same
+    ``(symbol, date)`` keys and ``append_many_rows`` upserts.
+
+    THE FOLD WAS INVESTIGATED AND DECLINED. Job 17 is the only live-capable route
+    to those 42 symbols - it runs ``offline=bool(blocked)``, so with a healthy
+    Excel it can fall through to a workbook for a tag the cache lacks, while this
+    job is ``offline=True`` always. Job 17 also runs FIRST, so this job's offline
+    value wins wherever it has one and job 17's live value survives only where
+    this job produced nothing - which is exactly the cache-miss case job 17 is
+    worth keeping for. The duplication costs seconds ("4 rows x 42 cols"), so
+    folding would trade a narrow real capability for seconds.
+    ``tests/test_warm_frb_job_overlap.py`` pins the finding, because the state
+    worse than duplication is DIVERGENCE: two lookalike series under different
+    symbols, with nothing saying so.
     """
     from scripts.citivelo_ust_timeseries_warm import (
         DEFAULT_BUILD_VALUES,
@@ -2884,6 +3291,22 @@ def main():
     log_path = _start_run_log()
     if log_path:
         log.info("run log: %s", log_path)
+
+    # BEFORE anything runs. A warm shells out for hours and every child imports
+    # from disk, so a source file that does not parse is three hours of work
+    # committed to a tree that cannot load. 2.9 s to find out, measured over
+    # 1,496 files; the alternative was measured too, on 2026-08-23, and cost a
+    # STIRF curve while the run reported OK.
+    broken = _preflight_source()
+    if broken:
+        log.error(
+            "NOTHING RUN: %d source file(s) under %s do not parse. Every child in "
+            "this warm imports from disk, so this is not a condition any of them "
+            "can survive. Fix the file(s) named above, or set "
+            "ARBS_WARM_SOURCE_GUARD=0 to run anyway.",
+            len(broken), "/".join(_SOURCE_ROOTS),
+        )
+        return 1
 
     # Determine date range
     if args.date:

@@ -2037,3 +2037,341 @@ def test_no_test_in_this_repo_can_write_the_production_warm_manifest():
         "this module bound MANIFEST at import, before the override was set - "
         "the rail has to be armed at conftest import, not in a fixture"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 5b. THE WINDOW LEDGER
+#
+# The resume key above is correct and expensive. It is f"{start}|{end}|{values}"
+# and the nightly window ends at the last settled session, so `end` moves every
+# night, so the key changes every night, so all 877 bonds look un-warmed on every
+# run. Measured: part of 2,600-3,500 s a night.
+#
+# The requirement has NOT been relaxed - every test in section 5 still passes -
+# but it is now enforced per value by a ledger of the windows actually FETCHED,
+# rather than by making the whole key move. So the tests here are all about the
+# difference: a moved end must cost its TAIL and not the whole window.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _windows(quotes):
+    """The (start, end) each wire call actually asked for."""
+    return [(c.start, c.end) for c in quotes.calls]
+
+
+def _seed_ledger(manifest, mode, isins, windows_by_value):
+    manifest.write_text(
+        json.dumps({mode: {isin: {"windows": windows_by_value, "tags": 2}
+                           for isin in isins}}),
+        encoding="utf-8",
+    )
+
+
+def test_a_later_end_refetches_only_the_new_tail(env, monkeypatch):
+    """THE saving. A banked bond owes one day, not thirty.
+
+    Under the old key this bond went out for the whole 2026-07-09..2026-08-08
+    window because the key had moved. That is the re-fetch the nightly paid for
+    the entire universe, every night.
+    """
+    uni = WARM.universe()
+    already = [r.isin for r in uni[:8]]
+    _seed_ledger(env.manifest, "eod", already,
+                 {"PRICE": [["2026-07-08", "2026-08-07"]],
+                  "YIELD": [["2026-07-08", "2026-08-07"]]})
+
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 7, 9), end=datetime.date(2026, 8, 8),
+              values=("PRICE", "YIELD"), batch=8, limit=8)
+
+    assert _isins_requested(quotes) == set(already), "the tail still has to be fetched"
+    assert _windows(quotes) == [(datetime.date(2026, 8, 8), datetime.date(2026, 8, 8))], (
+        "a banked bond must be asked for the DAY it owes, not the window it was "
+        "asked about"
+    )
+
+
+def test_a_bond_that_owes_nothing_is_not_asked_at_all(env, monkeypatch):
+    uni = WARM.universe()
+    already = [r.isin for r in uni[:8]]
+    _seed_ledger(env.manifest, "eod", already,
+                 {"PRICE": [["2026-07-01", "2026-08-31"]],
+                  "YIELD": [["2026-07-01", "2026-08-31"]]})
+
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    out = WARM.warm("eod", start=datetime.date(2026, 7, 9),
+                    end=datetime.date(2026, 8, 8),
+                    values=("PRICE", "YIELD"), batch=8, limit=8)
+
+    assert not (_isins_requested(quotes) & set(already))
+    assert out["done"] == 8, "the eight it did instead are the next eight"
+
+
+def test_bonds_owing_DIFFERENT_windows_are_not_batched_together(env, monkeypatch):
+    """A wire call takes ONE start/end for the whole batch.
+
+    A banked bond owing the one-day tail must not be put in the same call as a
+    newly auctioned one owing the whole window - one of the two would be asked
+    for the wrong thing.
+    """
+    uni = WARM.universe()
+    banked, fresh = [r.isin for r in uni[:4]], [r.isin for r in uni[4:8]]
+    _seed_ledger(env.manifest, "eod", banked,
+                 {"PRICE": [["2026-07-08", "2026-08-07"]],
+                  "YIELD": [["2026-07-08", "2026-08-07"]]})
+
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 7, 9), end=datetime.date(2026, 8, 8),
+              values=("PRICE", "YIELD"), batch=8, limit=8)
+
+    by_window = {}
+    for call in quotes.calls:
+        isins = {str(t).split(".")[2] for t in call.tags if len(str(t).split(".")) >= 3}
+        by_window.setdefault((call.start, call.end), set()).update(isins)
+
+    tail = (datetime.date(2026, 8, 8), datetime.date(2026, 8, 8))
+    whole = (datetime.date(2026, 7, 9), datetime.date(2026, 8, 8))
+    assert by_window.get(tail) == set(banked), f"banked bonds went out as {by_window}"
+    assert by_window.get(whole) == set(fresh), f"fresh bonds went out as {by_window}"
+
+
+def test_AN_INTERIOR_HOLE_in_the_ledger_is_refetched(env, monkeypatch):
+    """The trap a coverage interval walks into.
+
+    The ledger holds two separated windows. A read of the whole span must ask
+    for the middle - a hole does not raise, it makes the as-of search serve the
+    previous print and a session inherit the day before.
+    """
+    uni = WARM.universe()
+    already = [r.isin for r in uni[:8]]
+    _seed_ledger(env.manifest, "eod", already,
+                 {"PRICE": [["2026-07-01", "2026-07-10"], ["2026-07-21", "2026-07-31"]],
+                  "YIELD": [["2026-07-01", "2026-07-10"], ["2026-07-21", "2026-07-31"]]})
+
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 7, 1), end=datetime.date(2026, 7, 31),
+              values=("PRICE", "YIELD"), batch=8, limit=8)
+
+    assert _windows(quotes) == [
+        (datetime.date(2026, 7, 11), datetime.date(2026, 7, 20))
+    ], "the hole in the middle is exactly what is owed"
+
+
+def test_a_value_never_fetched_is_still_never_called_done(env, monkeypatch):
+    """Section 5's rule, re-asserted against the ledger rather than the key.
+
+    This is the property the key existed to protect, and the one a cheaper
+    resume is most likely to lose.
+    """
+    uni = WARM.universe()
+    already = [r.isin for r in uni[:8]]
+    _seed_ledger(env.manifest, "eod", already,
+                 {"PRICE": [["2026-07-01", "2026-08-31"]]})     # YIELD: never
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 7, 9), end=datetime.date(2026, 8, 8),
+              values=("PRICE", "YIELD"), batch=8, limit=8)
+
+    assert _isins_requested(quotes) == set(already)
+    assert _windows(quotes) == [
+        (datetime.date(2026, 7, 9), datetime.date(2026, 8, 8))
+    ], "YIELD owes the whole window, so the batch is asked for the whole window"
+
+
+def test_a_run_that_succeeds_banks_what_it_fetched(env, monkeypatch):
+    uni = WARM.universe()
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 7, 9), end=datetime.date(2026, 8, 8),
+              values=("PRICE", "YIELD"), batch=8, limit=8)
+
+    entry = _book(env.manifest, "eod")[uni[0].isin]
+    assert entry["windows"]["PRICE"] == [["2026-07-09", "2026-08-08"]]
+    assert entry["windows"]["YIELD"] == [["2026-07-09", "2026-08-08"]]
+
+
+def test_TODAY_is_never_banked(env, monkeypatch):
+    """An unsettled session is fetched and NOT recorded.
+
+    An MI01 series grows all day and an EOD print is not final until the close,
+    so banking today makes tomorrow skip a day it only half has. The nightly is
+    already pointed at the last settled session; this is what protects a human
+    running the CLI at noon.
+    """
+    today = datetime.date.today()
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=today - datetime.timedelta(days=3), end=today,
+              values=("PRICE",), batch=8, limit=8)
+
+    uni = WARM.universe()
+    banked = _book(env.manifest, "eod")[uni[0].isin]["windows"]["PRICE"]
+    assert banked, "the settled part of the window must still be banked"
+    assert banked[-1][1] == (today - datetime.timedelta(days=1)).isoformat(), (
+        f"today was banked: {banked}"
+    )
+
+
+def test_a_window_of_only_today_banks_nothing(env, monkeypatch):
+    today = datetime.date.today()
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=today, end=today, values=("PRICE",), batch=8, limit=8)
+
+    uni = WARM.universe()
+    entry = _book(env.manifest, "eod")[uni[0].isin]
+    assert entry["windows"].get("PRICE", []) == [], (
+        "nothing settled, so nothing may be recorded - tomorrow asks again"
+    )
+
+
+def test_a_legacy_key_manifest_is_migrated_rather_than_refetched(env, monkeypatch):
+    """A manifest written before the ledger must not cost a five-year re-fetch.
+
+    The old key asserts exactly "this window, these values, done", so seeding
+    the ledger from it claims no more than the old stamp already did.
+    """
+    uni = WARM.universe()
+    already = [r.isin for r in uni[:8]]
+    _seed(env.manifest, "eod", already,
+          WARM._key("eod", datetime.date(2021, 8, 8), datetime.date(2026, 8, 7),
+                    ("PRICE", "YIELD")))
+
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2021, 8, 8), end=datetime.date(2026, 8, 8),
+              values=("PRICE", "YIELD"), batch=8, limit=8)
+
+    assert _windows(quotes) == [
+        (datetime.date(2026, 8, 8), datetime.date(2026, 8, 8))
+    ], "the legacy stamp covered everything to 08-07; only the tail is owed"
+
+
+def test_a_narrow_run_does_not_erase_a_wider_ledger(env, monkeypatch):
+    """``--values PRICE`` must not drop the record of every YIELD window.
+
+    PRICE is seeded SHORT on purpose. Seeding it covered would make the bond owe
+    nothing, so it would never be processed and the test would pass without ever
+    reaching the code it is about - which is exactly what the first version of
+    this test did.
+    """
+    uni = WARM.universe()
+    already = [r.isin for r in uni[:8]]
+    _seed_ledger(env.manifest, "eod", already,
+                 {"PRICE": [["2026-07-01", "2026-07-20"]],     # owes the tail
+                  "YIELD": [["2020-01-01", "2026-08-31"]]})    # must survive
+
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 7, 9), end=datetime.date(2026, 8, 8),
+              values=("PRICE",), batch=8, limit=8)
+
+    book = _book(env.manifest, "eod")
+    for isin in already:
+        assert book[isin]["windows"]["YIELD"] == [["2020-01-01", "2026-08-31"]], (
+            "a run that did not ask about YIELD rewrote its ledger"
+        )
+
+
+def test_a_bond_velocity_says_is_empty_is_banked_so_it_stops_being_asked(env, monkeypatch):
+    """528 of the 877 catalogued bonds have matured.
+
+    Velocity answering "there is nothing in this window" for a bond that
+    redeemed in 2016 is correct and permanent. Re-asking it every night is the
+    largest single piece of waste the ledger removes.
+    """
+    uni = WARM.universe()
+    quotes = FakeQuotes(writes_at=None, reports="empty")
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 7, 9), end=datetime.date(2026, 8, 8),
+              values=("PRICE",), batch=8, limit=8)
+
+    entry = _book(env.manifest, "eod")[uni[0].isin]
+    assert entry.get("note") == "no rows in this window"
+    assert entry["windows"]["PRICE"] == [["2026-07-09", "2026-08-08"]], (
+        "an empty answer for a settled window IS an answer, and banking it is "
+        "what stops a matured bond costing a wire call every night"
+    )
+
+
+def test_a_bond_whose_tag_FAILED_banks_nothing(env, monkeypatch):
+    """The resume bug in miniature: stamping a failure makes the re-run skip it."""
+    uni = WARM.universe()
+    target = uni[0].isin
+    quotes = FakeQuotes(writes_at=None, reports="#N/A",
+                        reports_for=lambda tag: target in tag)
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 7, 9), end=datetime.date(2026, 8, 8),
+              values=("PRICE",), batch=8, limit=8)
+
+    book = _book(env.manifest, "eod")
+    assert not (book.get(target, {}).get("windows", {}).get("PRICE")), (
+        "the bond whose tag the wire refused must owe the window again"
+    )
+
+
+def test_the_legacy_key_is_still_written_so_a_rollback_degrades_to_a_refetch(
+    env, monkeypatch
+):
+    """Reverting this change must not make an older reader MISread the manifest."""
+    uni = WARM.universe()
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    start, end = datetime.date(2026, 7, 9), datetime.date(2026, 8, 8)
+    WARM.warm("eod", start=start, end=end, values=("PRICE",), batch=8, limit=8)
+
+    entry = _book(env.manifest, "eod")[uni[0].isin]
+    assert entry["key"] == WARM._key("eod", start, end, ("PRICE",))
+
+
+def test_COVERAGE_is_judged_on_the_requested_window_not_the_residual(env, monkeypatch):
+    """The invariant 504ced86 created and nothing else pins.
+
+    Every other window-taker in the batch loop moved to the residual - the
+    needs-data probe, the sidecar sample, the fetch itself, the outage guard -
+    because they are questions about THIS fetch. The coverage check deliberately
+    did NOT: it is a question about the DATA, and the tag cache is cumulative.
+
+    It is load-bearing, not tidy. ``tag_states`` classifies on ``last >= start``
+    first, so narrowing the window to the owed tail flips any tag whose last
+    print falls inside the requested window but before that tail from COVERED to
+    STALLED - and ``newly_stalled`` turns that into a ``regressed`` entry, which
+    escalates a COMPLETED warm to exit 1 and marks its store asset blocking,
+    skipping both downstream value jobs. That is the 324-bond cascade of
+    2026-08-19/20/21 in a new disguise.
+
+    Asserted on the CALL rather than on a planted sidecar, because the states a
+    sidecar produces depend on maturity, the widest-gap calibration and the
+    fake's fixed print dates - three things that can each make this pass for the
+    wrong reason.
+    """
+    uni = WARM.universe()
+    already = [r.isin for r in uni[:8]]
+    _seed_ledger(env.manifest, "eod", already,
+                 {"PRICE": [["2026-08-01", "2026-08-09"]]})
+
+    seen = []
+    real = WARM.tag_states
+    monkeypatch.setattr(
+        WARM, "tag_states",
+        lambda freq, tags, **kw: seen.append((kw.get("start"), kw.get("end")))
+        or real(freq, tags, **kw),
+    )
+
+    quotes = FakeQuotes()
+    _install_fetcher(monkeypatch, quotes)
+    WARM.warm("eod", start=datetime.date(2026, 8, 1), end=datetime.date(2026, 8, 10),
+              values=("PRICE",), batch=8, limit=8)
+
+    assert _windows(quotes) == [
+        (datetime.date(2026, 8, 10), datetime.date(2026, 8, 10))
+    ], "the FETCH must use the residual"
+    assert seen, "tag_states was never called"
+    assert set(seen) == {(datetime.date(2026, 8, 1), datetime.date(2026, 8, 10))}, (
+        f"COVERAGE must be judged on the requested window; it was asked about "
+        f"{sorted(set(seen))}"
+    )
