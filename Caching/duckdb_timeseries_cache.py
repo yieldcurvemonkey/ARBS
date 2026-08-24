@@ -83,6 +83,36 @@ class DuckDBTimeseriesCache:
     def read_only(self) -> bool:
         return self._read_only
 
+    def _warn_read_only(self, n_rows: int) -> None:
+        """Say ONCE that this process is dropping every mirror write.
+
+        A read-only handle returns 0 from both upserts and raises nothing, so the
+        caller's ``try/except`` never fires and nothing is logged. That is how the
+        mirror came to hold no rows before 2012 for symbols whose Parquet reaches
+        back to 2006: the run that built them opened the file while another
+        process held the write lock, wrote Parquet, and skipped the mirror in
+        silence. Fourteen committed notebooks carry the matching "DuckDB
+        unavailable (file locked)" line in their saved output.
+
+        This is the CAUSE of the short-mirror defect fixed in the reader; the
+        reader now repairs a short answer, and this stops the next process
+        creating one without saying so.
+
+        Once per handle, not per call: a warm upserts thousands of times and a
+        per-write warning is a log nobody reads.
+        """
+        if getattr(self, "_read_only_warned", False):
+            return
+        self._read_only_warned = True
+        logger.warning(
+            "DuckDB mirror is OPEN READ-ONLY (%s): this process will write "
+            "nothing to it - %d row(s) dropped on the first attempt and every "
+            "later one. Parquet is unaffected, so no data is lost, but the "
+            "mirror will fall behind and later reads pay Parquet to repair it. "
+            "Another process holds the write lock; a warm is the usual one.",
+            self._db_path, n_rows,
+        )
+
     def upsert_rows(
         self,
         symbol: str,
@@ -90,6 +120,7 @@ class DuckDBTimeseriesCache:
     ) -> int:
         """Insert or update rows. Returns count of rows upserted. No-op when read_only."""
         if self._read_only:
+            self._warn_read_only(len(rows))
             return 0
         return self.upsert_many_rows({symbol: rows})
 
@@ -132,6 +163,7 @@ class DuckDBTimeseriesCache:
         once, and a replacement carrying a different ``column_name``.
         """
         if self._read_only:
+            self._warn_read_only(sum(len(r) for r in rows_by_symbol.values()))
             return 0
         payload = [
             (symbol, trading_date, column_name, value)

@@ -82,6 +82,51 @@ def _warn_short_mirror(symbol: str, mirror_rows: int, full_rows: int) -> None:
     )
 
 
+def _coverage_key(value: DateLike, intraday: bool):
+    """The key coverage is judged on, spelled once."""
+    return _normalize_intraday_key(value).date() if intraday else _normalize_eod_key(value)
+
+
+def _parquet_read_bounds(reference_points: Sequence[DateLike], intraday: bool):
+    """The ``(start, end)`` to hand the Parquet tier for this read.
+
+    EOD BOUNDS ARE DATES, and that is not cosmetic. An EOD reference point can be
+    TZ-AWARE: ``TB.utils.build_reference_points`` returns 17:00 America/New_York
+    datetimes for freq in {eod, nyc_eod, chi_eod, ldn_eod}, and about twenty call
+    sites ask for one - ``BT/signals/sfr_cal_spread_rv.py`` defaults to
+    ``nyc_eod``. The Parquet tier strips tz on write and indexes EOD rows naive,
+    so passing the aware value through reaches ``Caching/timeseries_cache.py``
+    ``df = df[df.index >= pd.Timestamp(start)]`` and raises
+    ``TypeError: Invalid comparison between dtype=datetime64[ns] and Timestamp``.
+
+    Measured on a fresh mirror per case (the repair heals, so reusing one lies):
+    the raise is PRE-EXISTING - an EOD read with ``freq="eod"`` against a symbol
+    the mirror does not hold raises here with the short-mirror repair both on and
+    off. What the repair changes is reach: it routes the SHORT case down the same
+    path, so without this the repair trades a truncation for a raise.
+
+    And nobody sees the raise. Every production caller swallows it into an empty
+    result (``TB/IRSwapsTB.py`` substitutes ``{s: []}``), so the whole batch is
+    discarded and repriced - which is the likely cause of the note recorded at
+    ``RVUtils/ConvexityRV/citi_fig89.py:96`` that ``freq="nyc_eod"`` returns an
+    EMPTY frame on this source.
+
+    A ``date`` rather than a naive datetime on purpose: ``read_timeseries``
+    applies its exact trim only to ``datetime`` bounds, so a date skips the
+    cross-tz comparison entirely and the matching happens in
+    :meth:`_rows_from_df`, which keys BOTH sides through ``_normalize_eod_key``.
+    Tz is dropped on both sides, so an aware reference point matches a naive
+    Parquet row correctly - this serves the rows rather than trading a raise for
+    an empty frame.
+    """
+    start = min(reference_points)
+    end = max(reference_points)
+    if intraday:
+        return (_normalize_intraday_key(start).to_pydatetime(),
+                _normalize_intraday_key(end).to_pydatetime())
+    return _normalize_eod_key(start), _normalize_eod_key(end)
+
+
 def _merge_preferring(primary, secondary, *, intraday: bool):
     """``primary`` rows, plus any ``secondary`` row for a key primary lacks.
 
@@ -210,6 +255,10 @@ class ComputedTimeseriesStore:
             compression=compression,
             row_group_size=int(row_group_size),
         )
+        #: ``{symbol: {date}}`` that neither tier holds. See
+        #: :meth:`_shortfall_needs_parquet` - it stops a permanently absent date
+        #: costing a Parquet read on every call for the rest of the process.
+        self._absent_dates: dict[str, set] = {}
         self._duckdb_cache: Optional["DuckDBTimeseriesCache"] = None
         self._bg_push_pending = 0
         self._bg_push_condition = threading.Condition(threading.Lock())
@@ -407,10 +456,7 @@ class ComputedTimeseriesStore:
         skip_current_eod: bool,
         fallback_column_name: str | None,
     ) -> List[Tuple[DateLike, str, float]]:
-        start = min(reference_points)
-        end = max(reference_points)
-        read_start: DateLike = _normalize_intraday_key(start).to_pydatetime() if intraday else start
-        read_end: DateLike = _normalize_intraday_key(end).to_pydatetime() if intraday else end
+        read_start, read_end = _parquet_read_bounds(reference_points, intraday)
         df = self._read_df(symbol=symbol, start=read_start, end=read_end)
         return self._rows_from_df(
             df=df,
@@ -520,6 +566,14 @@ class ComputedTimeseriesStore:
                 # allow_partial=True it was the arm that ran. See ``read_rows``
                 # for the measurement and for why "partial" has to mean "after
                 # Parquet was consulted".
+                # ...but only when Parquet could actually hold what is missing.
+                # A market holiday is in every bdate_range and in no tier, so
+                # without this every EOD read lands here and parses Parquet to be
+                # told nothing. See ``_shortfall_needs_parquet``.
+                shortfall = requested - covered
+                if rows_out and not self._shortfall_needs_parquet(sym, shortfall, False):
+                    result[sym] = rows_out
+                    continue
                 # remote=False: the mirror answered, just not fully, so Parquet
                 # settles it locally. See ``_read_with_l2_prefetch``.
                 l2_rows = self._read_with_l2_prefetch(
@@ -531,6 +585,7 @@ class ComputedTimeseriesStore:
                     remote=False,
                 )
                 merged = _merge_preferring(l2_rows, rows_out, intraday=False)
+                self._note_absent(sym, shortfall, merged, False)
                 if l2_rows:
                     self._backfill_duckdb_from_rows(sym, merged, intraday=False)
                 if len(merged) > len(rows_out):
@@ -664,6 +719,19 @@ class ComputedTimeseriesStore:
             # mirror was merely SHORT -- the case this branch was written for,
             # and the common one -- Parquet alone settles it, so the repair
             # cannot turn half the estate's reads into Supabase round trips.
+            # ...but only when Parquet could actually hold what is missing, and
+            # only for a mirror that answered SHORT. An empty mirror keeps the
+            # pre-existing path, L2 fetch and all. A market holiday is in every
+            # bdate_range and in no tier, so without this guard every EOD read
+            # lands here. See ``_shortfall_needs_parquet``.
+            shortfall = set(requested) - {
+                _coverage_key(rp, intraday) for rp, _, _ in (duckdb_result or [])
+            }
+            if duckdb_result is not None and not self._shortfall_needs_parquet(
+                symbol, shortfall, intraday,
+            ):
+                return duckdb_result
+
             local_rows = self._read_with_l2_prefetch(
                 symbol=symbol,
                 reference_points=reference_points,
@@ -673,6 +741,7 @@ class ComputedTimeseriesStore:
                 remote=duckdb_result is None,
             )
             merged = _merge_preferring(local_rows, duckdb_result or [], intraday=intraday)
+            self._note_absent(symbol, shortfall, merged, intraday)
             l2_rows = local_rows
             if l2_rows:
                 self._backfill_duckdb_from_rows(symbol, merged, intraday=intraday)
@@ -715,10 +784,7 @@ class ComputedTimeseriesStore:
         ``remote=True``: this parameter adds a Parquet read, never removes an L2
         fetch that used to happen.
         """
-        start = min(reference_points)
-        end = max(reference_points)
-        read_start: DateLike = _normalize_intraday_key(start).to_pydatetime() if intraday else start
-        read_end: DateLike = _normalize_intraday_key(end).to_pydatetime() if intraday else end
+        read_start, read_end = _parquet_read_bounds(reference_points, intraday)
 
         today = datetime.date.today()
 
@@ -825,6 +891,81 @@ class ComputedTimeseriesStore:
             skip_current_eod=skip_current_eod,
             fallback_column_name=fallback_column_name,
         )
+
+    def _parquet_partitions(self, symbol: str, keys) -> set:
+        """Which of ``keys`` the Parquet tier has a partition directory for.
+
+        A stat per date, not a listing and not a parse. The tier is laid out one
+        directory per day (``asset=<symbol>/date=YYYY-MM-DD``), so existence is
+        answerable without opening anything.
+
+        Deliberately not cached. A warm writes and reads in the same process, so
+        a cached listing would answer "no partition" for a day this run just
+        created; the stat is cheap enough that the staleness is not worth buying.
+        """
+        from Caching.timeseries_cache import _resolve_symbol_dir
+
+        try:
+            symbol_dir = _resolve_symbol_dir(Path(self._opts.base_dir), symbol)
+        except Exception:  # noqa: BLE001 - an unanswerable probe must not lose data
+            return set(keys)
+        if not symbol_dir.is_dir():
+            return set()
+        found = set()
+        for key in keys:
+            day = key.date() if isinstance(key, datetime.datetime) else key
+            try:
+                if (symbol_dir / f"date={day:%Y-%m-%d}").is_dir():
+                    found.add(key)
+            except (OSError, ValueError, TypeError):
+                # Unstattable or an unexpected key type: assume it might be
+                # there. Failing OPEN costs a read; failing closed loses a row.
+                found.add(key)
+        return found
+
+    def _shortfall_needs_parquet(self, symbol: str, missing, intraday: bool) -> bool:
+        """Whether a SHORT mirror answer is worth a Parquet read at all.
+
+        THE CASE THIS EXISTS FOR IS THE COMMON ONE, not an edge. ``pd.bdate_range``
+        is what nearly every caller builds reference points from and it drops only
+        WEEKENDS - it hands you the ~9 market holidays a year that no tier will
+        ever hold. So ``covered >= requested`` fails on a perfectly complete
+        mirror, every EOD read takes the short-mirror branch, and each one parses
+        Parquet across its whole span to be told nothing. It never converges,
+        because the missing date does not exist to be filled.
+
+        Measured, three-year window, complete mirror, six holidays among the
+        reference points:
+
+            without this   1 Parquet trip and 0.62-0.76 s on EVERY read
+            with this      0 trips, 0.002 s
+
+        The genuinely short mirror still recovers in full either way; this only
+        removes the reads that cannot return anything.
+
+        Dates that Parquet has a partition for but does not answer are remembered
+        for the life of this store - a partition left behind empty by an
+        interrupted write would otherwise cost the same read for ever. Process
+        local on purpose: a stale negative is a data loss, and a process that
+        ends forgets.
+        """
+        absent = self._absent_dates.setdefault(symbol, set())
+        wanted = {k for k in missing if k not in absent}
+        if not wanted:
+            return False
+        have = self._parquet_partitions(symbol, wanted)
+        absent |= wanted - have
+        return bool(have)
+
+    def _note_absent(self, symbol: str, asked, answered, intraday: bool) -> None:
+        """Remember dates Parquet was asked for and did not return."""
+        if not asked:
+            return
+        got = {
+            (_normalize_intraday_key(rp).date() if intraday else _normalize_eod_key(rp))
+            for rp, _, _ in (answered or [])
+        }
+        self._absent_dates.setdefault(symbol, set()).update(set(asked) - got)
 
     def _backfill_duckdb_from_rows(
         self,
