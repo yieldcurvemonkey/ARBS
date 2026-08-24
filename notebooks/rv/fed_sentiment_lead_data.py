@@ -774,7 +774,19 @@ def shift_null(
     lags = list(lags)
     joint = pd.concat([x_weekly.rename("x"), y_weekly.rename("y")], axis=1).dropna()
     n = len(joint)
-    min_offset = min_offset or (max(abs(min(lags)), abs(max(lags))) + 1)
+    # TWICE the widest lag, plus one -- not once, which is the obvious and wrong
+    # choice. This null rotates x by d and then RE-SCANS every lag, so rotation d
+    # examines alignments m in [d - max_lag, d + max_lag]. At d = max_lag + 1 that
+    # window still reaches m = 1, i.e. it still contains the real relationship, and
+    # such a "surrogate" reproduces the observed statistic exactly instead of
+    # testing against it. Measured on the 21-year sample: with the old bound every
+    # single exceedance was one of these self-matches (2 of 2 for an argmax at
+    # +2w), so the p-value was set by WHERE the argmax sat rather than by how
+    # extreme the correlation was -- a weaker r 0.093 at +1w scored p 0.0018 while
+    # a stronger r 0.122 at +2w scored 0.0027. Requiring d > 2 * max_lag keeps the
+    # true alignment out of every rotation's scan window.
+    max_lag = max(abs(min(lags)), abs(max(lags)))
+    min_offset = min_offset or (2 * max_lag + 1)
     if n < 3 * min_offset:
         return {"max_corr": np.array([]), "argmax": np.array([]), "q50": np.nan,
                 "q95": np.nan, "draws_used": 0, "exhaustive": False,
@@ -1035,6 +1047,7 @@ def synthetic_world(
     years: int = 9,
     speech_years: int = 3,
     noise: float = 0.35,
+    speeches_per_week: float = 3.3,
     cfg: Optional[LeadConfig] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, "LeadConfig"]:
     """A surprise panel and a speech book with a KNOWN lead between them.
@@ -1049,6 +1062,11 @@ def synthetic_world(
     calibration cell and ``test_pipeline_reports_a_lead_even_when_the_true_lead_is_zero``
     are the same construction, without the deliverable notebook importing from
     ``tests/``.
+
+    ``speeches_per_week`` defaults to the JPM corpus's observed 3.3. The filter
+    offset depends on how densely the response side is sampled, so a study on a
+    corpus with a different density must recalibrate at ITS density rather than
+    inherit this one -- the FedLock corpus runs at 2.52/week.
     """
     cfg = cfg or LeadConfig()
     days = pd.bdate_range("2016-01-01", periods=years * 261)
@@ -1069,7 +1087,7 @@ def synthetic_world(
 
     speech_start = days[-speech_years * 261]
     candidates = days[days >= speech_start]
-    n_speech = int(len(candidates) * 3.3 / 5.0)
+    n_speech = int(len(candidates) * float(speeches_per_week) / 5.0)
     picks = np.sort(rng.choice(len(candidates), size=n_speech, replace=False))
     sdates = candidates[picks]
     scores = 20.0 * latent.reindex(sdates).to_numpy() + rng.normal(

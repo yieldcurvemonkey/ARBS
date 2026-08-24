@@ -40,30 +40,31 @@
 #    peaks at **+4 months ~ 17 weeks**, r 0.756 blended with the labour leg and
 #    **r 0.595 on its own**, interior in both. JWS's +1 month reads 0.594 and
 #    0.483. Longer than the weekly estimate, and not five weeks.
-# 3. **The strongest cell fails its null; the one that clears is the vintage
-#    that could not have been traded.** Both series are near-unit-root, so the
-#    null keeps each path *exactly* and destroys only the alignment, enumerating
-#    the whole finite rotation set and scoring every surrogate by the same
-#    27-lag maximum the real analysis takes. Results: point-in-time levels
-#    **p = 0.096**; as-published levels **p = 0.005**, which *is* that test's
-#    resolution floor (1/189) -- and restricted to the point-in-time window the
-#    same cell reads **p = 0.089**. On weekly **changes**, nothing anywhere:
-#    p = 0.568 (point-in-time) and 0.779 (as-published). Neither half of the
-#    sample is significant either (p = 0.100 and 0.322).
-# 4. **Levels is where the test has almost no power, which is why the verdict
-#    rests on changes.** Not on calibration -- the notebook measures all six
-#    null/transform sizes and they sit between 1.7% and 5.0% with overlapping
-#    Wilson intervals, so no transform is meaningfully better calibrated than
-#    another. It rests on discrimination: a *deliberately planted* five-week
-#    lead reaches **r 0.919** in levels while the null's own 95th percentile
-#    reaches **0.923**, so it does not clear (p = 0.078) -- and the identical
-#    relationship gives **p = 0.008** in changes and in prewhitened. A levels
-#    result, in either direction, is close to uninformative on ~150 weekly
-#    points of wandering data. Run in a cell below, and asserted by
-#    `test_LEVELS_cannot_discriminate_even_a_planted_lead`.
+# 3. **The null does not control its size on levels, so no levels p-value here
+#    is inference -- and on changes, where it does, there is nothing.** The null
+#    keeps each path *exactly* and destroys only the alignment, enumerating the
+#    whole finite rotation set and scoring every surrogate by the same 27-lag
+#    maximum the real analysis takes. Its **size**, measured over 60 unrelated
+#    AR(0.97) pairs at a nominal 5%: **levels 20.0%** [Wilson 0.118, 0.318]
+#    against **changes 6.7%** [0.026, 0.159]. So the levels cells --
+#    point-in-time **p = 0.008**, as-published **p = 0.005** -- sit on a test
+#    that fires one time in five when nothing is there, and are reported rather
+#    than believed. On **changes** the maximum over all 27 lags is **r 0.153,
+#    p = 0.475** point-in-time and **r 0.094, p = 0.829** as-published. Nothing,
+#    at any lag, in either vintage.
+# 4. **The estimator has power; what levels lacks is size control.** A
+#    *deliberately planted* five-week lead clears in every transform at the
+#    resolution floor (**p = 0.010**; in levels the null's 95th percentile is
+#    **0.429** against an observed **0.919**). So the machinery finds a lead
+#    that is really there. The problem is the other side of the test: on levels
+#    it also finds one 20% of the time when nothing is there. Power without
+#    size is exactly why the verdict is taken from the changes row and not from
+#    the biggest number in the table. Asserted by
+#    `test_the_rotation_null_does_not_control_size_on_LEVELS`.
 # 5. **Five weeks is the first half of the sample, and it has already broken.**
 #    Split point-in-time at 2024-12: the first half's argmax is **exactly +5
-#    weeks** (r 0.685, p 0.100 -- an argmax, not a finding). The second half's
+#    weeks** (r 0.685, p 0.029 -- its own resolution floor, on 33 rotations, on the
+#    transform whose null fires 20% of the time). The second half's
 #    is +13w and the correlation *at five weeks* is **-0.07**, bootstrap 5-95%
 #    [-0.47, +0.37]. In changes: +0.219 then +0.043. The halves do not disagree
 #    about *whether*; they disagree about *where*, at the horizon being traded.
@@ -402,14 +403,12 @@ print(X_ALL[X_ALL.index >= "2026-06-01"].round(3).to_string())
 # | **changes** | week-on-week co-movement |
 # | **prewhitened** | Box-Jenkins: filter both by the input's own AR model |
 #
-# The verdict rests on **changes**, and the reason is power rather than
-# calibration. A cell below measures all six null/transform sizes rather than
-# quoting them, and they come out between 1.7% and 5.0% with overlapping
-# intervals -- no transform is meaningfully better calibrated than another. What
-# separates them is discrimination: a deliberately planted five-week lead
-# reaches r 0.919 in levels while the null's own 95th percentile reaches 0.923,
-# so it fails at p 0.078 -- and the identical relationship gives p 0.008 in
-# changes. Both numbers are produced by a cell below, not quoted.
+# The verdict rests on **changes**, and the reason is size control. A cell below
+# measures all six null/transform sizes rather than quoting them: on levels this
+# null rejects **20%** of the time when nothing is there, against **6.7%** on
+# changes. The estimator is not short of power -- a deliberately planted
+# five-week lead clears every transform at the floor -- it is that a levels
+# rejection means almost nothing when one rejection in five is spurious.
 #
 # Every lag is scored on **one common-support row set**, so a difference between
 # lags is a difference in the relationship and not a difference in the sample;
@@ -657,12 +656,12 @@ print(SUMMARY[["vintage", "transform", "n", "argmax", "corr", "at_5w",
                "p_shift", "p_phase"]].round(3).to_string(index=False))
 _ps = SUMMARY.set_index(["vintage", "transform"])["p_shift"]
 _pp = SUMMARY.set_index(["vintage", "transform"])["p_phase"]
-print(f"\nOn the primary (shift) null, one cell of six clears 0.05: as-published")
-print(f"levels at p={_ps[('as_published','levels')]:.3f} over 216 weeks -- and that IS the")
-print(f"resolution floor of an exact 189-rotation test, so it means 'the smallest")
-print(f"p this test can report', not 'one in a thousand'. The point-in-time levels")
-print(f"peak reaches only p={_ps[('point_in_time','levels')]:.3f}, and on changes the")
-print(f"maximum over all 27 lags is r={SUMMARY.set_index(['vintage','transform'])['corr'][('point_in_time','changes')]:.3f}, "
+print(f"\nBoth LEVELS cells clear 0.05 on the primary null -- as-published "
+      f"p={_ps[('as_published','levels')]:.3f}, point-in-time "
+      f"p={_ps[('point_in_time','levels')]:.3f} -- and neither is evidence: the sizes")
+print("cell below measures this null firing 20% of the time on levels when there is")
+print(f"nothing there. On changes, where it is near nominal, the maximum over all 27")
+print(f"lags is r={SUMMARY.set_index(['vintage','transform'])['corr'][('point_in_time','changes')]:.3f}, "
       f"p={_ps[('point_in_time','changes')]:.3f}.")
 print(f"\nThe PERMISSIVE phase null disagrees, and it is reported rather than hidden:")
 print(f"it rejects point-in-time levels at p={_pp[('point_in_time','levels')]:.3f} and")

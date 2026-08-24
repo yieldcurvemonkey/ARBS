@@ -401,7 +401,7 @@ def test_shift_null_enumerates_its_finite_reference_set():
     y = pd.Series(_ar1(n, 0.95, rng), index=idx)
     lags = cfg.lags()
     null = D.shift_null(x, y, lags, cfg, draws=5000, rng=np.random.default_rng(42))
-    expected = n - 2 * (max(abs(lags.min()), abs(lags.max())) + 1)
+    expected = n - 2 * (2 * max(abs(lags.min()), abs(lags.max())) + 1)
     assert null["exhaustive"] is True
     assert null["distinct_rotations"] == expected
     assert null["draws_used"] == expected
@@ -409,39 +409,67 @@ def test_shift_null_enumerates_its_finite_reference_set():
     assert D.surrogate_pvalue(0.5, null) >= null["p_floor"] - 1e-12
 
 
-def test_LEVELS_cannot_discriminate_even_a_planted_lead():
-    """The finding that decides how the notebook may report its headline.
+def test_no_rotation_reproduces_the_observed_statistic():
+    """Regression guard for the self-matching null.
 
-    A deliberately strong five-week lead reaches corr 0.92 in levels -- and the
-    conservative null reaches 0.92 too, because two wandering series over ~150
-    weekly points can be aligned to almost anything. The same relationship is
-    unambiguous in changes. So the level correlation is a picture, not a
-    measurement, and any lead quoted off it is quoted off a plateau of
-    near-identical values.
+    The null rotates x by d and then RE-SCANS every lag, so rotation d examines
+    alignments in [d - max_lag, d + max_lag]. With the obvious bound
+    ``min_offset = max_lag + 1`` that window still reaches the true alignment,
+    and such a surrogate reproduces the observed statistic to the bit instead of
+    testing against it. Measured on the 21-year FedLock sample before the fix:
+    2 of 2 "exceedances" were self-matches, and the p-value was decided by WHERE
+    the argmax sat rather than by how large the correlation was.
+
+    The property that catches it: on a hole-free sample with a real
+    relationship, NO surrogate should equal the observed statistic exactly.
     """
-    rng = np.random.default_rng(14)
-    panel, book, cfg = _synthetic_world(lead_days=35, rng=rng)
-    composite, _ = D.build_surprise_composite(panel, cfg)
-    x = D.weekly_last(composite, cfg.week_anchor)
-    y = D.sentiment_index(book, x.index, cfg, point_in_time=False)["sentiment"]
+    cfg = D.LeadConfig()
     lags = cfg.lags()
+    rng = np.random.default_rng(3)
+    n = 400
+    idx = pd.date_range("2018-01-05", periods=n, freq="W-FRI")  # hole-free
+    x = pd.Series(_ar1(n, 0.7, rng), index=idx)
+    y = pd.Series(np.roll(x.to_numpy(), 2) + rng.normal(scale=0.5, size=n), index=idx)
 
-    def _p(transform):
-        xt, yt, _ = D.transform_pair(x, y, transform)
-        X, Y, _ = D.lag_matrix(xt, yt, lags)
-        obs = float(np.nanmax(D.lag_curve_common(X, Y, lags)["corr"].to_numpy()))
-        null = D.shift_null(x, y, lags, cfg, transform=transform, draws=300,
-                            rng=np.random.default_rng(15))
-        return D.surrogate_pvalue(obs, null), obs
-
-    p_lev, obs_lev = _p("levels")
-    p_chg, obs_chg = _p("changes")
-    assert obs_lev > 0.85, "the planted relationship should be visually overwhelming"
-    assert p_lev > 0.05, (
-        f"levels unexpectedly discriminated (p={p_lev:.3f}); if this starts "
-        f"passing the null has become too easy"
+    xt, yt, _ = D.transform_pair(x, y, "changes")
+    X, Y, _ = D.lag_matrix(xt, yt, lags)
+    obs = float(np.nanmax(D.lag_curve_common(X, Y, lags)["corr"].to_numpy()))
+    null = D.shift_null(x, y, lags, cfg, transform="changes", draws=2000,
+                        rng=np.random.default_rng(4))
+    m = np.asarray(null["max_corr"], float)
+    exact = int(np.isclose(m, obs, atol=1e-9).sum())
+    assert exact == 0, (
+        f"{exact} surrogate(s) reproduce the observed statistic exactly -- the "
+        f"rotation bound is letting the true alignment back into the scan window"
     )
-    assert p_chg < 0.05, f"changes failed to discriminate (p={p_chg:.3f})"
+
+
+def test_the_rotation_null_does_not_control_size_on_LEVELS():
+    """The finding that decides how either study may report a levels p-value.
+
+    Before the self-match bug was fixed, this test asserted that levels "cannot
+    discriminate" because a planted five-week lead failed its null. That was
+    true but for the wrong reason: the self-matching surrogates were inflating
+    every levels p-value. With a valid rotation bound the planted lead does
+    clear -- and the null's SIZE on levels turns out to be 12-20% against a
+    nominal 5%, so clearing it means very little.
+
+    So the conclusion is unchanged and better supported: a levels p-value from
+    this null is not inference. The changes null, measured the same way, sits
+    near nominal. That is why both studies quote their p-values from changes.
+    """
+    cfg = D.LeadConfig()
+    lev = D.measure_null_size(cfg, transform="levels", which="shift", trials=30,
+                              n_weeks=170, draws=300, seed=1000)
+    chg = D.measure_null_size(cfg, transform="changes", which="shift", trials=30,
+                              n_weeks=170, draws=300, seed=1000)
+    assert lev["size"] > 0.10, (
+        f"levels size measured {lev['size']:.1%}; if this has fallen to nominal the "
+        f"notebooks' reason for preferring changes needs revisiting"
+    )
+    assert chg["size"] < lev["size"], (
+        f"changes {chg['size']:.1%} vs levels {lev['size']:.1%}"
+    )
 
 
 @pytest.mark.parametrize("transform,ceiling", [("changes", 0.15), ("levels", 0.20)])
