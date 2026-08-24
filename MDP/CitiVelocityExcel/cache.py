@@ -45,6 +45,7 @@ from MDP.CitiVelocityExcel.frequencies import (
     normalise_frequency,
     normalise_price_point,
 )
+from MDP.CitiVelocityExcel.sanity import assert_plausible
 
 __all__ = [
     "CitiVeloTagCache",
@@ -279,7 +280,17 @@ class CitiVeloTagCache:
         price_point: str = "CLOSE",
         history_start: Optional[DateLike] = None,
     ) -> pd.Series:
-        """Merge ``series`` into the cache and return the merged result."""
+        """Merge ``series`` into the cache and return the merged result.
+
+        Raises :class:`~MDP.CitiVelocityExcel.sanity.TagSanityError` when the
+        values cannot belong to the tag's family. That gate is the LAST line, not
+        the fix - a wrong series whose numbers happen to land inside the band
+        still gets through, which is why the block parser refuses a foreign block
+        and :meth:`get` refuses a tag it did not ask for. It is here because it is
+        what would have caught the swaption-vol-under-par-tags defect on its first
+        day instead of its ten-thousandth.
+        """
+        assert_plausible(str(tag), series)
         freq_token = normalise_frequency(freq)
         point_token = normalise_price_point(price_point)
         with self._lock:
@@ -476,8 +487,23 @@ class CitiVeloTagCache:
                     None if span_end is None else span_end.to_pydatetime(),
                     point_token,
                 )
+                # ONLY the tags this span asked for. A fetcher that answers with a
+                # key nobody requested is a fetcher writing into a tag family it
+                # does not own, and the cache used to bank it without a word:
+                # ``for tag, series in fetched.items()`` took the key on trust, and
+                # ``write`` took it on trust again. Whatever else is wrong upstream,
+                # it must not be able to reach a stranger's parquet.
+                asked = set(span_tags)
                 for tag, series in (fetched or {}).items():
                     if series is None or len(series) == 0:
+                        continue
+                    if tag not in asked:
+                        _logger.warning(
+                            "CitiVeloTagCache.get: the fetcher returned %r, which was "
+                            "not among the %d tag(s) requested for this span; NOT "
+                            "written. This is a mis-keyed fetch, not a bonus.",
+                            tag, len(asked),
+                        )
                         continue
                     self.write(tag, freq_token, series, price_point=point_token)
 

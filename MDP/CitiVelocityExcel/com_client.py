@@ -849,9 +849,25 @@ class CitiVelocityExcelClient:
         value, elapsed = self._settle(anchor, timeout=timeout)
         self.calls += 1
 
-        if is_pending(value):
-            return [], value, elapsed
-        if isinstance(value, int) and excel_error_name(value) is not None:
+        if is_pending(value) or (isinstance(value, int) and excel_error_name(value) is not None):
+            # THE CURSOR MUST STILL MOVE. These two paths used to return here,
+            # before ``_advance_past``, so a formula that timed out or errored left
+            # ``self._row`` only ``rows_needed + gap`` = 38 rows below an anchor
+            # whose block goes on to spill 2,700-5,500 rows. The next CVTSHIST was
+            # then planted INSIDE that live block, ``_extent`` came back holding
+            # BOTH, and ``parse_tshist_block`` read the second block's rows as the
+            # first block's data by column position. That is how swaption normal
+            # vol reached 36 of the 44 ``RATES.OIS.USD_SOFR.PAR.*`` tags.
+            #
+            # A pending formula is still spilling, so its measured extent is a
+            # floor rather than the truth; ``_advance_past`` takes a ``max`` and
+            # can only push the cursor DOWN, so acting on a floor is safe and
+            # doing nothing is not.
+            try:
+                self._advance_past(self._extent(anchor))
+            except Exception:  # noqa: BLE001 - the provisional reservation stands
+                self._logger.debug("could not measure the extent of a %s formula at %s",
+                                   "pending" if is_pending(value) else "failed", anchor)
             return [], value, elapsed
 
         region = self._extent(anchor)

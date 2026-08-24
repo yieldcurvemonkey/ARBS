@@ -31,6 +31,7 @@ get it wrong:
 from __future__ import annotations
 
 import datetime
+import logging
 import math
 import re
 from dataclasses import dataclass, field
@@ -44,6 +45,8 @@ from MDP.CitiVelocityExcel.excel_constants import (
     PENDING_SENTINELS,
     XL_ERRORS,
 )
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "TshistBlock",
@@ -284,6 +287,12 @@ class TshistBlock:
     failures: Dict[str, str] = field(default_factory=dict)
     headers: List[str] = field(default_factory=list)
     n_rows: int = 0
+    #: Body rows that belonged to a DIFFERENT block in the same region and were
+    #: discarded. Non-zero means the region held more than one block, which is a
+    #: defect in the caller's sheet cursor, not in the data - see
+    #: :func:`_one_block_only`. Reported rather than silently swallowed, because
+    #: truncating quietly is how the caller stops finding out.
+    foreign_rows: int = 0
 
     @property
     def ok(self) -> bool:
@@ -296,6 +305,77 @@ class TshistBlock:
         out = pd.concat(self.series, axis=1)
         out.index.name = "Date"
         return out.sort_index()
+
+
+def _one_block_only(
+    body: Sequence[Sequence[Any]],
+    *,
+    first_cell: str = "Date",
+) -> Tuple[List[Sequence[Any]], int]:
+    """Cut ``body`` at the first row that belongs to a DIFFERENT block.
+
+    Why this is needed
+    ------------------
+    ``find_header_row`` already defends the HEADER against a region that holds
+    more than one block ("``CurrentRegion`` absorbs adjacent cells"). Nothing
+    defended the BODY. So when the sheet cursor was left inside a live spill and
+    the next ``CVTSHIST`` landed inside it, the region came back holding two
+    blocks, the FIRST header won, and every row of the SECOND block was read as
+    data for the first block's columns - by position.
+
+    That is not a hypothetical. It put swaption normal vol under 36 of the 44
+    ``RATES.OIS.USD_SOFR.PAR.*`` tags back to 2015-10-08, and under CAD_CORRA and
+    JPY_TONAR_LCH as well, because ``DEFAULT_CHUNK_SIZE`` is 44 and so is a par
+    grid: column j of one block is column j of the other, one for one.
+
+    Three independent markers, because a region can be cut so that any one of
+    them is absent:
+
+    ``a second header row``
+        A ``Date`` first cell cannot recur inside one block.
+    ``a formula row``
+        A first cell beginning ``=`` is the next call's own formula text.
+    ``the dates stop being monotone``
+        A ``CVTSHIST`` body runs one way (newest-first from the add-in) and a
+        second block restarts at its own newest row. The direction is MEASURED
+        from the first two dated rows rather than assumed, so an oldest-first
+        block is not truncated at row two; a repeated stamp is not a reversal,
+        because the parser's own contract allows one across a chunk seam.
+
+    Returns ``(body_up_to_the_seam, n_rows_discarded)``.
+    """
+    wanted = str(first_cell).strip().lower()
+    direction = 0  # +1 ascending, -1 descending, 0 not yet known
+    last: Optional[datetime.datetime] = None
+
+    for i, row in enumerate(body):
+        head = row[0] if row else None
+
+        if isinstance(head, str):
+            text = head.strip()
+            if text.lower() == wanted or text.startswith("="):
+                return list(body[:i]), len(body) - i
+
+        stamp = coerce_excel_datetime(head) if row else None
+        if stamp is None:
+            # A blank or unparseable first cell is not by itself a seam - the
+            # add-in pads blocks - but it carries no ordering evidence either.
+            continue
+        if last is not None:
+            if stamp > last:
+                step = 1
+            elif stamp < last:
+                step = -1
+            else:
+                step = 0  # a repeated stamp across a chunk seam; not a reversal
+            if step != 0:
+                if direction == 0:
+                    direction = step
+                elif step != direction:
+                    return list(body[:i]), len(body) - i
+        last = stamp
+
+    return list(body), 0
 
 
 def parse_tshist_block(
@@ -347,7 +427,19 @@ def parse_tshist_block(
 
     headers = [c if isinstance(c, str) else ("" if c is None else str(c)) for c in rows[hdr_i]]
     out.headers = headers
-    body = rows[hdr_i + 1 :]
+    # ONE block only. A region that holds two blocks is a caller defect, and
+    # reading the second one's rows by column position is how swaption vol got
+    # banked under the OIS par tags - see :func:`_one_block_only`.
+    body, foreign = _one_block_only(rows[hdr_i + 1 :])
+    out.foreign_rows = foreign
+    if foreign:
+        _logger.warning(
+            "parse_tshist_block: the region held %d row(s) belonging to another "
+            "block below this one; they were discarded. The sheet cursor was left "
+            "inside a live spill - the first requested tag was %s.",
+            foreign,
+            next(iter(dict.fromkeys(tags)), "(none)"),
+        )
     out.n_rows = len(body)
 
     stamps: List[Optional[datetime.datetime]] = [

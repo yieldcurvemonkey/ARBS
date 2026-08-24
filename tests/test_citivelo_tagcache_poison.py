@@ -1,0 +1,308 @@
+r"""Regression tests for the merged-region tag-cache poison.
+
+The defect
+----------
+``CitiVeloTagCache`` served swaption normal volatility under the OIS par-rate
+tags: ``RATES.OIS.USD_SOFR.PAR.2Y`` returned ~102 on a day the 2y SOFR OIS was
+4.24%. 36 of 44 USD_SOFR PAR parquets carried it, plus CAD_CORRA and
+JPY_TONAR_LCH, back to 2015-10-08 - the USD swaption tags' own first day.
+
+The mechanism, measured
+-----------------------
+1. ``_write_and_read`` reserves ``rows_needed + gap`` = 8 + 30 = 38 rows per
+   anchor and then CORRECTS the cursor from the block's real extent via
+   ``_advance_past(_extent(anchor))``. Both early-return paths - a poll timeout
+   and an Excel error int - return BEFORE that correction, so the cursor stays 38
+   rows below a formula that spills 2,700-5,500 rows.
+2. The next ``CVTSHIST`` is therefore planted inside the previous block's
+   footprint, and ``_extent`` (``CurrentRegion``, which its own docstring says
+   "absorbs adjacent cells") hands back ONE region holding TWO blocks.
+3. ``parse_tshist_block`` locates the FIRST ``Date`` header - the par block's -
+   and then reads EVERY body row below it, including the second block's rows,
+   mapping them by COLUMN POSITION.
+4. ``DEFAULT_CHUNK_SIZE == 44 == len(ois_par_grid(...))``, so column j of the vol
+   block is column j of the par block, one for one. A vol column that served
+   nothing (Citi quotes no 4Y or 12Y swaption tenor) yields ``coerce_float(None)
+   -> None`` and is skipped, which is why exactly 8 par tenors stayed clean at
+   their exact positions instead of the rest shifting.
+5. ``s[~s.index.duplicated(keep="first")]`` keeps the UPPER block's value where
+   the dates coincide, so a short nightly tail request keeps its own few days and
+   takes ~2,700 historical days from the vol block. ``cache.get`` then writes the
+   whole returned series unclipped, banking an 11-year vol history from a 7-day
+   request.
+
+Every test here is paired with a MUTATION CHECK in the sense the sibling client
+tests use: the guard is exercised against input that is wrong in exactly the way
+the wire was wrong, and the assertion names the value that must NOT appear.
+"""
+
+from __future__ import annotations
+
+import datetime
+import pathlib
+
+import pandas as pd
+import pytest
+
+from MDP.CitiVelocityExcel.block_parser import parse_tshist_block
+from MDP.CitiVelocityExcel.excel_constants import GETTING_DATA_ERR, VALUE_ERR
+from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
+from MDP.CitiVelocityExcel.sanity import (
+    TagSanityError,
+    band_for_tag,
+    implausible_rows,
+)
+
+PAR_10Y = "RATES.OIS.USD_SOFR.PAR.10Y"
+PAR_2Y = "RATES.OIS.USD_SOFR.PAR.2Y"
+PAR_1Y = "RATES.OIS.USD_SOFR.PAR.1Y"
+VOL_A = "RATES.VOL.USD.ATM_RFR.NORMAL.ANNUAL.1M.1Y"
+VOL_B = "RATES.VOL.USD.ATM_RFR.NORMAL.ANNUAL.1M.2Y"
+
+
+# ------------------------------------------------------------------ #
+#              1. the parser must not read a second block            #
+# ------------------------------------------------------------------ #
+
+
+def _merged_region(*, second_header: bool = True, formula_row: bool = True) -> list[list]:
+    """One region holding a SHORT par block and, below it, a deep vol block.
+
+    This is the shape ``CurrentRegion`` returns once the cursor has been left
+    inside a previous block's footprint. The par block is a nightly tail request;
+    the vol block carries history the par tags never had.
+    """
+    rows: list[list] = [
+        ["=CVTSHIST(par)", None, None],
+        ["Date", f"{PAR_10Y} - CLOSE", f"{PAR_2Y} - CLOSE"],
+        [datetime.datetime(2026, 8, 4), 4.22537, 4.05114],
+        [datetime.datetime(2026, 8, 3), 4.21000, 4.04000],
+        [None, None, None],
+    ]
+    if formula_row:
+        rows.append(["=CVTSHIST(vol)", None, None])
+    if second_header:
+        rows.append(["Date", f"{VOL_A} - CLOSE", f"{VOL_B} - CLOSE"])
+    rows += [
+        [datetime.datetime(2026, 8, 4), 76.5078, 80.1234],
+        [datetime.datetime(2020, 1, 2), 55.0000, 60.0000],
+        [datetime.datetime(2015, 10, 8), 39.9784, 54.7386],
+    ]
+    return rows
+
+
+def test_a_second_block_in_the_region_never_reaches_the_series():
+    """THE REGRESSION. Vol rows below a par block must not become par rates."""
+    block = parse_tshist_block(_merged_region(), [PAR_10Y, PAR_2Y])
+
+    s = block.series[PAR_10Y]
+    assert list(s.index) == [pd.Timestamp("2026-08-03"), pd.Timestamp("2026-08-04")]
+    assert s.loc[pd.Timestamp("2026-08-04")] == pytest.approx(4.22537)
+
+    # The three values the poison put on disk, named so a regression is legible.
+    assert 39.9784 not in set(s.to_numpy())
+    assert 55.0 not in set(s.to_numpy())
+    assert pd.Timestamp("2015-10-08") not in s.index
+
+
+def test_the_foreign_rows_are_reported_not_silently_dropped():
+    """A merged region is a defect upstream; truncating it quietly would hide it."""
+    block = parse_tshist_block(_merged_region(), [PAR_10Y, PAR_2Y])
+    assert block.foreign_rows > 0
+
+
+def test_the_seam_is_found_without_a_header_or_a_formula_row():
+    """Content alone must settle it: a CVTSHIST body is newest-first.
+
+    If the region is cut so the second block's header and formula row fall
+    outside it, the only remaining evidence is that the dates STOP descending.
+    That has to be enough, or the guard depends on rows the region may not carry.
+    """
+    rows = _merged_region(second_header=False, formula_row=False)
+    block = parse_tshist_block(rows, [PAR_10Y, PAR_2Y])
+    s = block.series[PAR_10Y]
+    assert pd.Timestamp("2015-10-08") not in s.index
+    assert s.max() == pytest.approx(4.22537)
+
+
+def test_a_repeated_stamp_across_a_chunk_seam_is_still_accepted():
+    """The parser's own contract: "the block can repeat a stamp across chunk
+    seams". Equality is not an ascending step and must not truncate."""
+    rows = [
+        ["Date", f"{PAR_10Y} - CLOSE"],
+        [datetime.datetime(2026, 8, 4), 4.3],
+        [datetime.datetime(2026, 8, 4), 4.3],
+        [datetime.datetime(2026, 8, 3), 4.2],
+        [datetime.datetime(2026, 8, 2), 4.1],
+    ]
+    s = parse_tshist_block(rows, [PAR_10Y]).series[PAR_10Y]
+    assert len(s) == 3
+    assert s.iloc[0] == pytest.approx(4.1)
+
+
+def test_an_ordinary_single_block_is_untouched():
+    rows = [
+        ["=CVTSHIST(par)", None],
+        ["Date", f"{PAR_10Y} - CLOSE"],
+        [datetime.datetime(2026, 8, 4), 4.3],
+        [datetime.datetime(2026, 8, 3), 4.2],
+        [datetime.datetime(2026, 8, 2), 4.1],
+    ]
+    block = parse_tshist_block(rows, [PAR_10Y])
+    assert block.foreign_rows == 0
+    assert len(block.series[PAR_10Y]) == 3
+
+
+# ------------------------------------------------------------------ #
+#          2. the cache must not write a tag it was not asked for     #
+# ------------------------------------------------------------------ #
+
+
+def test_get_refuses_a_fetcher_key_it_did_not_request(tmp_path: pathlib.Path):
+    """A writer that can address a tag it does not own IS the defect.
+
+    ``get`` wrote ``for tag, series in fetched.items()`` with no check against
+    the tags it asked for, so any fetcher could bank anything under any name.
+    """
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    idx = pd.DatetimeIndex(["2026-08-03", "2026-08-04"])
+
+    def fetcher(tags, freq, start, end, price_point):
+        return {
+            PAR_10Y: pd.Series([4.2, 4.3], index=idx),
+            VOL_A: pd.Series([76.5, 77.0], index=idx),   # never requested
+        }
+
+    out = cache.get([PAR_10Y], "DAILY", fetcher=fetcher)
+
+    assert PAR_10Y in out
+    assert cache.path(PAR_10Y, "DAILY").is_file()
+    assert not cache.path(VOL_A, "DAILY").is_file(), (
+        "a fetcher key that was not requested reached the disk"
+    )
+
+
+def test_get_still_serves_the_requested_tags_when_a_stray_key_is_present(
+    tmp_path: pathlib.Path,
+):
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    idx = pd.DatetimeIndex(["2026-08-03", "2026-08-04"])
+
+    def fetcher(tags, freq, start, end, price_point):
+        return {PAR_10Y: pd.Series([4.2, 4.3], index=idx), VOL_A: pd.Series([76.5, 77.0], index=idx)}
+
+    out = cache.get([PAR_10Y], "DAILY", fetcher=fetcher)
+    assert out[PAR_10Y].tolist() == [4.2, 4.3]
+
+
+# ------------------------------------------------------------------ #
+#           3. a value that cannot be a par rate cannot land          #
+# ------------------------------------------------------------------ #
+
+
+def test_band_for_tag_knows_the_par_family():
+    lo, hi = band_for_tag(PAR_2Y)
+    assert lo <= 0.0 and hi >= 10.0
+    assert not (lo <= 102.0 <= hi)
+
+
+def test_a_vol_series_is_refused_under_a_par_tag(tmp_path: pathlib.Path):
+    """The blunt check that would have caught this on day one, at the WRITE
+    boundary rather than at every read site."""
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    poisoned = pd.Series(
+        [102.0, 4.24], index=pd.DatetimeIndex(["2023-06-01", "2026-08-04"])
+    )
+    with pytest.raises(TagSanityError) as exc:
+        cache.write(PAR_2Y, "DAILY", poisoned)
+    assert "102" in str(exc.value)
+    assert not cache.path(PAR_2Y, "DAILY").is_file()
+
+
+def test_a_real_par_series_writes_normally(tmp_path: pathlib.Path):
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    good = pd.Series([4.24, 4.03], index=pd.DatetimeIndex(["2023-06-01", "2026-08-04"]))
+    merged = cache.write(PAR_2Y, "DAILY", good)
+    assert len(merged) == 2
+    assert cache.path(PAR_2Y, "DAILY").is_file()
+
+
+def test_a_vol_tag_may_hold_a_vol_number(tmp_path: pathlib.Path):
+    """The band is per FAMILY. 76.5 is impossible for a par rate and ordinary
+    for a normal vol in bp; a single global band would break the vol warm."""
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    vol = pd.Series([76.5078], index=pd.DatetimeIndex(["2026-08-04"]))
+    cache.write(VOL_A, "DAILY", vol)
+    assert cache.path(VOL_A, "DAILY").is_file()
+
+
+def test_an_unknown_family_is_not_gated(tmp_path: pathlib.Path):
+    """No band means no opinion. A guard that guessed would block real data."""
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    assert band_for_tag("SOMETHING.WE.DO.NOT.KNOW") is None
+    cache.write("SOMETHING.WE.DO.NOT.KNOW", "DAILY",
+                pd.Series([1e9], index=pd.DatetimeIndex(["2026-08-04"])))
+
+
+def test_implausible_rows_names_the_dates(tmp_path: pathlib.Path):
+    s = pd.Series([102.0, 4.24, 164.6],
+                  index=pd.DatetimeIndex(["2023-06-01", "2026-08-04", "2023-06-02"]))
+    bad = implausible_rows(PAR_2Y, s)
+    assert set(bad.index) == {pd.Timestamp("2023-06-01"), pd.Timestamp("2023-06-02")}
+
+
+# ------------------------------------------------------------------ #
+#        4. the cursor must never be left inside a live spill         #
+# ------------------------------------------------------------------ #
+
+
+class _FakeRegion:
+    """A spill 2,700 rows tall, starting at the anchor - a DAILY par grid."""
+
+    def __init__(self, row: int, n_rows: int):
+        self.Row = row
+        self.Rows = type("R", (), {"Count": n_rows})()
+        self.Value = [["Date"], [None]]
+
+
+def _client_with_a_2700_row_spill(settled_value):
+    """A client whose formula settles to ``settled_value`` over a huge spill."""
+    from MDP.CitiVelocityExcel import com_client as cc
+
+    client = cc.CitiVelocityExcelClient.__new__(cc.CitiVelocityExcelClient)
+    client._row = 1
+    client._gap = 30
+    client._logger = cc._logger
+    client.calls = 0
+    client._app = type("App", (), {"CalculateUntilAsyncQueriesDone": lambda self: None})()
+    client._ws = type("WS", (), {"Range": lambda self, a: type("R", (), {"Formula": None})()})()
+    client._check_alive = lambda: None
+    client._anchor = lambda rows_needed: "B1"
+    client._settle = lambda cell, timeout=None: (settled_value, 0.0)
+    client._extent = lambda anchor: _FakeRegion(row=1, n_rows=2700)
+    return client
+
+
+@pytest.mark.parametrize(
+    "settled, what",
+    [
+        (GETTING_DATA_ERR, "a poll timeout"),
+        (VALUE_ERR, "an Excel error int"),
+    ],
+)
+def test_the_cursor_advances_past_a_spill_on_the_early_return_paths(settled, what):
+    """THE CAUSE, tested where it lives.
+
+    ``_write_and_read`` reserves 8 + 30 = 38 rows provisionally and corrects the
+    cursor from the real extent. Both early returns used to fire BEFORE that
+    correction, so ``self._row`` stayed 39 while the block went on to fill 2,700
+    rows - and the next formula was planted inside it.
+    """
+    client = _client_with_a_2700_row_spill(settled)
+    rows, value, _elapsed = client._write_and_read("=CVTSHIST(...)", rows_needed=8)
+
+    assert rows == []
+    assert client._row > 2700, (
+        f"after {what} the cursor stayed at row {client._row}, inside a 2,700-row "
+        "spill; the next anchor lands in a live block and the two regions merge"
+    )
