@@ -272,16 +272,28 @@ def verify_identities(screen: Mapping[str, pd.DataFrame],
     Returns the max absolute error of each, so a caller asserts on a number it
     can also print.  The second identity only binds where the CA is positive,
     which is where the inversion is defined at all.
+
+    Both errors are NaN-SKIPPING maxima, and the count of dates that had to be
+    skipped is returned beside them.  A plain ``max`` over a panel with two
+    missing vol marks returns NaN, and ``assert nan < 1e-9`` fails in a way that
+    looks like a broken identity rather than a thin day -- which is exactly what
+    happened the first time this ran.
     """
-    err_vs = float((screen["ca"] - screen["model"] - screen["vs_model"])
-                   .abs().to_numpy().max())
-    errs = []
+    diff_vs = (screen["ca"] - screen["model"] - screen["vs_model"]).abs()
+    err_vs = float(np.nanmax(diff_vs.to_numpy()))
+    n_skipped = int(diff_vs.isna().to_numpy().sum())
+    errs, n_impl = [], 0
     for lab in screen["ca"].columns:
         w = panel[f"{lab.lower()}_w"].astype(float)
         recon = screen["implied"][lab] ** 2 * w / 2e4
-        errs.append(float((recon - screen["ca"][lab]).abs().max()))
+        d = (recon - screen["ca"][lab]).abs()
+        n_impl += int(d.isna().sum())
+        if d.notna().any():
+            errs.append(float(np.nanmax(d.to_numpy())))
     return {"ca_minus_model_minus_vsmodel": err_vs,
-            "implied_reconstructs_ca": float(np.nanmax(errs))}
+            "n_cells_skipped_vsmodel": n_skipped,
+            "implied_reconstructs_ca": float(np.nanmax(errs)) if errs else float("nan"),
+            "n_cells_skipped_implied": n_impl}
 
 
 def roll_identity(screen: Mapping[str, pd.DataFrame]) -> pd.DataFrame:

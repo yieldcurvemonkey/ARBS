@@ -135,6 +135,19 @@ def test_the_notes_first_identity_holds_exactly():
     assert ids["implied_reconstructs_ca"] < 1e-9
 
 
+def test_the_identity_holds_and_is_reported_when_a_vol_mark_is_missing():
+    """A plain ``max`` over a panel with a missing mark returns NaN, and
+    ``assert nan < 1e-9`` fails in a way that looks like a broken identity
+    rather than a thin day.  The hole: two dates with no vol at all."""
+    p = _panel()
+    p.loc[p.index[100:102], SC.VOL_COL["BLUES"]] = np.nan
+    s = SC.build_screen(p)
+    ids = SC.verify_identities(s, p)
+    assert ids["ca_minus_model_minus_vsmodel"] < 1e-12
+    assert ids["n_cells_skipped_vsmodel"] == 2
+    assert np.isnan(s["model"].loc[p.index[100], "BLUES"])
+
+
 def test_the_identity_check_can_actually_fail():
     """A vacuous identity test is worth nothing: break the screen and watch it."""
     p = _panel()
