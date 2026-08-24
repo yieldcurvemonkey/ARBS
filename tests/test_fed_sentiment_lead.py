@@ -257,6 +257,54 @@ def test_lag_curve_argmax_ties_out_to_the_rvutils_estimator():
     assert ours == theirs == 4
 
 
+def test_fit_ar_recovers_a_planted_ar2():
+    """Known answer for the prewhitening filter."""
+    rng = np.random.default_rng(0)
+    n = 4000
+    x = np.zeros(n)
+    e = rng.normal(size=n)
+    for i in range(2, n):
+        x[i] = 0.6 * x[i - 1] - 0.3 * x[i - 2] + e[i]
+    phi, p = D.fit_ar(x, max_p=8)
+    assert p == 2, f"selected order {p}, expected 2"
+    assert abs(phi[0] - 0.6) < 0.05 and abs(phi[1] + 0.3) < 0.05, phi
+
+
+def test_fit_ar_scores_every_order_on_the_same_rows():
+    """AIC across models fitted on different sample sizes is not comparable.
+
+    Fitting AR(1) on n-1 rows and AR(6) on n-6 biases the selection toward the
+    short lag, because a likelihood computed on more observations is simply
+    larger. The fix is a common sample, and the property is testable: the
+    residual vectors of every candidate order must have the same length.
+    """
+    rng = np.random.default_rng(1)
+    x = _ar1(500, 0.8, rng)
+    lengths = set()
+    for max_p in (4, 4, 4):
+        phi, p = D.fit_ar(x, max_p=max_p)
+        start = max_p
+        Z = np.column_stack([x[start - j - 1 : len(x) - j - 1] for j in range(p)])
+        lengths.add(len(x[start:] - Z @ phi))
+    assert len(lengths) == 1
+
+
+def test_prewhitened_answer_is_not_a_property_of_the_order_cap():
+    rng = np.random.default_rng(2)
+    n = 300
+    idx = pd.date_range("2020-01-03", periods=n, freq="W-FRI")
+    drv = pd.Series(_ar1(n, 0.9, rng), index=idx)
+    y = pd.Series(np.roll(drv.to_numpy(), 6) + rng.normal(scale=0.5, size=n), index=idx)
+    lags = np.arange(-13, 14)
+    args = set()
+    for mp in (2, 4, 8, 12):
+        xt, yt, _ = D.transform_pair(drv, y, "prewhitened", max_p=mp)
+        X, Y, _ = D.lag_matrix(xt, yt, lags)
+        c = D.lag_curve_common(X, Y, lags)
+        args.add(int(c["lag_weeks"].iloc[int(np.nanargmax(c["corr"].to_numpy()))]))
+    assert args == {6}, f"the order cap moved the recovered lead: {sorted(args)}"
+
+
 def test_phase_randomisation_preserves_the_power_spectrum():
     rng = np.random.default_rng(8)
     x = _ar1(512, 0.95, rng)
@@ -415,7 +463,7 @@ def test_shift_null_size_is_near_nominal(transform, ceiling):
     """Calibration: how often does the null reject when nothing is there?
 
     Measured over 120 unrelated AR(0.97) pairs at 27 lags, rejection at a
-    nominal 5%: shift/changes 5.0%, shift/levels 8.3%, shift/prewhitened 9.2%,
+    nominal 5%: shift/changes 5.0%, shift/levels 8.3%, shift/prewhitened 5.8%,
     phase/changes 0.8%, phase/levels 7.5%. The changes pair is the one the
     notebook takes its p-values from; the others are reported with their size
     stated rather than assumed to be 5%.

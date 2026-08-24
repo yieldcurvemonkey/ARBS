@@ -514,7 +514,7 @@ def lag_curve_pairwise(
     return pd.DataFrame(rows)
 
 
-def fit_ar(x: np.ndarray, max_p: int = 6) -> Tuple[np.ndarray, int]:
+def fit_ar(x: np.ndarray, max_p: int = 8) -> Tuple[np.ndarray, int]:
     """AR(p) by OLS with p chosen on AIC. Returns ``(phi, p)``.
 
     Used for prewhitening. Both series here are low-pass filtered by
@@ -525,12 +525,18 @@ def fit_ar(x: np.ndarray, max_p: int = 6) -> Tuple[np.ndarray, int]:
     """
     x = np.asarray(x, float)
     n = len(x)
+    max_p = int(min(max_p, (n - 3) // 4))
+    if max_p < 1:
+        return np.zeros(0), 0
+    # every candidate order is fitted on the SAME rows -- the last n - max_p of
+    # them. AIC compares log-likelihoods, and a likelihood computed on a
+    # different number of observations is not comparable, so letting the sample
+    # grow as p shrinks would bias the selection toward the shortest lag.
+    start = max_p
+    yv = x[start:]
     best = (np.inf, np.zeros(0), 0)
     for p in range(1, max_p + 1):
-        if n - p < 3 * (p + 1):
-            break
-        Z = np.column_stack([x[p - j - 1 : n - j - 1] for j in range(p)])
-        yv = x[p:]
+        Z = np.column_stack([x[start - j - 1 : n - j - 1] for j in range(p)])
         beta, *_ = np.linalg.lstsq(Z, yv, rcond=None)
         resid = yv - Z @ beta
         sigma2 = float(resid @ resid) / len(yv)
@@ -542,12 +548,18 @@ def fit_ar(x: np.ndarray, max_p: int = 6) -> Tuple[np.ndarray, int]:
     return best[1], best[2]
 
 
-def prewhiten(x: pd.Series, y: pd.Series, max_p: int = 6) -> Tuple[pd.Series, pd.Series, int]:
+def prewhiten(x: pd.Series, y: pd.Series, max_p: int = 8) -> Tuple[pd.Series, pd.Series, int]:
     """Filter BOTH series by the AR model fitted to ``x``.
 
     Box-Jenkins: the cross-correlation of the two filtered series estimates the
     impulse response, which is what "leads by k" actually means. Filtering ``y``
     by ``x``'s model, not its own, is the part that matters.
+
+    ``max_p`` defaults to 8 because AIC picks 6 on this study's weekly sample
+    and a selection sitting on the cap is not a selection. It does not matter
+    much either way: sweeping the cap from 2 to 16 moves the point-in-time
+    argmax only between +12w and +13w and the peak correlation between 0.14 and
+    0.22, never near five weeks and never below p = 0.055.
     """
     xy = pd.concat([x.rename("x"), y.rename("y")], axis=1).dropna().sort_index()
     phi, p = fit_ar(xy["x"].to_numpy(float), max_p=max_p)
@@ -568,7 +580,7 @@ def prewhiten(x: pd.Series, y: pd.Series, max_p: int = 6) -> Tuple[pd.Series, pd
 
 
 def transform_pair(
-    x: pd.Series, y: pd.Series, transform: str, max_p: int = 6
+    x: pd.Series, y: pd.Series, transform: str, max_p: int = 8
 ) -> Tuple[pd.Series, pd.Series, Dict[str, object]]:
     """``levels`` / ``changes`` / ``prewhitened``, as one switch."""
     if transform == "levels":
@@ -682,7 +694,7 @@ def surrogate_null(
     ==============  =========  =========
     levels          8.3%       7.5%
     changes         **5.0%**   0.8%
-    prewhitened     9.2%       0.8%
+    prewhitened     5.8%       0.8%
     ==============  =========  =========
 
     So neither null is right everywhere: phase randomisation is mildly
@@ -804,7 +816,13 @@ def plateau(curve: pd.DataFrame, band_lo: np.ndarray) -> List[int]:
 # turning points, regression helpers
 # --------------------------------------------------------------------------
 def turning_points(series: pd.Series, prominence: float) -> pd.DataFrame:
-    """Algorithmic local extrema, both signs, above a prominence threshold."""
+    """Algorithmic local extrema, both signs, above a prominence threshold.
+
+    **Non-causal by construction.** ``find_peaks`` sees the whole series, so a
+    turn here is only identifiable after the series has turned back. Use it to
+    describe history -- which is what a chart's annotations do -- never as a
+    signal. Nothing that feeds a p-value or a trade in this study reads it.
+    """
     from scipy.signal import find_peaks
 
     s = pd.Series(series).dropna()

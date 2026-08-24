@@ -278,8 +278,19 @@ print(f"\nsentiment coverage: as-published {int(SENT_AP['sentiment'].notna().sum
       f"{SENT_PIT['sentiment'].first_valid_index().date()}")
 print(f"speeches inside the EWMA window: min {int(SENT_PIT['n_speeches'].min())}, "
       f"median {int(SENT_PIT['n_speeches'].median())}, max {int(SENT_PIT['n_speeches'].max())} "
-      f"-- the min_speeches={CFG.min_speeches_in_window} floor never binds, because the "
-      f"corpus's first reports back-fill ~165 Fed speeches at once")
+      f"-- the min_speeches={CFG.min_speeches_in_window} floor never binds")
+_first2 = SCORES["pub_date"].isin(pd.to_datetime(["2023-05-02", "2023-05-03"]))
+_t0 = pd.Timestamp("2023-05-05")
+_win0 = int((((SCORES["date"] <= _t0) & (SCORES["pub_date"] <= _t0))
+             & ((_t0 - SCORES["date"]).dt.days <= CFG.ewma_window_days)).sum())
+print(f"  it never binds because the corpus's first two report dates publish "
+      f"{int(_first2.sum())} Fed rows at once, {_win0} of them inside the "
+      f"{CFG.ewma_window_days}-day window. So the point-in-time series does not start "
+      f"thin -- it starts at full strength, on a single day's information dump. That is "
+      f"what a reader genuinely received; it is not a leak. But it does mean the very "
+      f"first weeks are one report vintage's view of history rather than a series that "
+      f"accumulated, and 2023-05-02 itself has only 8 visible rows (1 inside the window), "
+      f"which is why the weekly grid's first usable Friday is 2023-05-05.")
 
 # %% [markdown]
 # ## 1. The chart, in both vintages
@@ -349,7 +360,7 @@ print(X_ALL[X_ALL.index >= "2026-06-01"].round(3).to_string())
 # |---|---|---|
 # | **levels** | the shape JWS is describing | 8.3% |
 # | **changes** | week-on-week co-movement | **5.0%** |
-# | **prewhitened** | Box-Jenkins: filter both by the input's own AR model | 9.2% |
+# | **prewhitened** | Box-Jenkins: filter both by the input's own AR model | 5.8% |
 #
 # Those sizes are not assumed -- they were measured over 120 unrelated AR(0.97)
 # pairs scored at a nominal 5%, and they are why the p-values quoted in the
@@ -389,6 +400,7 @@ def measure(x, y, transform, *, boot=600, shift=1500, phase=800, seed=31):
                 boot_lo=b["argmax_q05"], boot_hi=b["argmax_q95"],
                 plateau_lo=min(plat), plateau_hi=max(plat), plateau_n=len(plat),
                 pairwise_argmax=int(pair["lag_weeks"].iloc[int(np.nanargmax(pair["corr"].to_numpy()))]),
+                ar_order=int(info.get("ar_order", 0)),
                 p_shift=D.surrogate_pvalue(obs, sh), p_phase=D.surrogate_pvalue(obs, ph),
                 curve=curve, band_lo=b["band_lo"], band_hi=b["band_hi"], info=info)
 
@@ -501,6 +513,10 @@ print("JWS's story survives. The number does not: it is 11-14 weeks, not five.")
 # offset, and every real number below is read against it.
 
 # %%
+# The synthetic world is imported from the TEST module on purpose: the number
+# printed below is the same artefact that
+# `test_pipeline_reports_a_lead_even_when_the_true_lead_is_zero` asserts on, so
+# the notebook and the test cannot drift apart into two different calibrations.
 sys.path.insert(0, str(REPO / "tests"))
 from test_fed_sentiment_lead import _synthetic_world  # noqa: E402
 
@@ -574,6 +590,19 @@ print("peak reaches only p=0.09 against a test whose measured size is 8.3%. On")
 print("changes -- the one transform whose null is exactly calibrated at 5.0% -- the")
 print("maximum over all 27 lags is r=0.153, p=0.55.")
 
+print("\nprewhitening depends on an AR order chosen by AIC, so sweep the cap:")
+xpw, ypw = SAMPLES["point_in_time"]
+for mp in (2, 4, 6, 8, 12, 16):
+    xt, yt, info = D.transform_pair(xpw, ypw, "prewhitened", max_p=mp)
+    Xm, Ym, _ = D.lag_matrix(xt, yt, LAGS)
+    cc = D.lag_curve_common(Xm, Ym, LAGS)
+    j = int(np.nanargmax(cc["corr"].to_numpy()))
+    print(f"  cap {mp:2d} -> order {info['ar_order']:2d}"
+          f"{' (AT THE CAP)' if info['ar_order'] == mp else '':14s}"
+          f"  argmax {int(cc['lag_weeks'].iloc[j]):+3d}w  r {cc['corr'].iloc[j]:.3f}"
+          f"  at+5w {float(cc.loc[cc['lag_weeks'] == 5, 'corr'].iloc[0]):+.3f}")
+print("  -> +12w or +13w throughout. The order choice does not move the answer.")
+
 # %% [markdown]
 # ### The one significant cell, on the same window as the others
 #
@@ -619,10 +648,18 @@ print("where no signal existed. That is the vintage trap doing exactly what it d
 # (`ISI.SI_CISI`), monthly, 343 observations back to 1998 -- a different
 # construction, and the two correlate at only 0.41 in levels. If the lead is a
 # property of the world rather than of one index, it should survive the swap.
+#
+# This panel varies the **surprise** side, so it holds the sentiment side fixed
+# at the **as-published** vintage: 43 monthly observations is already thin, and
+# gating it as well would leave too little to read. It is therefore a check on
+# the surprise construction, not a second point-in-time test -- and it inherits
+# the same hindsight the as-published series carries everywhere else.
 
 # %%
 cisi = panel[D.TAG_CISI_MONTHLY].dropna()
 lab_m = panel[D.TAG_LABOUR].dropna().resample("ME").last()
+# 36 and 24 are MONTHS here, not business days -- the same 3-year window and
+# 2-year minimum the daily legs use, expressed at this series' own frequency
 zc, zl = D.trailing_z(cisi, 36, 24), D.trailing_z(lab_m, 36, 24)
 comp_m = pd.concat([zc, zl], axis=1)
 comp_m = comp_m.mean(axis=1).where(comp_m.notna().all(axis=1))
@@ -706,6 +743,14 @@ fig.show()
 # conclusion, so these are found algorithmically -- local extrema above a
 # prominence threshold -- and then each surprise turn is matched to the next
 # same-sign sentiment turn.
+#
+# **This detector is deliberately non-causal.** `scipy.signal.find_peaks` sees
+# the whole series, so a turn is only identifiable after the series has turned
+# back. That is correct here and it is *generous to the claim*: it is the same
+# licence a chart annotated after the fact enjoys. Nothing downstream of this
+# cell feeds a p-value or a trade -- it exists to replace four hand-drawn arrows
+# with a rule, and the matcher is likewise generous, reaching up to 23 weeks
+# forward to find a partner for each surprise turn.
 
 # %%
 TP_X = D.turning_points(X_ALL[X_ALL.index >= "2023-04-01"], CFG.turning_point_prominence)
@@ -982,8 +1027,12 @@ print("to +14w. The robustness point is that nothing moves it near five.")
 #    Bloomberg's series should re-run the lag scan on it; the machinery here
 #    takes any two series.
 # 2. **147 weekly point-in-time observations.** That is the sample, whatever the
-#    x-axis suggests. It supports one split and roughly six turning points, and
-#    it is why nothing here is quoted as significant.
+#    x-axis suggests. It supports one split and roughly six turning points. One
+#    cell in the notebook does clear its null at p = 0.001 -- as-published
+#    levels -- and it is the only one, it is the untradeable vintage, and it
+#    falls to p = 0.081 the moment it is scored on the point-in-time window. It
+#    is reported as a vintage artefact rather than a result, and that reading is
+#    itself a judgement a reader may want to check.
 # 3. **The level of our composite differs from JWS's** (-0.37 vs his ~0.1) and
 #    the daily prices leg correlates with Citi's proper monthly Inflation
 #    Surprise Index at only 0.41. The rolldown reproduces in both; the level
@@ -994,9 +1043,12 @@ print("to +14w. The robustness point is that nothing moves it near five.")
 #    running it back to the earliest speech date (2008-11) would produce a chart,
 #    not a sample.
 # 5. **The shift null's size is measured, not exact** -- 8.3% on levels, 5.0% on
-#    changes, 9.2% on prewhitened, over 120 unrelated AR(0.97) pairs. p-values
-#    on levels and prewhitened should be read against those sizes rather than
-#    against 5%.
+#    changes, 5.8% on prewhitened, over 120 unrelated AR(0.97) pairs at a
+#    nominal 5%. A p-value on levels should be read against 8.3%, not 5%.
+#    (Prewhitened was 9.2% before the AR-order selection was moved onto a common
+#    sample; fixing that comparison is what brought it to 5.8%, which is a
+#    reminder that a null's size is a property of the whole estimator and not
+#    just of the resampling scheme.)
 # 6. **The turning-point matcher takes the *next* same-sign sentiment turn**,
 #    which is generous to the claim: it can reach 23 weeks forward to find one.
 #    A stricter window would shrink n below the point of usefulness.
