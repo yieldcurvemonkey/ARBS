@@ -491,12 +491,44 @@ def test_the_conditions_are_the_declared_inequalities():
 
 
 def test_a_missing_input_refuses_rather_than_confirming():
+    """A gate whose own input is missing must REFUSE.
+
+    The first version of this test NaN-ed a window of ``dealer_net`` and
+    asserted the gate was False there -- which it was, and would have been
+    however the gate was written, because ``NaN >= x`` is already False in
+    pandas.  The mutation harness killed the test rather than the code.  This
+    version asserts the property that actually distinguishes a correct gate
+    from ``~(x < thr)``: with the input missing EVERYWHERE, every condition is
+    False everywhere, and ``_at_least`` says so on its own.
+    """
     p = _real_panel()
-    p.loc[p.index[400:600], "dealer_net"] = np.nan
+    p["dealer_net"] = np.nan
     s = SC.build_screen(p)
     c = R.build_contexts(p, s, R.RuleConfig())["BLUES"]
-    win = c.conds.loc[p.index[500]:p.index[560], "positioning_stretched"]
-    assert not win.any()
+    assert c.z_pos.isna().all()
+    assert not c.conds["positioning_stretched"].any()
+    assert not c.all_ok.any()
+
+    nan = pd.Series([np.nan] * 5)
+    assert not R._at_least(nan, 1.0).any()
+    assert not R._above(nan, 0.0).any()
+    # the defect this guards against: the negated spelling CONFIRMS on a NaN
+    assert bool((~(nan < 1.0)).all()), "the fixture must make the trap real"
+
+    # and a gate whose input exists still fires
+    ok = pd.Series([0.0, 1.0, 2.0, np.nan])
+    assert list(R._at_least(ok, 1.0)) == [False, True, True, False]
+
+
+def test_realized_vol_is_missing_early_and_the_gate_refuses_there():
+    """A second, non-degenerate hole: the realised-vol column needs 40 marks,
+    so ``impl_rlzd`` is genuinely NaN at the start of every panel."""
+    p = _real_panel()
+    s = SC.build_screen(p)
+    c = R.build_contexts(p, s, R.RuleConfig())["BLUES"]
+    early = c.impl_rlzd.isna()
+    assert int(early.sum()) > 20, "the fixture must leave a real hole"
+    assert not c.conds.loc[early, "implied_rich"].any()
 
 
 def test_the_splice_removes_the_planted_roll_jump_from_the_pnl_series():

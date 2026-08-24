@@ -363,6 +363,29 @@ def _fit_kind_for(hedge: str) -> str:
     return "citi" if hedge == "citi_2017" else "fly"
 
 
+def _at_least(s: pd.Series, thr: float) -> pd.Series:
+    """``s >= thr``, with a MISSING mark refusing rather than confirming.
+
+    ``NaN >= x`` is already False in pandas, so the ``notna`` mask below looks
+    redundant -- and the mutation harness proved it was, by planting a defect
+    on the old spelling that no test could kill.  It is here because
+    ``~(NaN < x)`` is **True**, the two spellings are one keystroke apart, and
+    the difference is a rule that opens a position on a date with no realised
+    vol mark at all.  Making the finite mask explicit gives that defect
+    something to fail against; ``test_a_missing_input_refuses_rather_than_
+    confirming`` is the test and ``rule-nan-confirms-a-condition`` is the
+    mutant.
+    """
+    x = pd.Series(s).astype(float)
+    return (x >= float(thr)) & x.notna()
+
+
+def _above(s: pd.Series, thr: float) -> pd.Series:
+    """``s > thr``, same contract as :func:`_at_least`."""
+    x = pd.Series(s).astype(float)
+    return (x > float(thr)) & x.notna()
+
+
 def build_contexts(panel: pd.DataFrame, screen: Mapping[str, pd.DataFrame],
                    cfg: RuleConfig, *,
                    structures: Optional[Sequence[str]] = None,
@@ -433,19 +456,15 @@ def build_contexts(panel: pd.DataFrame, screen: Mapping[str, pd.DataFrame],
         ir = screen["impl_rlzd"][lab]
 
         raw = {
-            "wide_to_model": z_model >= cfg.z_model_min,
-            "wide_to_fly": z_fly >= cfg.z_fly_min,
-            "positive_roll": (roll3 > 0.0) if cfg.require_positive_roll
-            else pd.Series(True, index=idx),
-            "implied_rich": ir >= cfg.impl_rlzd_min,
-            "positioning_stretched": z_pos >= cfg.z_pos_min,
+            "wide_to_model": _at_least(z_model, cfg.z_model_min),
+            "wide_to_fly": _at_least(z_fly, cfg.z_fly_min),
+            "positive_roll": (_above(roll3, 0.0) if cfg.require_positive_roll
+                              else pd.Series(True, index=idx)),
+            "implied_rich": _at_least(ir, cfg.impl_rlzd_min),
+            "positioning_stretched": _at_least(z_pos, cfg.z_pos_min),
         }
-        # A NaN input cannot CONFIRM a condition.  Every gate is evaluated on
-        # the underlying being finite, so a missing mark refuses rather than
-        # inheriting pandas' "NaN >= x is False" by accident -- same answer,
-        # but the refusal is counted by cause in `condition_binding`.
-        conds = pd.DataFrame({k: v.fillna(False).astype(bool)
-                              for k, v in raw.items()}, index=idx)
+        conds = pd.DataFrame({k: v.astype(bool) for k, v in raw.items()},
+                             index=idx)
         active = [c for c in cfg.conditions]
         all_ok = conds[active].all(axis=1) if active else pd.Series(True, index=idx)
         # never open on a date whose own hedge parameters do not exist

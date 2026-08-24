@@ -602,12 +602,16 @@ _sd = pd.DataFrame(CTRL["same_day"])
 _w = _sd.pivot(index="cell_id", columns="exec_lag_bd", values="gross_usd")
 _w["harvest_usd"] = _w[0] - _w[1]
 print(_w.round(0).to_string())
-print("\nEvery cell is worth $1.9-17.8m MORE when it is filled at the mark its "
-      "own signal was computed from. That gap is not a strategy: the CA mark is "
-      "a composite of a futures bar and a separately-timed swap curve, and a "
-      "rule that shorts a rich mark at that mark banks a reversion nobody can "
-      "trade. It is also the single best argument for the `exec_lag_bd = 1` "
-      "convention, which every number in this notebook uses.")
+print(f"\nEvery one of the {len(_w)} cells is worth "
+      f"${_w['harvest_usd'].min():,.0f} to ${_w['harvest_usd'].max():,.0f} MORE "
+      "when it is filled at the mark its own signal was computed from, and the "
+      f"harvest is positive on {int((_w['harvest_usd'] > 0).sum())} of "
+      f"{len(_w)}. That gap is not a strategy: the CA mark is a composite of a "
+      "futures bar and a separately-timed swap curve, and a rule that shorts a "
+      "rich mark AT that mark banks a reversion nobody can trade. It is the "
+      "single best argument for the `exec_lag_bd = 1` convention, which every "
+      "number in this notebook uses.")
+assert (_w["harvest_usd"] > 0).all()
 
 # %% [markdown]
 # ### 2. The placebo ladder — a timing signal must die under lag
@@ -619,10 +623,15 @@ print(_pl.pivot(index="cell_id", columns="signal_lag_bd",
 print("\ngross $ at each lag:")
 print(_pl.pivot(index="cell_id", columns="signal_lag_bd",
                 values="gross_usd").round(0).to_string())
-print("\nThe z=1.0 books DO behave like timing signals: gross Sharpe 0.30 at "
-      "lag 0, 0.24 at 10 bd, then NEGATIVE from 20 bd out. So the small edge "
-      "that is there is genuinely about WHEN, not a slow level effect. It is "
-      "still an order of magnitude below the bar.")
+_pw = _pl.pivot(index="cell_id", columns="signal_lag_bd", values="sharpe_gross")
+_live = _pw[_pw[0] > 0]
+print(f"\nOf the {len(_pw)} cells, {len(_live)} make money unlagged. Every "
+      f"one of those {len(_live)} is NEGATIVE by 40 bd of lag "
+      f"(max {_live[40].max():+.4f}), and the median decay from lag 0 to lag "
+      f"60 is {float((_live[0] - _live[60]).median()):+.4f} of Sharpe. So the "
+      "small edge that is there is genuinely about WHEN rather than a slow "
+      "level effect -- it is just an order of magnitude below the bar.")
+assert (_live[40] < 0).all()
 
 # %% [markdown]
 # ### 3. The always-short control — how much of the book is a static position?
@@ -630,19 +639,30 @@ print("\nThe z=1.0 books DO behave like timing signals: gross Sharpe 0.30 at "
 # %%
 _as = pd.DataFrame(CTRL["always_short"])
 print(_as.round(0).to_string(index=False))
-print("\nThe static short is PROFITABLE on its own ($14k-$149k per trade): a "
-      "short-convexity book collects the CA's theta whether or not a signal "
-      "fired. The signal's own contribution is the last column, and it is "
-      "positive on the cells that trade at z = 1.0 -- on four trades.")
+_sd2 = pd.DataFrame(CTRL["always_short"])
+_raw = pd.read_parquet(DATA / "p4_controls_static.parquet")
+print(f"\nThe static short is profitable on its own on "
+      f"{int((_raw['per_trade_usd'] > 0).sum())} of {len(_raw)} "
+      f"(cell, structure) pairs, at ${_raw['per_trade_usd'].min():,.0f} to "
+      f"${_raw['per_trade_usd'].max():,.0f} per trade: a short-convexity book "
+      "collects the CA's theta whether or not a signal fired. The signal's "
+      "own contribution is the last column above, and it is positive on "
+      f"{int((_sd2['signal_edge_usd'] > 0).sum())} of {len(_sd2)} cells -- on "
+      "four trades each.")
 
 # %% [markdown]
 # ### 4. β = 0 — does the fly leg contribute?
 
 # %%
 print(pd.DataFrame(CTRL["beta_zero"]).round(4).to_string(index=False))
-print("\nThe fly adds Sharpe on two of five and removes it on three. Citi's "
-      "published fixed weights (`citi_2017`) are the worst of them: -0.39 of "
-      "Sharpe against the same book with the hedge removed.")
+_b0 = pd.DataFrame(CTRL["beta_zero"])
+_worst = _b0.loc[_b0["hedge_adds_sharpe"].idxmin()]
+print(f"\nThe fly adds Sharpe on {int((_b0['hedge_adds_sharpe'] > 0).sum())} "
+      f"of {len(_b0)} and removes it on "
+      f"{int((_b0['hedge_adds_sharpe'] < 0).sum())}. The worst is "
+      f"{_worst['cell_id']} at {_worst['hedge_adds_sharpe']:+.4f} of Sharpe "
+      "against the same book with the hedge removed -- and that is Citi's "
+      "own published fixed weights, held fixed.")
 
 # %% [markdown]
 # ### 5. The splice control

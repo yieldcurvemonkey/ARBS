@@ -1,0 +1,111 @@
+# Citi's published convexity trade, backtested in its own framework — DEAD
+
+Block 5 of the convexity RV programme. Backtests **Citi's actual published
+trade** — the screen across the strip, the fitted hedge, the five-condition
+entry conjunction, the dollar target and stop, short only, held through the
+quarterly rolls on dated instruments — as a faithful, pre-registered,
+engine-certified rule.
+
+Sources: Citi Research, *NA Rates Trade Idea*, 09 Feb 2017, Bikbov & Williams,
+*"Sell Blues convexity adjustments, hedged"* (`print (12).pdf`), and its origin,
+*US Rates Weekly*, 13 Jan 2017 (`print (15/18).pdf`).
+
+---
+
+## Verdict
+
+**0 of 23 declared cells clear `E[max SR | null] = 0.9066` annualised**
+(23 trials, 4.682 y tradeable span). Best net Sharpe on the panel **+0.2020**;
+best on the **engine +0.1657**. The headline — the note's own trade at the
+note's own thresholds — opens **twice in 4.7 years** for a net of
+**−$1,189,942**.
+
+## The finding that generalises
+
+**Citi's five-way entry conjunction is satisfied on 2 of 1,409 dates**, and the
+reason is inside the rule rather than in the data. The pairwise lift on BLUES:
+
+* `wide_to_model × implied_rich` = **0.34** — a CA that is wide to the Ho-Lee
+  model occurs when *realised* vol has been high, so implied/realised is low at
+  exactly the moment the model calls the adjustment rich;
+* `wide_to_model × positioning_stretched` = **0.43** — the note's own causal
+  chain runs the other way on SOFR (`corr(CA-vs-model, dealer 1Y z) = −0.187`),
+  even though the dealer-takes-the-other-side identity holds at −0.985;
+* `wide_to_model × wide_to_fly` = **2.59** — better than independence, but the
+  two "wideness" measures the note treats as one signal pass 2.3% of days each
+  and **0.14% jointly**.
+
+A conjunction reads in prose as one signal with several confirmations. Measured,
+it was three signals that rarely agree.
+
+## What is new in the tree
+
+| | |
+|---|---|
+| `RVUtils/ConvexityRV/citi_fv.py` | Citi's Figure-6 fair value: three fits (free / fly-constrained / Citi's published weights), refit at every quarterly IMM roll on a window ending strictly before it. **Promoted out of the reproduction notebook** (`citi_blues_ca_repro.py`) so a backtest can import it; the notebook now imports it back, and `_p4_tieout_repro.py` pins the module against the reproduction's own recorded path — the single mid-2023 sign reversal of `b` (w2 0.05→0.95, b +19.1→−7.6 at the 2023-06-20 refit), the residual table (2.232 / 2.149 sd, 1.674 / 1.892 mae) and the fly-start ranking (spot best, IMM_13 ninth of ten). All reproduce to the third decimal. |
+| `RVUtils/ConvexityRV/citi_screen.py` | Figure 20 as a per-date panel. `CA − Model − VsModel = 0` exactly; the roll column is the analytic `−θ/4` because colour packs are one YEAR apart, and `roll_identity()` measures it against the term-structure form rather than asserting an equality the granularity cannot support. |
+| `RVUtils/ConvexityRV/citi_rule.py` | The conjunction, the screen selection, the dollar target/stop state machine, the 23 declared cells, the stats and null bars. |
+| `RVUtils/ConvexityRV/citi_engine.py` | `QueryDrivenBacktest` wiring for a **fitted-weight** fly (`bpv` is **1×**, not `gv_engine`'s 2×, because a `[w2, 1, w10]` package earns exactly `bpv` per bp of `r5 − w2·r2 − w10·r10`) and **per-segment tags**, so the hedge can be re-struck at each quarterly refit without unwinding the futures pack. |
+| `docs/convexityrv/citi-framework-preregistration.md` | 23 cells, frozen and committed **before any P&L was computed**. |
+| `docs/convexityrv/results/citi-framework-backtest.md` | the full write-up. |
+| `notebooks/backtests/convexity_rv/citi_framework_backtest.{py,ipynb}` | executed through the gate at 0 unrun / 0 errors. |
+| 4 test files + a 38-mutant harness | every mutant killed. |
+
+## Three things measured that changed the design, before the freeze
+
+1. **The roll splice belongs in the P&L and NOT in the signal.** The roll jump
+   IS the CA's theta being paid back (measured 1.024× the quarter-theta on
+   BLUES), so a constant-rank CA is stationary *because* of it and the spliced
+   series carries the whole undone decay as a ~20 bp drift. Its 252-day rolling
+   z sits at a median of −1.15 to −1.31 instead of −0.20 to −0.53. Signal on
+   the raw quoted series (Citi's own screen object), P&L on the spliced one (a
+   dated position's actual path).
+2. **The conjunction fires twice**, so the pre-registration declares a
+   **two-rung threshold ladder** (the note's 2.0σ and a widened 1.0σ) and prints
+   the rungs it does not walk (1.5, 0.5, 0.0 → 2, 30, 51 days).
+3. **A single multi-year `IRSwapsTB` span request returns different par rates
+   for the same dates than the year-chunked request does** — up to 1.21 bp on
+   the 10y. The carried leg panel is exact on 1,409 of 1,409 dates under the
+   request shape it was built with. Every panel build in this package is
+   year-chunked; that is now a stated convention rather than an accident.
+
+## Controls, all declared in advance
+
+* **same-day fills** are worth **$1.88m–$17.76m more** on every cell — the
+  mark-noise harvest, and the reason `exec_lag_bd = 1` is the convention;
+* the **placebo ladder** kills every cell that makes money unlagged by 40 bd,
+  so the small edge that exists is genuinely about *when*;
+* the **always-short control** is profitable on 15 of 16 (cell, structure)
+  pairs with the signal off — what the trade IS, when it works, is
+  short-convexity carry;
+* **β = 0**: the fly adds Sharpe on 2 of 5 cells and removes it on 3, and
+  **Citi's own published 0.705/−1/0.465 weights are the worst of them**, at
+  −0.39 of Sharpe against the same book with the hedge simply removed;
+* the **engine** is worse than the panel on 8 of 9 books and disagrees with it
+  on the *sign* of one (`citi_2017`, ratio −1.36).
+
+## Recorded, not promoted
+
+One cell reads p = 0.024 one-sided on the sign-flip null: the *secondary*
+`screen_best_all5 × citi_2017`. It is 16 of 22 WHITES episodes on marks whose
+daily-change AC1 is −0.540 — at or past the pure-noise bound — and its Sharpe
+is still under a quarter of the bar. It is exactly the adverse selection the
+pre-registration named when it put WHITES and REDS outside the primary
+universe.
+
+## Standing caveat
+
+This is the fifth pass over the same CA panel (block 1 `strat2`, block 3
+`cavf`/#492, block 4 `gv`/#496, the reproduction/#499, now this). The 23-trial
+bar is the honest one for the cells scored here, but the *structure* being
+tested was chosen after four prior searches over the same data, and no
+single-rule null bar undoes that. Block 4's verdict — CA-vs-fly is dead as a
+systematic strategy — stands; this block adds the reason the published version
+of it does not rescue the idea.
+
+## Testing
+
+```
+pytest tests -k "convexity_rv or ccp_basis"          # scoped
+python notebooks/backtests/convexity_rv/_p4_mutate_citi.py   # 38 mutants
+```
