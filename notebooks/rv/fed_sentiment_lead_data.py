@@ -759,12 +759,15 @@ def shift_null(
     would let a p-value be quoted at 0.001 when the reference set cannot resolve
     below ~0.005; that is a real trap and it is closed here rather than noted.
 
-    This matters because the obvious alternative, phase randomisation, quietly
-    makes the null too easy for series like these. It preserves the power
-    spectrum but wraps the path, so a surrogate wanders less than a
-    near-unit-root sample actually does, and two *unrelated* AR(0.97) series
-    clear it at p = 0.03. Measured, not assumed: see
-    ``test_surrogate_null_absorbs_a_spurious_relationship``.
+    This exists because the obvious alternative, phase randomisation, wraps the
+    path: it preserves the power spectrum but a surrogate therefore wanders less
+    than a near-unit-root sample really does. What first motivated the switch was
+    a single measured pair -- two *unrelated* AR(0.97) series cleared the phase
+    null at p = 0.03 while the shift null absorbed them. Do not read that as the
+    settled comparison: once the rotations were enumerated exactly and the AR
+    order moved onto a common sample, the two nulls' measured sizes came out
+    close. Call :func:`measure_null_size` for the current numbers rather than
+    trusting any figure written into a docstring.
     """
     rng = rng or cfg.rng(3)
     draws = draws or cfg.surrogate_draws

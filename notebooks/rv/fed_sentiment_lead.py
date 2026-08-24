@@ -28,7 +28,8 @@
 #    (point-in-time) and **+0.05** (as-published), so sentiment does not lead
 #    surprises in either vintage: the *direction* of JWS's story survives.
 #    **The precision does not.** The point-in-time bootstrap pins the argmax to
-#    +12..+13 and its paired plateau to 2 of 27 lags, but the as-published cell
+#    +12..+13 (right-censored at the +13 scan edge; the wide scan is what
+#    resolves it) and its paired plateau to 2 of 27 lags, but the as-published cell
 #    -- the one with more data -- has a 5-95% bootstrap interval of **[+1, +13]**
 #    and a plateau of **-3..+13, 17 of 27 lags**. In that vintage five weeks
 #    cannot be separated from eleven at all.
@@ -421,8 +422,11 @@ print(X_ALL[X_ALL.index >= "2026-06-01"].round(3).to_string())
 #   surrogate keeps the real path's trend, persistence, variance and marginal
 #   distribution; only the alignment is destroyed.
 # * **phase null** -- phase-randomise to the same power spectrum. Reported
-#   beside it, never instead: it is mildly anti-conservative on levels and
-#   heavily *over*-conservative on changes.
+#   beside it, never instead. It is circular, so a surrogate wanders less than
+#   a near-unit-root sample really does; the sizes cell below measures both and
+#   finds them close, but where the two disagree on a *cell* -- and on
+#   point-in-time levels they disagree by an order of magnitude -- the one that
+#   keeps each path exactly is the one to believe.
 
 # %%
 def measure(x, y, transform, *, boot=600, shift=1500, phase=800, seed=31):
@@ -729,11 +733,17 @@ print("a reader at the time, did not exist.")
 # %% [markdown]
 # ### The null's own size, measured here rather than quoted
 #
-# The table above says p-values should be read against 8.3% on levels and 5.0%
-# on changes. Those numbers are load-bearing -- they are the reason the headline
-# p-values are taken from changes -- so the notebook measures them rather than
-# citing them. Two unrelated AR(0.97) series, scored exactly as the real
-# analysis scores them, sixty times per cell.
+# A p-value means nothing without knowing how often its test fires on nothing,
+# and that number is not 5% just because it was asked to be. So it is measured
+# here rather than quoted: two unrelated AR(0.97) series, scored exactly as the
+# real analysis scores them -- the maximum over the whole lag grid -- sixty
+# times for each null and transform.
+#
+# An earlier version of this study *did* quote it, at 8.3% on levels against
+# 5.0% on changes, and built the choice of transform on that gap. Both numbers
+# were artefacts of a null whose rotations were sampled with replacement and an
+# AR order selected on a moving sample. Fixing those moved the sizes, which is
+# why nothing here is cited from a docstring any more.
 #
 # A size estimated on sixty trials is itself an estimate, so each comes with a
 # Wilson interval. That interval is wide, and saying so is the point: "the
