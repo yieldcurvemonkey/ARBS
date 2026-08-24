@@ -49,6 +49,15 @@ test before the backtest quotes anything called a bundle.
 | CFTC TFF positioning | **GREEN, refreshed today** | 20,190 rows, max report date **2026-08-18** (was 2026-05-12; +98 days); `dealer_net`/`lev_net`/`am_net` for SOFR3M via `build_positioning_panel`, release-lagged 3 bdays |
 | whole-strip open interest | GREEN (weekly) | CFTC `Open_Interest_All`; per-contract OI remains survivorship-shaped — unusable pre-2025 |
 | swap curve USD-SOFR-1D | GREEN | CurveStore EOD 2005-01..2026-08 (99.7% of bdays 2021-2026, per 08-20 preflight) |
+
+**Curve MDP convention (user preference, 2026-08-24):** the main curve MDP for
+timeseries, signal building, marking and backtesting is
+`IRSwapsMDP(source="citivelo_excel_rl")`. Measured: bit-identical to the
+`"CITIVELO_EXCEL"` spelling on the CA path (max |diff| 0.0 bp over a 3-date ×
+2-colour probe — both spellings are members of `CITIVELO_EXCEL_RL_TOKENS`), so
+panels built before the convention was pinned remain valid; all new code uses
+the `citivelo_excel_rl` token. CME-LCH basis comes from gs_quant
+(`ccp_basis_cache.basis_panel`, offline).
 | **empirical CA (`CVX_ADJ_EMPIRICAL`, ERIS leg)** | **EXCLUDED** | `IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC-NOJUMPS")` fails to build a curve on 6/6 probe dates (2022..2026) — no usable history on this machine. The model CA (`CVX_ADJ`) is the only CA series in this block. |
 
 ## 4. What "do not trust the previous results" means, precisely

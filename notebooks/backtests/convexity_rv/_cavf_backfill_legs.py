@@ -42,7 +42,8 @@ def main() -> None:
     print(f"{len(base)} base tenors + {len([t for t in extra if t not in base])} "
           f"new 4y-start tenors -> {len(tenors)}")
 
-    legs = FU.build_fly_leg_panel(dates, tenors=tenors, workers=6, chunk=60)
+    legs = FU.build_fly_leg_panel(dates, tenors=tenors, workers=6, chunk=60,
+                                  source="citivelo_excel_rl")
     assert not legs.empty, "leg panel came back empty"
     legs.to_parquet(OUT)
     print(f"wrote {OUT}  {legs.shape}")

@@ -39,11 +39,16 @@ LEDGER = DATA / "cavf_ca_failures.json"
 
 LABELS = (["WHITES", "REDS", "GREENS", "BLUES", "GOLDS"]
           + [f"SFR{i}" for i in range(1, 21)]
-          + ["BUNDLE1", "BUNDLE2"])
+          + ["BUNDLE1", "BUNDLE2"]                       # legacy 16q windows
+          + ["BUNDLE2Y", "BUNDLE3Y", "BUNDLE4Y", "BUNDLE5Y"])  # CME bundles
 
 START, END = dt.date(2021, 1, 4), dt.date(2026, 8, 21)
 
-curve_mdp = IRSwapsMDP(source="CITIVELO_EXCEL")
+# The house preference for the main curve MDP. Measured bit-identical to the
+# "CITIVELO_EXCEL" spelling on the CA path (max |diff| 0.0 bp) -- both live in
+# CITIVELO_EXCEL_RL_TOKENS -- but the TB cache stem embeds the token, so keep
+# one spelling everywhere.
+curve_mdp = IRSwapsMDP(source="citivelo_excel_rl")
 tb = IRSwapsTB(curve_mdp, show_tqdm=False, use_ts_cache=False)
 
 frames: list[pd.DataFrame] = []
