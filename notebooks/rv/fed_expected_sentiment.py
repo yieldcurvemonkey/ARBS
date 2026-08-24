@@ -78,10 +78,12 @@ Fridays of 2018-05-11..2026-08-21, rank 3, of which 33 contain a contract
 change: differencing a fixed-RANK price column gives a signed mean weekly move
 of **+4.56bp on roll weeks against -0.81bp otherwise**, and its |median| is
 **16.5bp against 5.0bp**. Against the change in the contract actually HELD over
-the same weeks (**-2.03bp** mean) the gap is **+6.59bp per roll week and
-+217.5bp in total** -- pure fabrication, from stepping one contract further out
-the strip. Off the roll weeks the two constructions agree to **0.0bp**, which is
-the known answer that certifies the measurement.
+the same weeks (**-2.35bp** mean) the gap is **+6.91bp per roll week and
++228.0bp in total** -- pure fabrication, from stepping one contract further out
+the strip. Measured against the INCOMING contract instead, the other
+single-contract reading of the same interval, it is **+6.59bp** and
+**+217.5bp**: the size does not turn on which comparator is picked, and both are
+computed. Off the roll weeks all three constructions agree to **0.0bp**.
 
 Any book built by ``.diff()``-ing a rank column is trading that drift, and
 ``reference_imm_roll_fomc_collision`` records that 22 of the 33 SR3 rolls ARE
@@ -132,6 +134,27 @@ NOT gated, and named rather than buried:
     cost** -- 53% of Fed rows are published after the speech they score. It is
     publication-gated (``point_in_time=True``) but the gate is a lower bound,
     because an unparseable report date falls back to the speech date.
+
+    **The borrowed grid decides whether to trade by reading the FORWARD
+    return.** ``fed_detachment_grid.run_cell`` does
+    ``ret = r[i]; if not np.isfinite(ret): i += 1; continue``, so whether a cell
+    opens at week ``i`` -- and the phase of every trade after it, because the
+    loop then advances by one week instead of ``horizon`` -- depends on whether
+    a settle ``h`` weeks later turns out to exist. It is inherited from the
+    detachment study rather than forked, and this module's own
+    :func:`schedule_trades` does NOT do it: it reads only the signal, and
+    :func:`price_trades` drops an unpriceable trade after the fact.
+
+    Measured by ``_probe_expect_exit_holes.py`` on the SR3 sample: the exposure
+    is **28 weeks each on out1, spr1x3 and pack1** (3 at ``h=4``, 25 at
+    ``h=8``), **zero on out2, out3, out4 and spr2x4**, and zero entry-side holes
+    anywhere -- so it lands only on the three structures containing rank 1, whose
+    front contract is the one with gaps in the settle panel. **The full grid's
+    winner sits in it** (``pack1`` at ``h=8``), which is exactly why it is
+    reported rather than mentioned: restricted to the four unaffected structures
+    the best cell is 0.1051 against a null median of 0.1146, ``p = 0.6826`` --
+    below its own null's median, verdict unchanged. The pre-registered cell
+    (``out3``, ``h=4``) has zero holes.
 """
 from __future__ import annotations
 
@@ -447,6 +470,15 @@ def schedule_trades(s: pd.Series, cfg: ExpectConfig,
     than an overlapping stream, so a Sharpe computed on them is not quietly
     counting the same week ``h`` times.
 
+    **This over-charges at a back-to-back seam, deliberately.** At
+    ``threshold = 0`` the book is never flat: trade ``k`` exits on the session
+    trade ``k+1`` enters on, and when the side and the contract are both
+    unchanged no turnover actually happens -- yet each trade still pays a full
+    round trip. The alternative is to net consecutive trades, and netting is
+    precisely what re-introduces the inter-contract gap at a roll. The
+    conservative reading is kept here and :func:`weekly_book` is the version
+    that charges turnover properly; the two are reported side by side.
+
     ``side`` is the PRICE side: ``-direction * sign(s)``. With the frozen
     ``direction = +1`` a positive signal (hot data, expect hawkish) gives
     ``side = -1`` = SHORT the future = PAY.
@@ -510,6 +542,17 @@ def price_trades(trades: pd.DataFrame, panel: pd.DataFrame, cfg: ExpectConfig,
     ``ois2y`` is not a futures structure: it prices off ``rate`` (percent) with
     ``long = profits when the rate falls``, so that ``side`` means the same
     thing on both legs.
+
+    **And it is a CONSTANT-MATURITY mid, which is not a held instrument.** The
+    2y par rate at ``t`` and at ``t+h`` are rates on two different swaps -- the
+    second starts ``h`` later and matures ``h`` later -- so their difference
+    contains roll-down that an actually-held 2y swap would not experience. That
+    is the same class of error the futures side goes to some length to avoid,
+    and it cannot be avoided here because a constant-maturity vendor curve is
+    the only instrument that exists over the full twenty-one years. It is a
+    reason to read the OIS arm as an association rather than a P&L, and it is
+    also why ``gate_no_roll_jump`` reports ``mark_check_applies: False`` on it
+    rather than a reassuring zero.
     """
     reasons: Dict[str, int] = {}
     rows: List[dict] = []
@@ -659,6 +702,16 @@ def weekly_book(s: pd.Series, panel: pd.DataFrame, cfg: ExpectConfig,
     book = pd.DataFrame(rows)
     reasons["weeks"] = int(len(book))
     reasons["weeks_in_market"] = int((book["side"] != 0).sum()) if len(book) else 0
+    # A week that could not be priced is SKIPPED, and ``prev_side``/``prev_syms``
+    # are left where they were -- so the position is carried across it at zero
+    # P&L and zero cost, and the next week's turnover is measured against the
+    # side held before the gap. That is the right behaviour (the position really
+    # was still on) but it means a run of unpriceable weeks silently costs the
+    # book nothing, so the count is reported rather than swallowed.
+    reasons["weeks_skipped_position_carried"] = int(
+        sum(v for k, v in reasons.items()
+            if k in ("no settle", "no rate mark", "no session pair",
+                     "contract expires inside the week")))
     return book, reasons
 
 
@@ -671,12 +724,30 @@ def roll_placebo(panel: pd.DataFrame, weeks: pd.DatetimeIndex,
 
     Build the thing this module refuses to build -- a per-rank price series --
     difference it week to week, and split the differences by whether the rank
-    changed contract inside the week. The gap between those two groups is the
-    fabricated drift that any ``.diff()``-based weekly book is trading.
+    changed contract inside the week. The gap between the naive difference and a
+    single-contract reading of the same interval is the fabricated drift that any
+    ``.diff()``-based weekly book is trading.
 
-    Run this FIRST. It is a construction whose answer is known in advance (the
-    roll gap must be large and one-signed), so it certifies the measurement
+    **Two single-contract readings exist and both are reported.** Over the
+    interval the book HELD the outgoing contract (``d_true_bp``, the headline);
+    the incoming one is what it is about to hold (``d_incoming_bp``). They differ
+    on a roll week by definition and agree everywhere else.
+
+    Run this FIRST. It is a construction whose answer is known in advance -- the
+    roll gap must be large and one-signed -- so it certifies the measurement
     before the measurement is pointed at the real book.
+
+    **What the flat-week identity does and does not certify.** On a week where
+    the rank pointed at the same contract as the week before, the two
+    constructions read the same symbol at the same two dates, so their agreeing
+    is close to an algebraic identity rather than an empirical finding. It is
+    still worth asserting: it catches an off-by-one between the mark dates and
+    the symbol dates, and a NaN that would otherwise make the comparison
+    uncomputable. It is NOT independent evidence that the roll-week number is
+    right. That evidence is elsewhere -- ``_probe_expect_handcheck.py``
+    re-derives both figures from the raw settle panel with plain pandas and no
+    part of this module, and reprices the whole pre-registered book to
+    0.0e+00 bp.
     """
     marks, syms, entries = [], [], []
     for w in weeks:
@@ -695,33 +766,42 @@ def roll_placebo(panel: pd.DataFrame, weeks: pd.DatetimeIndex,
     # week that differences two different contracts.
     d_naive = m.diff() / PX.PX_PER_BP
 
-    # THE RIGHT ONE, on the same weeks: the change in the contract that is
-    # ACTUALLY HELD over week i, i.e. the contract resolved at week i's own
-    # entry session, marked at that session and at the next week's.
-    d_true = pd.Series(np.nan, index=weeks)
+    # THE RIGHT ONES -- plural, and the plural matters. Over the interval
+    # [entry_{i-1}, entry_i] the book HELD the contract resolved at entry_{i-1},
+    # i.e. the OUTGOING one; the contract it is about to hold is the INCOMING
+    # one. Both are single-contract readings of the same interval and on a roll
+    # week they differ. An earlier version computed only the incoming leg and
+    # called it "the contract actually held", which is the outgoing one. The
+    # fabrication is reported against BOTH, because a number that holds only for
+    # one choice of comparator is not a measurement.
+    d_held = pd.Series(np.nan, index=weeks)      # outgoing: what was held
+    d_incoming = pd.Series(np.nan, index=weeks)  # incoming: what is about to be
     idx = list(weeks)
     for i in range(1, len(idx)):
-        s_now, e_now, e_prev = sy.iloc[i], ent.iloc[i], ent.iloc[i - 1]
-        if s_now is None or pd.isna(e_now) or pd.isna(e_prev):
+        e_now, e_prev = ent.iloc[i], ent.iloc[i - 1]
+        if pd.isna(e_now) or pd.isna(e_prev):
             continue
-        if s_now not in panel.columns:
-            continue
-        try:
-            a = panel.at[e_prev, s_now]
-            b = panel.at[e_now, s_now]
-        except KeyError:
-            continue
-        if pd.isna(a) or pd.isna(b):
-            continue
-        d_true.iloc[i] = (float(b) - float(a)) / PX.PX_PER_BP
+        for sym, dest in ((sy.iloc[i - 1], d_held), (sy.iloc[i], d_incoming)):
+            if sym is None or sym not in panel.columns:
+                continue
+            try:
+                a, b = panel.at[e_prev, sym], panel.at[e_now, sym]
+            except KeyError:
+                continue
+            if pd.isna(a) or pd.isna(b):
+                continue
+            dest.iloc[i] = (float(b) - float(a)) / PX.PX_PER_BP
+    d_true = d_held
 
     changed = sy != sy.shift(1)
     changed.iloc[0] = False
-    both = pd.DataFrame({"d_naive_bp": d_naive, "d_true_bp": d_true,
+    both = pd.DataFrame({"d_naive_bp": d_naive, "d_true_bp": d_held,
+                         "d_incoming_bp": d_incoming,
                          "rolled": changed}).dropna(subset=["d_naive_bp"])
     roll = both.loc[both["rolled"]]
     flat = both.loc[~both["rolled"]]
-    fabricated = (roll["d_naive_bp"] - roll["d_true_bp"]).dropna()
+    fab_held = (roll["d_naive_bp"] - roll["d_true_bp"]).dropna()
+    fab_in = (roll["d_naive_bp"] - roll["d_incoming_bp"]).dropna()
     out = {
         "rank": rank,
         "weeks": int(len(both)),
@@ -730,12 +810,17 @@ def roll_placebo(panel: pd.DataFrame, weeks: pd.DatetimeIndex,
         "naive_flat_mean_bp": float(flat["d_naive_bp"].mean()) if len(flat) else np.nan,
         "naive_roll_abs_median_bp": float(roll["d_naive_bp"].abs().median()) if len(roll) else np.nan,
         "naive_flat_abs_median_bp": float(flat["d_naive_bp"].abs().median()) if len(flat) else np.nan,
+        "held_roll_mean_bp": float(roll["d_true_bp"].mean()) if len(roll) else np.nan,
+        "incoming_roll_mean_bp": float(roll["d_incoming_bp"].mean()) if len(roll) else np.nan,
         "true_roll_mean_bp": float(roll["d_true_bp"].mean()) if len(roll) else np.nan,
         "true_roll_abs_median_bp": float(roll["d_true_bp"].abs().median()) if len(roll) else np.nan,
-        # The gap between the two IS the fabrication: on a non-roll week it is
-        # identically zero because the two constructions read the same contract.
-        "fabricated_mean_bp": float(fabricated.mean()) if len(fabricated) else np.nan,
-        "fabricated_total_bp": float(fabricated.sum()) if len(fabricated) else np.nan,
+        # The gap between the naive diff and EITHER single-contract reading is
+        # the fabrication. On a non-roll week both gaps are identically zero
+        # because all three constructions read the same contract.
+        "fabricated_mean_bp": float(fab_held.mean()) if len(fab_held) else np.nan,
+        "fabricated_total_bp": float(fab_held.sum()) if len(fab_held) else np.nan,
+        "fabricated_mean_vs_incoming_bp": float(fab_in.mean()) if len(fab_in) else np.nan,
+        "fabricated_total_vs_incoming_bp": float(fab_in.sum()) if len(fab_in) else np.nan,
         "fabricated_on_flat_weeks_bp": float(
             (flat["d_naive_bp"] - flat["d_true_bp"]).abs().max()) if len(flat) else np.nan,
         "series": both,
@@ -760,10 +845,20 @@ def assert_flat_weeks_agree(both: pd.DataFrame, *, tol: float = 1e-9) -> float:
     Returns the worst absolute disagreement on flat weeks.
     """
     flat = both.loc[~both["rolled"]]
-    if flat.empty:
-        return 0.0
-    worst = float((flat["d_naive_bp"] - flat["d_true_bp"]).abs().max())
-    assert not np.isfinite(worst) or worst < tol, (
+    assert len(flat) >= 10, (
+        f"roll_placebo is broken: only {len(flat)} weeks with no contract change "
+        f"-- the identity below would hold vacuously")
+    d = (flat["d_naive_bp"] - flat["d_true_bp"])
+    n_nan = int(d.isna().sum())
+    # A NaN disagreement is NOT a pass. The first version of this assertion read
+    # ``not np.isfinite(worst) or worst < tol``, which is satisfied whenever the
+    # comparison could not be made at all -- exactly the state a broken join
+    # produces.
+    assert n_nan == 0, (
+        f"roll_placebo is broken: {n_nan} of {len(flat)} no-roll weeks could not "
+        f"be compared at all -- an uncomputable check is not a passing one")
+    worst = float(d.abs().max())
+    assert worst < tol, (
         f"roll_placebo is broken: naive and true differ by {worst:.3e}bp on a "
         f"week with no contract change -- that is the measurement, not the market")
     return worst
@@ -817,7 +912,19 @@ def gate_no_roll_jump(book: pd.DataFrame, *, name: str = "book",
                         abs(float(r["exit_px"]) - float(pxx)))
             n_checked += 1
         out["marks_checked"] = n_checked
-        out["worst_mark_diff"] = worst
+        out["worst_mark_diff"] = worst if n_checked else float("nan")
+        # A gate that verified zero marks has verified nothing. Reporting
+        # ``worst_mark_diff: 0.0`` in that state is worse than reporting nothing,
+        # because 0.0 reads as a pass. ``ois2y`` and every multi-leg structure
+        # land here by construction -- their marks are not single panel columns
+        # -- so this is not a defect to fix but a limit to state.
+        out["mark_check_applies"] = bool(n_checked)
+        if not n_checked:
+            out["note"] = (
+                "no single-leg futures marks to check -- this book prices a "
+                "non-futures leg or a multi-leg quote, so G-X3's panel identity "
+                "does not apply and NOTHING was verified here")
+            return out
         assert worst < 1e-9, (
             f"G-X3 FAILED in {name}: a row's marks do not both come from the "
             f"contract it names (worst |diff| {worst:.3e}) -- the P&L spans two "

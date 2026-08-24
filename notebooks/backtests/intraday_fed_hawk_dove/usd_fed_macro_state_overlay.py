@@ -33,8 +33,9 @@
 #
 # **No. On the live config the best of 72 conditioned books beats the
 # unconditioned one by 12 basis points on a +143.5bp base, the median one loses
-# 69.5bp, and the searched maximum sits at the median of its own null. On the
-# detachment state, 0 of 72 improve on the baseline at all.**
+# 69.5bp, and every searched maximum sits at or below the median of its own
+# null. On the detachment state over the live window, 0 of 72 improve on the
+# baseline at all.**
 #
 # 1. **On the live config, conditioning is worth nothing.** The unconditioned
 #    book is **399** trades, **+143.5bp**, annualised Sharpe **0.8781**, t
@@ -45,30 +46,44 @@
 #    searched maximum sits at the **53.4%** percentile of its own rotation null
 #    (**0.0953** against a null median of **0.0932**), **p = 0.4666** on an
 #    exhaustive **1077**-rotation test with a floor of **0.0009** and a minimum
-#    offset of **23** weeks.
+#    offset of **23** weeks. *That p prices the 24-cell search WITHIN one
+#    contract; the +12.0bp best is a different contract's cell, and the choice of
+#    contract is a third axis this null does not charge for. Correcting it can
+#    only make the p larger, and it is already 0.47.*
 # 2. **Across every arm and every contract, 4 of 12 searched maxima beat their
 #    own null's median and the smallest p-value anywhere is 0.3922.** Twelve
 #    independent 24-cell searches, and not one of them produces a p-value that
 #    would survive a single Bonferroni step, let alone the search that found it.
-# 3. **On the detachment state -- the sharper reading -- conditioning does not
-#    merely fail, it is uniformly harmful.** Baseline **257** trades,
-#    **+80.5bp**. Of **72** conditioned books, **0** improve on it. The best is
-#    **-26.0bp** and the worst **-278.0bp**, and the rotation p is **0.7647**.
+# 3. **On the detachment state over the live window, conditioning does not
+#    merely fail -- it is uniformly harmful.** Baseline **257** trades,
+#    **+80.5bp**. Of the **72** conditioned books on that window, **0** improve
+#    on it: the best is **-26.0bp**, the worst **-278.0bp**, rotation p
+#    **0.7647**. On the whole-book window it is not uniform -- 1 cell of 24 helps
+#    in each contract, on a baseline that is itself negative -- so "every cell
+#    makes it worse" is a statement about the live arm and is written as one.
 #    That arm is also confined to the **2023-10-27** onwards window, because that
 #    is when the point-in-time sentiment index begins -- so its baseline is
 #    restricted to the same window and a conditioned book is never compared
 #    against a baseline that saw four extra years.
-# 4. **Gating always costs both money and trades.** On the live config the best
-#    of 24 gated books -- run through the real engine, because a gate removes
-#    events before the one-position-at-a-time rule and therefore trades a
-#    different book -- is **245** trades for **+106.5bp** against the same-window
-#    baseline's **399** trades for **+143.5bp**: **+37.0bp** and **154** trades
-#    given up to trade only the speeches the state likes.
+# 4. **Gating costs money wherever the baseline makes any, and it always costs
+#    trades.** On the live config the best of 24 gated books -- run through the
+#    real engine, because a gate removes events before the one-position-at-a-time
+#    rule and therefore trades a different book -- is **245** trades for
+#    **+106.5bp** against the same-window baseline's **399** trades for
+#    **+143.5bp**: **+37.0bp** and **154** trades given up to trade only the
+#    speeches the state likes. On the two arms whose baseline is NEGATIVE,
+#    gating improves the total -- which is what dropping three quarters of a
+#    losing book does, and is not evidence about the state. Every gated book
+#    trades between a quarter and two thirds of the baseline's events, and none
+#    of the 96 gated cells is scored against any null at all: they are reported
+#    as a description, never as a result.
 # 5. **The book the overlay was meant to rescue is negative when you stop
 #    filtering it.** Over the whole **748**-trade 2019-2026 FED book, reading
 #    every speech as labelled loses **-159.5bp** on the third deferred contract
 #    (t **-1.4818**) and **-200.5bp** on the second (t **-2.3049**, shared
-#    sign-flip **p = 0.0197**). The live config's positive result comes from its
+#    sign-flip **p = 0.0197** -- a SECONDARY test, on one of six baselines
+#    examined, so read it as "not obviously zero" rather than as a finding).
+#    The live config's positive result comes from its
 #    FILTERS -- voters only, at least 10 days from a meeting, SR3 era, 2022
 #    onwards -- and those filters were themselves chosen from a sweep.
 #    Conditioning that book on the macro state does not help either: rotation
@@ -376,7 +391,11 @@ for label, res in RES.items():
           f"{best['total_bp']:+8.1f}bp  SR {best['sharpe_ann']:+.3f}   "
           f"({best['cell'].split('/', 1)[1]})")
     print(f"   -> gating costs {float(bl['total_bp']) - float(best['total_bp']):+.1f}bp "
-          f"and {int(bl['trades']) - int(best['trades'])} trades\n")
+          f"and {int(bl['trades']) - int(best['trades'])} trades")
+    print(f"   -> gated cells trading MORE than the baseline: "
+          f"{int((cells['total_bp'] > float(bl['total_bp'])).sum())} of {len(cells)}; "
+          f"trade counts {int(cells['trades'].min())}-{int(cells['trades'].max())} "
+          f"vs {int(bl['trades'])}\n")
 
 # %% [markdown]
 # ## 7. The pre-registered cells
@@ -448,9 +467,10 @@ print("Fed speakers do lean with the data. What this notebook adds is that")
 print("knowing it does not change how a speaker's speech should be traded. On")
 print("the live config, conditioning is worth +12.0bp on a +143.5bp book at its")
 print("very best and -470.0bp at its worst; the searched maximum sits at the 53rd")
-print("percentile of its own null; gating always costs both trades and money;")
-print("and on the detachment state -- the sharper reading -- EVERY cell of every")
-print("instrument makes the book worse.")
+print("percentile of its own null; gating gives up between a third and three")
+print("quarters of the events and, wherever the baseline earns anything, money")
+print("with them; and on the detachment state over that window every one of the")
+print("72 conditioned books makes the book worse.")
 print()
 print(f"total notebook runtime {time.time() - T0:.1f}s")
 
@@ -521,6 +541,12 @@ TIEOUT = {
     "6 tie-out worst diff": f"{float(_w.max()):.1f}bp",
     "6 tie-out flip counts agree":
         f"{int((TIE['flipped_by_engine'] == TIE['flipped_here']).sum())} of {len(TIE)}",
+    "4 gated cells beating the baseline, live":
+        f"{int((_gl[~_gl['cell'].str.startswith('BASELINE')].dropna(subset=['total_bp'])['total_bp'] > float(_glb['total_bp'])).sum())} of "
+        f"{len(_gl[~_gl['cell'].str.startswith('BASELINE')].dropna(subset=['total_bp']))}",
+    "4 gated cells scored against a null": "0 of 96",
+    "3 detach-ALL cells that helped, per contract":
+        f"{int((RES['B-detach-ALL']['instruments']['OUT_3']['league']['delta_total_bp'] > 0).sum())} of 24",
     "7 min state age days": f"{int(GS2['lag_days'].min())}",
     "7 max state age days": f"{int(GS2['lag_days'].max())}",
     "7 G-S2 events checked": f"{len(GS2)}",

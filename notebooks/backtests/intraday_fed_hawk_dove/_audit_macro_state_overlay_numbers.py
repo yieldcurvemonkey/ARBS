@@ -22,8 +22,15 @@ Write quantities as digits in the findings block. And a figure is extracted
 without its UNIT, so ``0.50bp`` is checked as ``0.50`` and would be satisfied by
 an unrelated ``0.50`` elsewhere in the output -- which is why the tie-out cell
 prints each figure in the exact form the prose quotes it, unit included, rather
-than relying on the match. All four make the audit permissive, never strict: it
-cannot pass a figure that appears nowhere.
+than relying on the match. And a FIFTH, found by adversarial review of this copy: ``figures()`` only
+extracts a decimal (``0.0``), a two-or-more digit integer (``72``) or a
+percentage, so a bare single-digit integer in the prose -- "rejects **0** of
+669", "**0** of 72 improve" -- is never checked at all. Write a claim that turns
+on a single digit as a decimal (``0.0``) or spell the whole comparison ("0 of
+72") so the two-digit half is audited.
+
+All five make the audit permissive, never strict: it cannot pass a figure that
+appears nowhere.
 
 Usage::
 
@@ -59,7 +66,7 @@ WHITELIST = {
     "99.9": "project_fomc_nonvoter_fade: the partition percentile, cited",
     # ---- structural ----
     **{t: "structural" for t in (
-        "2026", "2023", "2022", "2019", "0.50", "0.0", "0.5", "1.0", "24", "72",
+        "2026", "2023", "2022", "2019", "0.50", "0.5", "1.0", "24", "72",
         "10", "11",
     )},
 }

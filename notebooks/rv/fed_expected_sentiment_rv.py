@@ -41,9 +41,11 @@
 #    **-1.4686bp** per trade over **280** trades, **-411.19bp** in total, t
 #    **-1.0540**; the always-on weekly book loses **-47.77bp**. The grid's best is
 #    **0.0561** against a null median of **0.0610**, **p = 0.6861** on **1044**
-#    exhaustive rotations, DSR **0.2707**. The same cell measured on the 2018+
-#    SR3-era subsample is *positive*; extending the sample flips it. That is what
-#    nothing looks like. **This is also the clean re-run of the "does it reach the
+#    exhaustive rotations, DSR **0.2707**. Split those same trades at the date
+#    SR3 began and the SR3-era half is **+141.41bp** over **108** trades while
+#    the pre-SR3 half is **-552.60bp**: nothing about the rule changed, only
+#    where the sample starts. A sign that depends on where you start is not a
+#    sign. **This is also the clean re-run of the "does it reach the
 #    price" sections that `fed_sentiment_lead` and `fedlock_sentiment_lead` both
 #    computed on the poisoned `RATES.OIS.USD_SOFR.PAR.2Y` tag and recorded as "not
 #    re-run"** -- the answer does not change, and now it rests on a series that is
@@ -60,42 +62,74 @@
 #    fixed-rank price column -- the obvious construction -- gives a signed mean
 #    weekly move of **+4.56bp** on roll weeks against **-0.81bp** otherwise, and
 #    an absolute median of **16.5bp** against **5.0bp**. The change in the
-#    contract actually HELD over those same weeks is **-2.03bp**. The gap is
-#    **+6.59bp** per roll week and **+217.5bp** in total, pure fabrication --
-#    larger than the whole always-on book's **+97.25bp**. Off the roll weeks the
+#    contract actually HELD over those same weeks is **-2.35bp**. The gap is
+#    **+6.91bp** per roll week and **+228.0bp** in total, pure fabrication --
+#    more than twice the whole always-on book's **+97.25bp**. (Against the
+#    INCOMING contract instead -- the other single-contract reading of the same
+#    interval -- it is **+6.59bp** and **+217.5bp**; the measurement does not
+#    turn on which comparator is chosen, which is why both are computed.) Off the roll weeks the
 #    two constructions agree to **0.0bp**, which is the known answer that
-#    certifies the measurement. Nothing in this study differences two contracts:
-#    the worst disagreement between a booked mark and the settle panel, anywhere,
-#    is **0.0**.
+#    certifies the measurement. The exposure is not hypothetical: **33** of the
+#    pre-registered book's **108** trades -- **30.6%** -- hold a contract the rank
+#    has rolled away from before they exit. Every one is priced on the contract it
+#    opened, at both ends, and the worst disagreement between a booked mark and
+#    the settle panel anywhere in the study is **0.0**.
 # 5. **The alignment is arithmetic, not a swept parameter.** If the data leads
 #    Fedspeak by L weeks, a position held h weeks is forecast by
 #    `C_{t-(L-h)} - C_{t-L}` -- two lags, both pinned by (L, h). Writing the
 #    signal as `zc.shift(k)` and sweeping k is the alignment for MEASURING a
 #    lead, not for trading it, and it makes the signal gratuitously stale. The
 #    grid's only signal axis is L, taking four values somebody has defended.
-# 6. **The vintage exposure is bounded, and bounding it kills the result rather
-#    than confirming it.** The Citi surprise snapshot is a single vintage with no
-#    publication axis -- the largest un-gated look-ahead in the stack. Delaying
-#    the composite one extra week moves the 21-year cell from **-411.19bp** to
-#    **+198.44bp** -- a 610bp swing that changes its sign -- the SR3 cell from
-#    **+152.50bp** to **+60.50bp**, and the 121-week cell from **+47.50bp** to
-#    **+196.50bp**. A result that quadruples, quarters, or changes sign when its
-#    own input is delayed by one week was never a result.
+# 6. **The vintage exposure cannot be removed, only bounded -- and the bound
+#    says the book is noise, not that it is clean.** The Citi surprise snapshot
+#    is a single vintage with no publication axis; it is the largest un-gated
+#    look-ahead in the stack. The usual test asks whether an edge SURVIVES
+#    delaying its input, on the logic that a revision published within a week
+#    cannot help a book that is not allowed to see it. Here the edge neither
+#    survives nor dies: delaying the composite one extra week moves the 21-year
+#    cell from **-411.19bp** to **+198.44bp** -- a **610bp** swing that changes
+#    its sign -- the SR3 cell from **+152.50bp** to **+60.50bp**, and the
+#    121-week cell from **+47.50bp** to **+196.50bp**. Nothing that quadruples,
+#    quarters or changes sign on a one-week delay of its own input had a stable
+#    edge for a revision to have created. So the vintage question is answered by
+#    the instability rather than by the test, and the un-gated exposure remains
+#    a real limitation of anything built on this composite.
 # 7. **The pre-registered cell, written down before the grid ran.** `chg`,
 #    lead 0, four weeks, always-on, third deferred SR3, follow: **108** trades at
 #    **+1.4120bp** each, **+152.50bp** in total, hit **50.9%**, t **0.5229**,
 #    shared sign-flip **p = 0.6059**, and its 108 trades live in **51** episodes.
+#    Against the rotation null -- no search here, so the statistic is the cell's
+#    own per-trade Sharpe -- **p = 0.2244** on SR3, **0.7771** on the 21-year OIS
+#    and **0.2697** on the JPM window. **Unlike the searched maxima, the
+#    pre-registered cell is ABOVE its null's median on two of three samples**; it
+#    is simply nowhere near significant, and its point estimate is a fifth of a
+#    basis point per week. The verdict does not rest on the primary being below a
+#    median -- it rests on nothing clearing any bar.
 #    The literal always-on weekly reading of the question -- receive when the data
 #    softens, pay when it firms, re-decided every Friday -- earns **+147.00bp**
 #    gross over **432** weeks, pays **49.75bp** of turnover for a net
 #    **+97.25bp**, at an annualised Sharpe of **0.1169** and a maximum drawdown of
 #    **-258.5bp**. Eight years, one third of a basis point a week, and a drawdown
 #    two and a half times the total.
-# 8. **The direction the search picks is at least the right one, which is not
-#    the same as being a signal.** Across the SR3 grid **48.8%** of cells prefer
-#    `follow` -- pay when the data runs hot -- and among the 50 best cells that
-#    rises to **60.0%**. So what edge there is leans the way the claim says it
-#    should. It is still smaller than the null's median.
+# 8. **The one exposure the adversarial review found that could have mattered,
+#    measured and bounded.** The borrowed grid decides whether to open by reading
+#    the FORWARD return, so on any week whose exit settle is missing the trade is
+#    declined using information dated after the decision. That lands only on the
+#    three structures containing rank 1 -- **28** weeks each on out1, spr1x3 and
+#    pack1 (**3** at h=4, **25** at h=8), **0** on out2, out3, out4 and spr2x4 --
+#    and the full grid's winner is a `pack1` cell at h=8, i.e. inside it. Scored
+#    over only the four unaffected structures the best cell is **0.1051** against
+#    a null median of **0.1146**, **p = 0.6826**: still below its own null's
+#    median. The pre-registered cell has zero such weeks and is priced by code
+#    that never reads the forward return at all.
+# 9. **The grid does not even agree on the direction.** Across the SR3 grid
+#    **48.8%** of cells prefer `follow` -- pay when the data runs hot, which is
+#    the direction the claim asserts -- so a bare **majority prefer to FADE it**.
+#    Among the 50 best cells the follow share is **60.0%**, a lean rather than a
+#    verdict, and one drawn from a slice chosen by the same in-sample maximum the
+#    rest of this notebook is at pains not to trust. Both readings of every cell
+#    are scored and both are charged to the deflation, so which one wins a given
+#    cell is the sign of a difference between two noisy numbers.
 
 # %%
 from __future__ import annotations
@@ -235,6 +269,18 @@ fig.show()
 # names.
 
 # %%
+# How much of the book is actually exposed to the trap: how many trades hold a
+# contract that the RANK has rolled away from before they exit. Those are exactly
+# the trades a rank-differenced construction would misprice.
+_pb = RES["SR3"]["primary"]["discrete_book"]
+_crossed = sum(1 for r in _pb.itertuples()
+               if PX.rank_symbol(pd.Timestamp(r.exit_date).date(), 3) != r.symbols)
+print(f"of the {len(_pb)} trades in the pre-registered SR3 book, {_crossed} "
+      f"({_crossed / len(_pb):.1%}) hold a contract the rank has rolled")
+print("away from by the time they exit. Each is priced on the contract it opened,")
+print("at both ends. A rank-differenced book would have mispriced every one.")
+print()
+
 GATES = []
 for name, res in RES.items():
     for which in ("discrete", "weekly"):
@@ -322,6 +368,59 @@ for name, res in RES.items():
     })
 PRIM = pd.DataFrame(PRIM)
 print(PRIM.to_string(index=False))
+
+print()
+print("...and the pre-registered cell against the SAME null the grid gets.")
+print("A sign-flip treats every trade as independent; this signal holds a sign")
+print("for months, so the sign-flip overstates. No search is involved in a")
+print("pre-registered cell, so the statistic is its own per-trade Sharpe rather")
+print("than a maximum.\n")
+PRIMNULL = []
+for name, res in RES.items():
+    pr = res["primary"]
+    if "p_rotation" not in pr:
+        continue
+    n = pr.get("rotation_null", {})
+    PRIMNULL.append({"sample": name,
+                     "observed_SR_per_trade": pr.get("observed_sharpe_per_trade"),
+                     "null_median": pr.get("null_median"),
+                     "p_rotation": pr.get("p_rotation"),
+                     "rotations": n.get("n_offsets"),
+                     "enumerated": n.get("enumerated"),
+                     "p_floor": n.get("p_floor"),
+                     "sign_flip_p (secondary)": (pr.get("sign_flip") or {}).get("p")})
+PRIMNULL = pd.DataFrame(PRIMNULL)
+print(PRIMNULL.to_string(index=False))
+
+# %% [markdown]
+# The 21-year OIS cell is the one that changes character with the sample, so it
+# is worth splitting rather than asserting. The SAME trades, cut at the date SR3
+# began:
+
+# %%
+_ob = RES["OIS21"]["primary"]["discrete_book"]
+_cut = pd.Timestamp("2018-05-07")
+SPLIT = []
+for _lab, _m in (("2005-05 .. 2018-05 (pre-SR3)",
+                  pd.to_datetime(_ob["entry_date"]) < _cut),
+                 ("2018-05 .. 2026-08 (the SR3 era)",
+                  pd.to_datetime(_ob["entry_date"]) >= _cut),
+                 ("the whole 21 years", pd.Series(True, index=_ob.index))):
+    _p = _ob.loc[_m, "pnl_bp"].to_numpy(float)
+    _sd = float(_p.std(ddof=1)) if len(_p) > 1 else np.nan
+    SPLIT.append({"window": _lab, "trades": len(_p),
+                  "avg_bp": float(_p.mean()) if len(_p) else np.nan,
+                  "total_bp": float(_p.sum()) if len(_p) else np.nan,
+                  "hit": float((_p > 0).mean()) if len(_p) else np.nan,
+                  "t_stat": (float(_p.mean() / (_sd / np.sqrt(len(_p))))
+                             if len(_p) > 1 and _sd > 0 else np.nan)})
+SPLIT = pd.DataFrame(SPLIT)
+print("the pre-registered OIS cell, split at the date SR3 began:\n")
+print(SPLIT.to_string(index=False))
+print()
+print("The SR3-era half is POSITIVE and the full sample is NEGATIVE. Nothing")
+print("about the rule changed; only the sample did. A sign that depends on where")
+print("you start is not a sign.")
 
 # %%
 fig = make_subplots(rows=1, cols=len(RES), shared_yaxes=False,
@@ -436,6 +535,44 @@ for name, res in RES.items():
           .to_string(index=False).replace("\n", "\n   "))
 
 # %% [markdown]
+# ### The one forward-looking condition the grid inherits, and its size
+#
+# `fed_detachment_grid.run_cell` decides whether to open by reading the FORWARD
+# return: `ret = r[i]; if not np.isfinite(ret): i += 1; continue`. On a week whose
+# exit settle is missing, the trade is declined using information dated after the
+# decision — and the loop then advances by one week instead of `horizon`,
+# re-phasing everything after it. It is inherited rather than forked, and this
+# module's own `schedule_trades` does not do it.
+#
+# It cannot be waved at, because the full grid's winner sits inside it.
+
+# %%
+CLEAN = {k: v.get("clean_structures", {}) for k, v in RES.items()}
+rows = []
+for name, c in CLEAN.items():
+    if not c:
+        continue
+    rows.append({"sample": name, "clean": ", ".join(c.get("clean", [])),
+                 "affected": ", ".join(c.get("affected", [])) or "(none)",
+                 "clean cells": c.get("cells"),
+                 "clean best": c.get("best_sharpe"),
+                 "clean best cell": c.get("best_cell"),
+                 "clean null median": c.get("null_median"),
+                 "clean p_rot": c.get("p_rotation"),
+                 "still below null median": c.get("still_below_null_median")})
+if rows:
+    print(pd.DataFrame(rows).to_string(index=False))
+    print()
+print("Where 'affected' is empty the exposure does not arise: a rate series has")
+print("no contract to be missing, and out2/out3/out4/spr2x4 have no gap in the")
+print("settle panel at any horizon. Only rank 1 does.")
+print()
+print("Measured hole counts are in _probe_expect_exit_holes.py, which splits every")
+print("hole into the side knowable at entry (no ENTRY settle) and the side that is")
+print("not (no EXIT settle). On SR3 there are zero of the first kind and 28 of the")
+print("second on each of out1, spr1x3 and pack1.")
+
+# %% [markdown]
 # ## 8. Sensitivities: the vintage bound, and what a one-week delay does
 #
 # The Citi surprise snapshot is a **single vintage**. It carries only today's read
@@ -459,9 +596,12 @@ for name, res in RES.items():
           f"avg_bp goes {float(d0['avg_bp']):+.3f} -> "
           f"{', '.join(f'{float(x):+.3f}' for x in rest['avg_bp'])}")
     print()
-print("A result that flips sign or doubles when the input is delayed by one week")
-print("is not a result that a revision could have created -- it is a result that")
-print("was never there. That is the honest reading of these three tables.")
+print("These tables are usually read as 'does the edge survive a delay'. Here")
+print("nothing survives OR dies -- each cell simply lands somewhere else, by more")
+print("than its own size. A book that reorders itself on a one-week delay of its")
+print("own input never had a stable edge for a revision to have created. That")
+print("answers the vintage question by instability rather than by the test, and")
+print("the un-gated exposure stays a real limitation of the composite itself.")
 
 # %% [markdown]
 # ## 9. Verdict
@@ -567,6 +707,8 @@ TIEOUT = {
     "4 fabricated per roll week": f"{ROLL['fabricated_mean_bp']:+.2f}bp",
     "4 fabricated total": f"{ROLL['fabricated_total_bp']:+.1f}bp",
     "4 fabricated on flat weeks": f"{ROLL['fabricated_on_flat_weeks_bp']:.1f}bp",
+    "4 trades crossing a rank roll": f"{_crossed}",
+    "4 share crossing a rank roll": f"{100 * _crossed / len(_pb):.1f}%",
     "4 worst mark diff anywhere":
         f"{float(pd.to_numeric(GATES['worst_mark_diff'], errors='coerce').max()):.1f}",
 
@@ -591,7 +733,24 @@ TIEOUT = {
     "6 JPM delay-1 total": f"{float(_jpm['vintage_sensitivity'].set_index('extra_delay_w').loc[1, 'total_bp']):+.2f}bp",
     "6 OIS delay-1 swing": f"{abs(float(_ois['vintage_sensitivity'].set_index('extra_delay_w').loc[1, 'total_bp']) - float(_ois['vintage_sensitivity'].set_index('extra_delay_w').loc[0, 'total_bp'])):.0f}bp",
 
+    "2 OIS SR3-era trades": f"{int(SPLIT.iloc[1]['trades'])}",
+    "2 OIS SR3-era avg_bp": f"{float(SPLIT.iloc[1]['avg_bp']):+.4f}bp",
+    "2 OIS SR3-era total_bp": f"{float(SPLIT.iloc[1]['total_bp']):+.2f}bp",
+    "2 OIS pre-SR3 total_bp": f"{float(SPLIT.iloc[0]['total_bp']):+.2f}bp",
+    "7 SR3 primary p_rotation": f"{_sr3['primary']['p_rotation']:.4f}",
+    "7 OIS primary p_rotation": f"{_ois['primary']['p_rotation']:.4f}",
+    "7 JPM primary p_rotation": f"{_jpm['primary']['p_rotation']:.4f}",
+    "8 clean structures": ", ".join(_sr3["clean_structures"]["clean"]),
+    "8 affected structures": ", ".join(_sr3["clean_structures"]["affected"]),
+    "8 clean-only best": f"{_sr3['clean_structures']['best_sharpe']:.4f}",
+    "8 clean-only null median": f"{_sr3['clean_structures']['null_median']:.4f}",
+    "8 clean-only p_rotation": f"{_sr3['clean_structures']['p_rotation']:.4f}",
+    "8 clean-only still below median":
+        f"{_sr3['clean_structures']['still_below_null_median']}",
+    "7 SR3 primary null median": f"{_sr3['primary']['null_median']:.4f}",
+    "7 SR3 primary rotations": f"{_sr3['primary']['rotation_null']['n_offsets']}",
     "8 SR3 follow share": f"{100 * float((_sr3['league']['sign'] == 'follow').mean()):.1f}%",
+    "8 SR3 fade share": f"{100 * float((_sr3['league']['sign'] == 'fade').mean()):.1f}%",
     "8 SR3 follow share in the top 50":
         f"{100 * float((_sr3['league'].nlargest(50, 'sharpe')['sign'] == 'follow').mean()):.1f}%",
 }

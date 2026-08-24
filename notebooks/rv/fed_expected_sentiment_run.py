@@ -265,6 +265,27 @@ def run_sample(*, label: str, structures: Sequence[str],
     the pre-registered primary cell is priced and reported BEFORE the grid, and
     the grid's winner is only ever quoted alongside the rotation p-value that
     prices the search that found it.
+
+    **One residual look-ahead lives in the borrowed grid and is not removable
+    here.** ``GR.run_cell`` skips a week whose FORWARD return is not finite --
+    ``ret = r[i]; if not np.isfinite(ret): i += 1; continue`` -- so whether a
+    trade is taken depends on whether its exit settle will exist, which is not
+    knowable at entry. The detachment study frames this as a schedule choice
+    (skip by one week rather than consume a holding period, so a data gap does
+    not silently move the trade calendar) and it is inherited unchanged rather
+    than forked. It affects only weeks the panel cannot price -- 1 of 433 on the
+    SR3 sample, 2 of 1122 on the OIS one, per the coverage gate -- and the
+    module's own :func:`E.schedule_trades`, which prices the pre-registered
+    cell, does NOT condition on the forward return.
+
+    It is measured rather than waved at. ``_probe_expect_exit_holes.py`` splits
+    every hole in the return bank into the side knowable at entry and the side
+    that is not: on the SR3 sample there are **28 unknowable holes each on out1,
+    spr1x3 and pack1** and **none on out2, out3, out4 or spr2x4**, because only
+    the rank-1 contract has gaps in the settle panel. The full grid's winner
+    lands in the affected set, so :func:`run_sample` also scores the grid
+    restricted to the clean structures and reports both -- see
+    ``out["clean_structures"]``.
     """
     cfg = cfg or E.PRIMARY
     out: Dict[str, object] = {"label": label, "config": cfg}
@@ -359,6 +380,35 @@ def run_sample(*, label: str, structures: Sequence[str],
         out["primary"]["sign_flip"] = GR.sign_flip_pvalue(
             bookA["pnl_bp"].to_numpy(float), rng=cfg.rng(7))
         out["primary"]["episodes"] = E.episodes(bookA)
+
+        # The pre-registered cell needs the SAME null the grid gets, not just the
+        # sign-flip. A sign-flip treats every trade as independent, and this
+        # signal holds a sign for months -- the primary book lives in a few dozen
+        # episodes, not a hundred. Rotating the signal keeps that persistence and
+        # destroys only the alignment. No search is involved here, so the
+        # statistic is the cell's own per-trade Sharpe rather than a maximum.
+        def _score_primary(rot):
+            tr = E.schedule_trades(rot, prim, prim_sessions)
+            bk, _ = E.price_trades(tr, panel, prim, rate=rate)
+            if bk.empty or len(bk) < 8:
+                return float("nan")
+            pl = bk["pnl_bp"].to_numpy(float)
+            sd = pl.std(ddof=1)
+            return float(pl.mean() / sd) if sd > 0 else float("nan")
+
+        near, far = prim.lags()
+        pn = E.rotation_null(s_prim, _score_primary, max_lag=int(far),
+                             max_h=int(prim.horizon_w),
+                             draws=int(rotation_draws or cfg.rotation_draws),
+                             rng=cfg.rng(21))
+        obs_prim = _score_primary(s_prim)
+        out["primary"]["rotation_null"] = {k: v for k, v in pn.items()
+                                           if k != "stats"}
+        out["primary"]["observed_sharpe_per_trade"] = obs_prim
+        out["primary"]["p_rotation"] = E.rotation_pvalue(obs_prim, pn)
+        _st = pn.get("stats")
+        out["primary"]["null_median"] = (float(np.median(_st))
+                                         if _st is not None and len(_st) else float("nan"))
     if len(bookB):
         out["primary"]["weekly_sign_flip"] = GR.sign_flip_pvalue(
             bookB.loc[bookB["side"] != 0, "pnl_bp"].to_numpy(float), rng=cfg.rng(8))
@@ -370,9 +420,17 @@ def run_sample(*, label: str, structures: Sequence[str],
         bank, return_bank, support, cfg, keys=keys, min_trades=min_trades)
     out["league"] = league
     out["n_cells"] = len(keys)
+    scored = int(league["sharpe"].notna().sum())
+    out["n_scored"] = scored
+    # ``2 * n_cells`` is the size of the trial SET the grid enumerates. It is NOT
+    # what the deflation charges for: a cell too thin to be selectable was never
+    # a trial, and ``run_grid`` leaves those rows at zero in ``streams_both`` so
+    # ``deflate`` drops them. Both numbers are reported, because quoting only the
+    # first overstates the search on a null result -- it raises the SR0 bar the
+    # winner has to clear and so makes the null look better established.
+    out["n_trials_enumerated"] = 2 * len(keys)
+    out["n_trials_scoreable"] = 2 * scored
     out["n_trials"] = 2 * len(keys)
-    scored = league["sharpe"].notna().sum()
-    out["n_scored"] = int(scored)
 
     obs, best_i, per_cell = GR.grid_statistic(dmat, keys, key_row, return_bank,
                                               cost_carrier(cfg),
@@ -402,6 +460,41 @@ def run_sample(*, label: str, structures: Sequence[str],
         except Exception as exc:  # noqa: BLE001
             out["deflation"] = {"error": f"{type(exc).__name__}: {exc}"}
 
+    # ---- robustness: the grid with the forward-look exposure removed ----
+    # The borrowed run_cell decides whether to open by reading the forward
+    # return, which is not knowable at entry wherever the exit settle is
+    # missing. That lands only on structures containing rank 1. Re-score the
+    # grid over the structures with NO such hole and report it beside the
+    # headline -- because on this sample the headline's winner is in the
+    # affected set, and a reader has to be able to see whether that mattered.
+    clean = _structures_without_exit_holes(return_bank, structures, support,
+                                           horizons, panel, sessions, cfg,
+                                           rate=rate)
+    out["clean_structures"] = {"clean": clean,
+                               "affected": [s for s in structures if s not in clean]}
+    if clean and len(clean) < len(structures):
+        ck = cell_keys(readings=readings, leads=leads, thresholds=thresholds,
+                       horizons=horizons, structures=clean)
+        ckr, _ = key_rows(ck, bank)
+        c_obs, c_best, _c = GR.grid_statistic(dmat, ck, ckr, return_bank,
+                                              cost_carrier(cfg),
+                                              min_trades=min_trades)
+        c_null = GR.rotation_null(dmat, ck, ckr, return_bank, cost_carrier(cfg),
+                                  max_k=int(max_lag), max_h=int(max(horizons)),
+                                  min_trades=min_trades,
+                                  draws=int(rotation_draws or cfg.rotation_draws),
+                                  rng=cfg.rng(31))
+        out["clean_structures"].update({
+            "cells": len(ck), "best_sharpe": c_obs,
+            "best_cell": (f"{ck[c_best][0]}/L{ck[c_best][1]}/thr{ck[c_best][2]}"
+                          f"/h{ck[c_best][3]}/{ck[c_best][4]}") if c_best >= 0 else None,
+            "null_median": c_null.get("q50"), "null_q95": c_null.get("q95"),
+            "p_rotation": GR.rotation_pvalue(c_obs, c_null),
+            "rotations": c_null.get("draws_used"),
+            "still_below_null_median": bool(np.isfinite(c_obs)
+                                            and c_obs < c_null.get("q50", np.inf)),
+        })
+
     # ---- the honest comparison: the winner against its own null ---------
     out["null_summary"] = {
         "median": null.get("q50"), "q95": null.get("q95"),
@@ -413,6 +506,62 @@ def run_sample(*, label: str, structures: Sequence[str],
             if np.size(null.get("max_abs_sharpe", [])) and np.isfinite(obs) else np.nan),
     }
     return out
+
+
+def _structures_without_exit_holes(return_bank: Dict, structures: Sequence[str],
+                                   support: pd.DatetimeIndex,
+                                   horizons: Sequence[int], panel: pd.DataFrame,
+                                   sessions: np.ndarray, cfg: E.ExpectConfig,
+                                   *, rate: Optional[pd.Series] = None
+                                   ) -> List[str]:
+    """Structures whose return bank has no hole that is UNKNOWABLE at entry.
+
+    A hole is knowable at entry when the ENTRY settle is the missing one -- a
+    trader would simply not have a price to deal on. It is not knowable when the
+    entry settle exists and the EXIT settle does not, because that is a fact
+    about a session ``h`` weeks in the future. Only the second kind makes the
+    borrowed ``run_cell``'s skip forward-looking.
+
+    The expiry guard is deliberately not counted: it is a calendar fact, known
+    the moment the contract is chosen.
+    """
+    def _fill(on, lag):
+        cur = pd.Timestamp(on)
+        for _ in range(int(lag)):
+            i = int(np.searchsorted(sessions, np.datetime64(cur), side="right"))
+            if i >= len(sessions):
+                return None
+            cur = pd.Timestamp(sessions[i])
+        return cur
+
+    clean = []
+    for name in structures:
+        if name in E.NON_FUTURES:
+            clean.append(name)     # a rate series has no contract to be missing
+            continue
+        ranks, weights, _n, _s = E.STRUCTURES[name]
+        bad = 0
+        for h in horizons:
+            arr = return_bank.get((name, int(h)))
+            if arr is None:
+                continue
+            for i in range(len(support) - int(h)):
+                if np.isfinite(arr[i]):
+                    continue
+                e = _fill(support[i], cfg.entry_lag_sessions)
+                x = _fill(support[i + int(h)], cfg.entry_lag_sessions)
+                if e is None or x is None:
+                    continue
+                sy = [PX.rank_symbol(e.date(), r) for r in ranks]
+                exp = min(pd.Timestamp(PX.contract_window(t).end) for t in sy)
+                if exp <= x:
+                    continue
+                if (D.structure_price(panel, sy, weights, e) is not None
+                        and D.structure_price(panel, sy, weights, x) is None):
+                    bad += 1
+        if bad == 0:
+            clean.append(name)
+    return clean
 
 
 def _gate_return_bank_coverage(return_bank: Dict, structures: Sequence[str],
@@ -461,11 +610,14 @@ def headline(res: Dict[str, object]) -> pd.Series:
         "PRIMARY sharpe_ann": ds.get("sharpe_ann"),
         "PRIMARY t": ds.get("t_stat"),
         "PRIMARY sign_flip_p": (prim.get("sign_flip") or {}).get("p"),
+        "PRIMARY p_rot": prim.get("p_rotation"),
+        "PRIMARY null_med": prim.get("null_median"),
         "WEEKLY total_bp": ws.get("total_bp"),
         "WEEKLY sharpe_ann": ws.get("sharpe_ann"),
         "WEEKLY weeks_in_mkt": ws.get("weeks_in_market"),
         "cells": res.get("n_cells"),
-        "trials": res.get("n_trials"),
+        "trials": res.get("n_trials_enumerated", res.get("n_trials")),
+        "trials scoreable": res.get("n_trials_scoreable"),
         "best cell": (f"{best.get('construction')}/L{best.get('lead_k')}/"
                       f"thr{best.get('threshold')}/h{best.get('horizon_w')}/"
                       f"{best.get('structure')}/{best.get('sign')}") if best else None,
@@ -474,6 +626,7 @@ def headline(res: Dict[str, object]) -> pd.Series:
         "null q95": null.get("q95"),
         "p_rotation": res.get("p_rotation"),
         "p_floor": null.get("p_floor"),
+        "clean-only p_rot": (res.get("clean_structures") or {}).get("p_rotation"),
         "DSR": (res.get("deflation") or {}).get("dsr"),
         "RW rejected": (res.get("family") or {}).get("n_rejected"),
     })

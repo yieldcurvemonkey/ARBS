@@ -54,12 +54,23 @@ This module does not decide. It attaches, per event, ``state_value`` and
 ``state_sign``, and ``hawk_dove_config`` reads them. The reading the configs
 express is:
 
-    **agree** -- ``sign(bucket) == state_sign``. The speech says what the data
-    already implied. On the "it is already priced" thesis this is the speech to
-    FADE.
+    **agree** -- ``sign(bucket) == state_sign``. What "agreeing" MEANS depends on
+    which state is in use, and the two are not the same sentence:
 
-    **disagree** -- the speech departs from what the data implied. It is the
-    news, and the reading trades it as labelled.
+        ``data``    the speech says what the DATA already implied. On the "it is
+                    already priced" thesis this is the speech to fade.
+        ``detach``  the speech continues the direction FEDSPEAK has already run
+                    in relative to the data -- one more hawk when the committee
+                    is already more hawkish than the numbers warrant. That is
+                    the speech the "the gap will close" thesis says to fade.
+
+    They point the same way as trading rules and mean different things as
+    sentences. A reader who carries the first gloss onto the second arm has the
+    wrong mental model of what is being faded, which is why both are written out.
+
+    **disagree** -- the complement. Under ``data`` it is the speech that is news;
+    under ``detach`` it is the speech that pulls the committee back toward the
+    data.
 
 The opposite assignment is a second cell, not a robustness check: which way
 round to trade a state is a free parameter and the search pays for it.
@@ -162,6 +173,17 @@ def normalise(block: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         raise ValueError(f"unknown signal when {s['when']!r}; use one of {WHENS}")
     if float(s["threshold"]) < 0:
         raise ValueError("signal threshold is a magnitude and cannot be negative")
+    # `source`, `construction` and `lead_w` all reach build_state and CHANGE THE
+    # SERIES. Leaving them unvalidated does not fall through to a default -- but a
+    # value that happens to be legal downstream would build a different state
+    # than the config's author meant, and nothing would say so.
+    if s["source"] not in ("jpm", "fedlock"):
+        raise ValueError(
+            "unknown signal source " + repr(s["source"]) + "; use 'jpm' or 'fedlock'")
+    if s["construction"] not in ("gap", "resid", "dchg", "rankgap"):
+        raise ValueError("unknown signal construction " + repr(s["construction"]))
+    if int(s["lead_w"]) < 0:
+        raise ValueError("signal lead_w is a lag in weeks and cannot be negative")
     return s
 
 
@@ -174,6 +196,20 @@ def cache_key(sig: Dict[str, Any]) -> Tuple:
 # ==========================================================================
 # building the state
 # ==========================================================================
+def _build_data_state(zc: pd.Series, sig: Dict[str, Any]) -> pd.Series:
+    """Ldata_t = C_{t-L} -- where the data stood L weeks ago.
+
+    That is the reading under which a measured lead of L makes the composite
+    contemporaneous with what the committee sounds like today.
+
+    Factored out so :func:`build_state` and :func:`gate_state_is_trailing` share
+    ONE definition. When the gate had its own copy it could not fail: it
+    computed the right answer and then compared that answer with itself, so
+    breaking build_state (shifting the wrong way, say) left the gate passing.
+    """
+    return zc.shift(int(sig["lead_w"])).rename("state").dropna()
+
+
 def build_state(sig: Dict[str, Any]) -> Tuple[pd.Series, Dict[str, Any]]:
     """``(weekly state series on a W-FRI grid, provenance)``.
 
@@ -207,10 +243,7 @@ def build_state(sig: Dict[str, Any]) -> Tuple[pd.Series, Dict[str, Any]]:
                            f"{type(exc).__name__}: {exc}") from exc
 
     if sig["state"] == "data":
-        # ``Ldata_t = C_{t-L}``: where the data stood L weeks ago, which is the
-        # reading under which a measured lead of L makes it contemporaneous with
-        # what the committee sounds like today.
-        out = zc.shift(int(sig["lead_w"])).rename("state").dropna()
+        out = _build_data_state(zc, sig)
         prov = {**prov, "state": "data", "lead_w": int(sig["lead_w"]),
                 "weeks": int(len(out)),
                 "first": str(out.index.min().date()) if len(out) else None,
@@ -439,35 +472,47 @@ def gate_state_is_trailing(sig: Dict[str, Any], *,
     import fed_detachment_data as D
     import fed_sentiment_lead_data as L
 
-    lead_cfg = L.LeadConfig()
-    panel, _ = L.load_surprise_panel()
-    composite, _legs = L.build_surprise_composite(panel, lead_cfg)
-    zc = L.weekly_last(composite, lead_cfg.week_anchor)
-
     if sig["state"] == "data":
-        full = zc.shift(int(sig["lead_w"])).dropna()
+        # Compare against what BUILD_STATE returns, not against a second
+        # implementation written here. An earlier version rebuilt the composite
+        # and shifted it inline, which meant the gate computed its own correct
+        # answer and checked it against itself -- so breaking build_state left
+        # G-S1 passing. That is the defect this gate exists to prevent, applied
+        # to the gate itself.
+        full, _ = build_state(sig)
+        lead_cfg = L.LeadConfig()
+        panel, _ = L.load_surprise_panel()
+        composite, _legs = L.build_surprise_composite(panel, lead_cfg)
+        zc_all = L.weekly_last(composite, lead_cfg.week_anchor)
+
         rows = []
         for t in probe_dates:
             t = pd.Timestamp(t)
-            cut = zc[zc.index <= t].shift(int(sig["lead_w"])).dropna()
+            cut = _build_data_state(zc_all[zc_all.index <= t], sig)
             if t not in cut.index or t not in full.index:
                 continue
             rows.append({"date": t, "truncated": float(cut.loc[t]),
                          "full_history": float(full.loc[t]),
                          "abs_diff": abs(float(cut.loc[t]) - float(full.loc[t]))})
         out = pd.DataFrame(rows)
-        if not out.empty:
-            worst = float(out["abs_diff"].max())
-            assert worst < 1e-9, (
-                f"G-S1 FAILED for state='data' lead_w={sig['lead_w']}: worst "
-                f"|diff| {worst:.3e} -- the state is not computable in real time")
+        assert len(out) >= 3, (
+            "G-S1 checked " + str(len(out)) + " probes for state='data' -- fewer "
+            "than 3 is a vacuous pass; widen probe_dates")
+        worst = float(out["abs_diff"].max())
+        assert worst < 1e-9, (
+            f"G-S1 FAILED for state='data' lead_w={sig['lead_w']}: worst "
+            f"|diff| {worst:.3e} -- the state is not computable in real time")
         return out
 
     dcfg = dataclasses.replace(D.PRIMARY, source=sig["source"],
                                construction=sig["construction"],
                                lead_k=int(sig["lead_w"]))
     zc2, zs, _ = D.load_sides(dcfg)
-    return D.gate_trailing_detachment(zc2, zs, dcfg, probe_dates=probe_dates)
+    out = D.gate_trailing_detachment(zc2, zs, dcfg, probe_dates=probe_dates)
+    assert len(out) >= 3, (
+        "G-S1 checked " + str(len(out)) + " probes for state='detach' -- fewer "
+        "than 3 is a vacuous pass; widen probe_dates")
+    return out
 
 
 def gate_cutoff_is_before_entry(events: Sequence[dict], state: pd.Series,

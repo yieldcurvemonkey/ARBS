@@ -157,6 +157,23 @@ def baseline(window: str, instrument: str, raw, mdp) -> "HC.Result":
     return HC.run_config(cfg, raw, mdp)
 
 
+def _market_local_days(ts) -> "np.ndarray":
+    """Midnight of the MARKET-LOCAL day each timestamp falls on.
+
+    ``pd.to_datetime(..., utc=True)`` converts a New-York timestamp to UTC and a
+    late-session entry can then land on the following calendar day, which would
+    read a state one week newer than the engine does. The FED session ends 16:45
+    ET = 20:45 UTC so no entry in this book actually crosses -- the engine
+    tie-out is 0.0bp over 5,301 trades -- but the engine normalises in market
+    local time and this has to do the same thing for the same reason, not by
+    luck of the session hours.
+    """
+    idx = pd.DatetimeIndex(pd.Series(ts).values)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    return idx.normalize().values
+
+
 def attach_state(closed: pd.DataFrame, state: pd.Series,
                  sig: Dict[str, Any]) -> pd.DataFrame:
     """Per-trade state, joined on the day the position OPENED.
@@ -169,8 +186,7 @@ def attach_state(closed: pd.DataFrame, state: pd.Series,
     """
     out = closed.copy()
     idx = state.index.values
-    days = pd.DatetimeIndex(pd.to_datetime(out["opened_at"], utc=True)
-                            ).tz_localize(None).normalize().values
+    days = _market_local_days(out["opened_at"])
     pos = np.searchsorted(idx, days, side="left") - 1
     vals = np.where(pos >= 0, state.to_numpy(float)[np.clip(pos, 0, len(idx) - 1)],
                     np.nan)
@@ -285,8 +301,7 @@ def rotation_null(frame: pd.DataFrame, states: Dict[int, pd.Series], *,
     """
     gross = frame["pnl_bp_gross"].to_numpy(float)
     bucket = frame["bucket"].to_numpy(int)
-    opened = pd.to_datetime(frame["opened_at"], utc=True)
-    days = pd.DatetimeIndex(opened).tz_localize(None).normalize().values
+    days = _market_local_days(frame["opened_at"])
 
     n = min(len(s) for s in states.values())
     offs = rotation_offsets(n, max(leads))
@@ -475,8 +490,7 @@ def _tie_out(cl, states, raw, mdp, window, inst, state_kind) -> Dict[str, Any]:
     if len(common) < 20:
         return {"checked": len(common), "note": "too few shared trades"}
     sub = cl.set_index("tag").loc[common]
-    days = pd.DatetimeIndex(pd.to_datetime(sub["opened_at"], utc=True)
-                            ).tz_localize(None).normalize().values
+    days = _market_local_days(sub["opened_at"])
     sgn = _state_sign_on(states[lead], days, thr)
     sel = selection(sub["bucket"].to_numpy(int), sgn, when)
     mine = conditioned_pnl(sub["pnl_bp_gross"].to_numpy(float), sel, 0.0)
@@ -498,7 +512,7 @@ def _grid_multi_state(frame: pd.DataFrame, states: Dict[int, pd.Series], *,
     gross = frame["pnl_bp_gross"].to_numpy(float)
     bucket = frame["bucket"].to_numpy(int)
     opened = pd.to_datetime(frame["opened_at"], utc=True)
-    days = pd.DatetimeIndex(opened).tz_localize(None).normalize().values
+    days = _market_local_days(frame["opened_at"])
     base = score(gross - cost_bp, opened)
     keys, rows, sels = [], [], []
     for lead, thr, when in itertools.product(leads, thresholds, whens):

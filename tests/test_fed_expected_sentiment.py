@@ -273,15 +273,30 @@ def test_roll_placebo_ASSERTS_when_its_own_measurement_is_broken():
     the roll-week number the placebo exists to produce. Without this test the
     assertion could be deleted and every run would still pass.
     """
-    good = pd.DataFrame({"d_naive_bp": [1.0, 2.0, 3.0],
-                         "d_true_bp": [1.0, 2.0, 3.0],
-                         "rolled": [False, False, True]})
+    n = 30
+    good = pd.DataFrame({"d_naive_bp": np.arange(n, dtype=float),
+                         "d_true_bp": np.arange(n, dtype=float),
+                         "rolled": [i % 10 == 0 for i in range(n)]})
     assert E.assert_flat_weeks_agree(good) == 0.0
 
     broken = good.copy()
-    broken.loc[1, "d_true_bp"] = 2.5        # a flat week that disagrees
+    broken.loc[3, "d_true_bp"] = 3.5        # a flat week that disagrees
     with pytest.raises(AssertionError, match="roll_placebo is broken"):
         E.assert_flat_weeks_agree(broken)
+
+    # an UNCOMPUTABLE check is not a passing one -- the first version of this
+    # assertion read ``not np.isfinite(worst) or worst < tol``, which is
+    # satisfied by exactly the state a broken join produces
+    nan_ = good.copy()
+    nan_.loc[3, "d_true_bp"] = np.nan
+    with pytest.raises(AssertionError, match="could not be compared at all"):
+        E.assert_flat_weeks_agree(nan_)
+
+    # and a frame with too few flat weeks would hold the identity vacuously
+    thin = good.iloc[:5].copy()
+    thin["rolled"] = True
+    with pytest.raises(AssertionError, match="would hold vacuously"):
+        E.assert_flat_weeks_agree(thin)
 
 
 def test_roll_placebo_flat_week_identity_is_not_vacuous(panel, sessions):
