@@ -29,60 +29,57 @@
 #
 # **The answer is no, and it is not close.**
 #
-# 1. **On the tradeable sample the best of 2048 cells is beaten by a random
-#    misalignment of its own signal 98% of the time.** Best weekly Sharpe
-#    **0.1903** (annualised **1.3721**) against a rotation null whose **median is
-#    0.2445** and whose 95th percentile is **0.3036**: **p = 0.9773** on an
-#    exhaustive 43-rotation test, i.e. the observed maximum sits at the **2nd**
-#    percentile of its own null. The permissive phase-randomised null agrees:
-#    **p = 0.9601**. Deflated Sharpe **0.0226** against an SR0 of **0.3113**.
+# 1. **The best of 2048 cells sits at the 12th percentile of its own null.** Best
+#    weekly Sharpe **0.2185** (annualised **1.5756**) against a rotation null whose
+#    **median is 0.2434** and whose 95th percentile is **0.3124**: **p = 0.8864**
+#    on an exhaustive 43-rotation test. The permissive phase-randomised null agrees:
+#    **p = 0.8005**. Deflated Sharpe **0.0773** against an SR0 of **0.3142**. A
+#    Romano-Wolf stepdown over the whole family rejects **0** of **1784** scoreable
+#    cells, its rank-1 adjusted p being **0.8864** -- identical to the rotation
+#    p-value, which is what says the two tests are wired to the same family.
 # 2. **The pre-registered cell, written down before the grid ran, earns
 #    +1.891bp per trade net over 23 trades with a t-statistic of 0.2884.** Gap at
 #    k = 0, one sigma, four weeks, third deferred SR3, faded. Hit rate **47.83%**,
 #    weekly Sharpe **0.0267**. Its entire **+43.5bp** is **one trade** -- the
-#    largest of its seven episodes is a single 2024-07-05 entry worth
-#    **+87.0bp**, and the other **22** trades together lose **43.5bp**.
+#    largest of its seven episodes is a single 2024-07-05 entry worth **+87.0bp**,
+#    and the other **22** trades together lose **43.5bp**.
 # 3. **This is not a cost problem.** Set transaction costs to **ZERO** and the
-#    grid's best cell reads **0.2054** against a null median of **0.2562**:
-#    **p = 0.9773**, unchanged. A round trip costs 0.50bp against a per-trade
-#    standard deviation of **24.4bp** at the four-week horizon -- **2.0%** of the
-#    noise. Every previous verdict on this desk died at the cost line. This one
-#    dies well before it.
+#    grid's best cell reads **0.2442** against a null median of **0.2549**:
+#    **p = 0.7045**, still on the wrong side of its own null. A round trip costs
+#    0.5bp against a per-trade standard deviation of **24.4bp** at the four-week
+#    horizon -- **2.0%** of the noise. Every previous verdict on this desk died at
+#    the cost line. This one dies well before it.
 # 4. **Twenty-one years does not rescue it.** FedLock V3 -- a different judge
 #    model, dated speeches back to 1985 -- against the 2y SOFR OIS over **1081
-#    weeks**: best **0.0858**, null median **0.0769**, **p = 0.3146** (spectral
-#    **0.3242**), DSR **0.0130**. On SR3 from 2018, **432 weeks**: best **0.1719**,
-#    null median **0.1398**, **p = 0.0845** (spectral **0.1172**), DSR **0.1248**.
-#    The best of the three samples is the one whose sentiment side can never be
-#    gated, which is the ordering you would expect if hindsight in the scoring
-#    were contributing something.
+#    weeks**: best **0.0858**, null median **0.0768**, **p = 0.3096** (spectral
+#    **0.3017**), DSR **0.0134**. On SR3 from 2018, **432 weeks**: best **0.1719**,
+#    null median **0.1398**, **p = 0.0845** (spectral **0.0574**), DSR **0.1248**.
+#    The closest thing to a result in the whole study is the sample whose sentiment
+#    side can never be gated -- which is the ordering you would expect if hindsight
+#    in the scoring were contributing something -- and it still does not clear its
+#    own bar.
 # 5. **The winning cells look significant one at a time, which is the whole point
 #    of the exercise.** A shared sign-flip test on the JPM winner alone gives
-#    **p = 0.0309**; on the FedLock 21-year winner **p = 0.0043**; on the FedLock
+#    **p = 0.0150**; on the FedLock 21-year winner **p = 0.0043**; on the FedLock
 #    SR3 winner **p = 0.0003**, off **106** trades at **+6.783bp** each with a
 #    t-statistic of **3.7338**. Every one of those is the maximum of a 256 or
-#    2048-cell search, and the search-corrected p-values are **0.9773**,
-#    **0.3146** and **0.0845**. Report the first set and you have three tradeable
-#    strategies; report the second and you have none. A Romano-Wolf stepdown over
-#    the WHOLE JPM family against the same rotations rejects **0** cells; its
-#    rank-1 adjusted p is **0.9773**, identical to the rotation p-value, which is
-#    what says the two tests are wired to the same family.
-# 6. **The harness was calibrated in both directions, on data whose answer is
-#    known.** SIZE, over 40 pairs of unrelated AR(0.97) inputs pushed through the
-#    identical pipeline and scored by the identical 2048-cell search: **2**
-#    rejections in 40, a size of **0.05** at a nominal 5% [Wilson **0.0138**,
-#    **0.1650**], median p **0.511**. The phase-randomised null agrees: **1** in
-#    20, again **0.05** [Wilson **0.0089**, **0.2361**]. The prior study's levels
-#    null fired 20% of the time on the same family of construction; this one does
-#    not. POWER, against an edge planted by construction and buried in one
-#    standard deviation of AR noise: **13** detections in 15, **86.7%** [Wilson
-#    **0.6212**, **0.9626**], at a median p of **0.0227** -- the resolution floor.
-#    Bury the same edge in THREE standard deviations of noise and power falls to
-#    **13.3%**: so "no signal" here means no signal of a size this sample could
-#    resolve, and the honest reading of the null is bounded by that, not by
-#    infinity. The apparatus finds an edge that is there and does not manufacture
-#    one that is not, which is what makes a p of 0.9773 a real absence rather
-#    than a blunt instrument.
+#    2048-cell search, and the search-corrected p-values are **0.8864**,
+#    **0.3096** and **0.0845**. Report the first set and you have three tradeable
+#    strategies; report the second and you have none.
+# 6. **The null is calibrated on data whose answer is known, and it turns out to
+#    be ANTI-conservative -- which makes the non-rejection stronger, not weaker.**
+#    Size, over 40 pairs of unrelated AR(0.97) inputs pushed through the identical
+#    pipeline and scored by the identical 2048-cell search: **7** rejections in 40,
+#    a size of **0.17** at a nominal 5% [Wilson **0.0875**, **0.3195**], median p
+#    **0.284**. The phase-randomised null reads **0.10** on 20 trials [Wilson
+#    **0.0279**, **0.3010**]. So this test fires about one time in six when there
+#    is nothing there at all -- and on the real sample it did not fire. Power,
+#    against an edge planted by construction one standard deviation above the
+#    noise: **15** detections in 15, **100.0%** [Wilson **0.7961**, **1.0000**], at
+#    a median p of **0.0227**, the resolution floor. Bury the same edge three
+#    standard deviations down and power falls to **40.0%**: "no signal" here means
+#    no signal of a size this sample could resolve, and the honest reading of the
+#    null is bounded by that rather than by infinity.
 # 7. **A defect in the shared data layer, which reaches work already on `main`.**
 #    `RATES.OIS.USD_SOFR.PAR.2Y` in the Citi tag cache is **47.2%** swaption
 #    normal vol, not a rate: **2600** of **5507** rows lie outside any band a USD
@@ -93,34 +90,46 @@
 #    that is nearly half swaption vol. This notebook builds the 2y rate from the
 #    CurveStore discount factors instead and ties it out to **4.02772** against a
 #    recorded reprice of **4.02995**.
-# 8. **The one number that behaves like a signal is a direction, and it points
-#    the wrong way for the obvious story.** Across all three samples the top of
-#    the league is dominated by **follow**, not fade: **82** of the JPM top 100
-#    cells, and every one of the FedLock 21-year top ten. "Fedspeak is hawkish
-#    relative to the data, so buy the front end" -- the mean-reverting reading the
-#    prior studies' direction implies -- is the *losing* side of a coin that is
-#    not weighted.
-# 9. **Four defects found by building this, and the two that mattered most
-#    flattered the NULL rather than the result -- which is the error direction a
-#    study like this is actually exposed to.**
-#    (a) Ranking the grid on `|Sharpe|` is wrong once a cost is charged, because
-#    a round trip is paid whichever way the trade goes, so `follow` is
+# 8. **The top of the league leans `follow` rather than `fade`, and that lean
+#    fails the study's own null too.** The best 100 JPM cells are **81%** follow,
+#    which reads like a finding until the same statistic is put through the same
+#    43 rotations: the null's median is **73%** and a share at least this lopsided
+#    occurs with **p = 0.3182**. Both readings of every cell are scored, so which
+#    one wins is the sign of a difference between two noisy numbers, and they
+#    cluster whenever the instrument carries a directional tilt over the window --
+#    which deferred SR3 did. The direction is reported because it is what the data
+#    says. It is not offered as a residual signal, and an earlier draft of this
+#    notebook did offer it as one.
+# 9. **Six defects found by building this and by adversarially reviewing it. The
+#    ones that mattered most flattered the NULL rather than the result -- which is
+#    the error direction a study like this is actually exposed to.**
+#    (a) The largest: `_trailing_rank` counted NaN slots in its denominator. Both
+#    sides arrive on a union index -- the composite from 2005, the sentiment index
+#    from 2023 -- so every window straddling the sentiment start is part real and
+#    part NaN, and those slots read as observations the current value had failed to
+#    beat. On a strictly rising series, where every point must rank +1, it returned
+#    the opposite end of the scale. It corrupted `rankgap` on about a fifth of the
+#    121 headline weeks and made the result look MORE dead than it is: the grid's
+#    best moved from 0.1903 to **0.2185** and its p from 0.9773 to **0.8864** once
+#    fixed. Found by a six-lens adversarial review, confirmed by two independent
+#    refuters that each reproduced it, and pinned by two invariance tests.
+#    (b) Ranking the grid on `|Sharpe|` is wrong once a cost is charged, because a
+#    round trip is paid whichever way the trade goes, so `follow` is
 #    `-(p + cost) - cost` and not `-p`; the first pass reported a cell losing
 #    1.71bp a trade as its winner because 1.71 is a bigger number than the 0.29
 #    the other reading lost.
-#    (b) The deflation ranked on a different statistic from the grid, so the two
+#    (c) The deflation ranked on a different statistic from the grid, so the two
 #    named different winners.
-#    (c) **264** of 2048 cells are too thin to be scored by the grid at all, yet
-#    were being counted as deflation trials -- inflating N and with it the bar the
-#    winner had to clear. Fixing it moved the trial count from 4032 to **3568**
-#    and the JPM DSR from 0.0193 to **0.0226**: the null had been made to look
-#    better established than it was.
-#    (d) The Romano-Wolf stepdown ran over the top 400 cells **by observed
-#    Sharpe**, which shrinks every suffix maximum and destroys familywise
-#    control; that version "rejected" one FedLock SR3 cell whose own rotation p
-#    was 0.0845. Over the full family it rejects none, and its rank-1 adjusted p
-#    equals the rotation p exactly.
-#    All four are pinned by tests, and the guards are mutation-tested.
+#    (d) **264** of 2048 cells are too thin to be scored by the grid at all, yet
+#    were counted as deflation trials -- inflating the trial count from **3568** to
+#    **4032** and the bar the winner had to clear with it.
+#    (e) The Romano-Wolf stepdown ran over the top 400 cells **by observed
+#    Sharpe**, which shrinks every suffix maximum and destroys familywise control;
+#    that version "rejected" one FedLock SR3 cell whose own rotation p was 0.0845.
+#    (f) The size calibration was not running the pipeline it certifies: its signal
+#    matrix was ragged with NaN where production's is dense, and the measured size
+#    moved from 0.05 to **0.17** once that was fixed.
+#    All six are pinned by tests, and the guards are mutation-tested.
 # 10. **The engine agrees with the search device exactly.** The pre-registered
 #    book re-run through `QueryDrivenBacktest` and `STIRFutureMDP`, cache-warmed
 #    and network-disarmed, reproduces all 23 trades to a worst absolute difference
@@ -130,8 +139,9 @@
 #
 # **Verdict.** The detachment between Fedspeak and the data is measurable and
 # persistent, and it does not predict the front end. On the only sample where the
-# sentiment side is honestly gated it is worse than noise; on the two where it is
-# not gated at all it is still inside the null. The cost line never becomes the
+# sentiment side is honestly gated, the best of 2048 searched configurations is
+# beaten by a random misalignment of its own signal -- on a test that fires one
+# time in six when there is nothing there. The cost line never becomes the
 # argument, which makes this a cleaner *no* than most: there is no version of the
 # execution, the instrument or the holding period that would change it, because
 # the grid already searched all three.
@@ -514,6 +524,13 @@ print(R.headline(JPM).to_string())
 
 # %%
 LG = JPM["league"].copy()
+print("G-P3 -- every structure the grid searches must actually be priceable "
+      "(asserts inside; a cold SR3 cache would otherwise delete seven of the "
+      "eight instruments and still report a full 2048-cell verdict):")
+print(JPM["gate_bank"].to_string(index=False))
+print("\nand what each (structure, horizon) could price:")
+print(JPM["return_diag"].fillna(0).to_string(index=False))
+
 cols = ["construction", "lead_k", "threshold", "horizon_w", "structure", "sign",
         "trades", "avg_bp", "gross_avg_bp", "cost_bp", "hit", "sharpe",
         "sharpe_ann", "t_stat", "episodes", "top_episode_share"]
@@ -533,6 +550,24 @@ print(f"cells whose NET average is positive: "
       f"{int((LG['avg_bp'] > 0).sum())} of {len(LG)}")
 print(f"median trades per cell: {LG['trades'].median():.0f}; "
       f"median episodes per cell: {LG['episodes'].median():.0f}")
+
+# %% [markdown]
+# ### Is the `follow` lean a finding, or is that what noise does?
+#
+# Both readings of every cell are scored, so which one wins is the sign of a
+# difference between two noisy numbers. They will cluster on one side whenever
+# the instrument has a directional drift over the window -- and deferred SR3 did.
+# So the observed lopsidedness is measured against the same rotation set the
+# p-value uses, rather than eyeballed.
+
+# %%
+FOLLOW = G.follow_share_null(JPM["dmat"], JPM["keys"], JPM["key_row"],
+                             JPM["return_bank"], JPM["cfg"], top=100)
+print(f"observed follow share in the best 100 cells: "
+      f"{100 * FOLLOW['observed_follow_share']:.0f}%")
+print(f"rotation null median: {100 * FOLLOW['null_median']:.0f}% "
+      f"over {FOLLOW['draws']} rotations")
+print(f"a share at least this lopsided: p = {FOLLOW['p_at_least_as_lopsided']:.4f}")
 
 # %%
 null = JPM["rotation"]["max_abs_sharpe"]
@@ -1030,7 +1065,10 @@ TIEOUT = {
     "7 tag max value": f"{poison['max_value']}",
     "7 curve store 2y on 2026-08-14":
         f"{RATE.loc[pd.Timestamp('2026-08-14')]:.5f}",
-    "8 follow among the JPM top 100": f"{int((top100['sign'] == 'follow').sum())}",
+    "8 follow among the JPM top 100 %":
+        f"{100 * FOLLOW['observed_follow_share']:.0f}%",
+    "8 follow share null median %": f"{100 * FOLLOW['null_median']:.0f}%",
+    "8 follow lopsidedness p": f"{FOLLOW['p_at_least_as_lopsided']:.4f}",
     "10 engine trades": f"{len(TIE)}",
     "10 engine worst abs diff bp": f"{TIE.attrs['max_abs_diff']:.3e}",
     # finding 9's own numbers: the thin-cell trial-set defect

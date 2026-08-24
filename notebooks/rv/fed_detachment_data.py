@@ -101,14 +101,17 @@ STRUCTURES: Dict[str, Tuple[Tuple[int, ...], Tuple[float, ...], int, float]] = {
     "spr1x3": ((1, 3), (1.0, -1.0), 2, 1.0),
     "spr2x4": ((2, 4), (1.0, -1.0), 2, 1.0),
     "pack1": ((1, 2, 3, 4), (0.25, 0.25, 0.25, 0.25), 4, 4.0),
-    # Not a futures structure: a 2-year SOFR OIS, priced off the cached Citi tag
-    # ``RATES.OIS.USD_SOFR.PAR.2Y``. It is in the grid for two reasons. It is the
+    # Not a futures structure: a 2-year SOFR OIS, priced off
+    # ``fed_detachment_prices.curve_store_par_rate`` -- the CurveStore discount
+    # factors, NOT the ``RATES.OIS.USD_SOFR.PAR.2Y`` tag, which this study shows
+    # is 47% swaption vol. It is in the grid for two reasons. It is the
     # only instrument that exists over FedLock's twenty-one years -- SR3 does not
     # trade before 2018-05 -- and it tests whether the *instrument* is what the
     # front-end grid is failing on rather than the signal. Its "one contract" is
     # a notional unit and its 0.50bp round trip is the same order as a 2y OIS
-    # bid-offer; it is a MID quote from a vendor tag, not an executable price,
-    # and every number that comes off it says so.
+    # bid-offer. It is still a MID -- a par rate implied by a vendor's fitted
+    # discount curve, not an executable price -- and every number that comes off
+    # it says so.
     "ois2y": ((0,), (1.0,), 1, 1.0),
 }
 
@@ -312,12 +315,33 @@ def _trailing_rank(series: pd.Series, window: int, min_periods: int) -> pd.Serie
 
     Rank rather than z so a single outlying week cannot set the level. Centred
     on zero so it differences against the other side the same way a z-score does.
+
+    **The comparison set is the FINITE part of the window, and so is the
+    denominator.** That is not a detail. Both series arrive here reindexed onto
+    a union index -- the surprise composite runs from 2005 and the sentiment
+    index from 2023 -- so every window that straddles the start of the shorter
+    series is part real and part NaN. Counting the NaN slots in the denominator,
+    and letting ``NaN < x`` evaluate False so they read as observations the
+    current value failed to beat, compresses the rank toward -1 for a full
+    window's worth of weeks at the start of the sample. Measured on a strictly
+    RISING series, where every observation is by construction the top of its own
+    window and must score +1.0: the version that counted NaN slots returned
+    **-0.02**, the opposite end of the statistic's range, on all 25 affected
+    weeks. On the real 121-week sample that is about a fifth of it.
     """
     s = pd.Series(series).astype(float)
-    r = s.rolling(window, min_periods=min_periods).apply(
-        lambda w: (np.sum(w[:-1] < w[-1]) + 0.5 * np.sum(w[:-1] == w[-1])) / max(len(w) - 1, 1),
-        raw=True,
-    )
+
+    def _pct(w: np.ndarray) -> float:
+        x = w[-1]
+        if not np.isfinite(x):
+            return np.nan
+        prior = w[:-1]
+        prior = prior[np.isfinite(prior)]
+        if prior.size < 1:
+            return np.nan
+        return float((np.sum(prior < x) + 0.5 * np.sum(prior == x)) / prior.size)
+
+    r = s.rolling(window, min_periods=min_periods).apply(_pct, raw=True)
     return 2.0 * r - 1.0
 
 

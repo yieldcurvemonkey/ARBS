@@ -18,11 +18,27 @@ TMP = HERE / "_audit_mutation_check.ipynb"
 #: (figure as it appears in the prose, what to change it to). Each must be a
 #: figure the tie-out cell prints, so a change breaks the match.
 MUTATIONS = [
-    ("**0.9773**", "**0.9774**"),          # the headline rotation p
-    ("**0.1903**", "**0.1904**"),          # the observed best Sharpe
+    ("**0.8864**", "**0.8865**"),          # the headline rotation p
+    ("**0.2185**", "**0.2186**"),          # the observed best Sharpe
     ("**2600**", "**2601**"),              # the poisoned-row count
     ("**4.02772**", "**4.02773**"),        # the curve-store known answer
+    ("**47.2%**", "**47.3%**"),            # a percentage
+    # The BLIND CLASS the first version of the audit could not see at all: a
+    # figure carrying a unit. Without one of these the harness passes while
+    # never exercising the half of the regex that was wrong.
+    ("+1.891bp", "+1.892bp"),              # the pre-registered result
+    ("+6.783bp", "+6.784bp"),              # the FedLock SR3 winner
+    ("7.105e-15", "7.106e-15"),            # the engine tie-out tolerance
 ]
+
+#: Deliberately NOT in the list, and worth knowing why. Mutating ``**24.4bp**``
+#: to ``**24.5bp**`` does NOT fail the audit, because the engine tie-out table
+#: happens to print a trade P&L of ``-24.5`` and the audit matches by SUBSTRING.
+#: That is the first of the four limits the audit documents, demonstrated rather
+#: than asserted: a mutant that collides with an unrelated number elsewhere in
+#: the output is invisible to it. Choose mutants that do not collide -- every
+#: entry above was checked against the executed outputs first.
+
 
 
 def run_audit(path: pathlib.Path) -> int:

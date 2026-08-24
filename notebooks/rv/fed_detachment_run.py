@@ -31,6 +31,37 @@ SR3_STRUCTURES = ("out1", "out2", "out3", "out4", "spr1x3", "spr2x4", "pack1")
 ALL_STRUCTURES = SR3_STRUCTURES + ("ois2y",)
 
 
+def gate_return_bank_coverage(
+    return_bank: Dict, structures: Sequence[str], support: pd.DatetimeIndex,
+    *, min_share: float = 0.5,
+) -> pd.DataFrame:
+    """G-P3 -- every structure the grid searches must actually be priceable.
+
+    The failure this closes is silent and total. ``settle_panel`` returns only
+    the contracts whose parquet exists, so on a machine with a cold or partial
+    SR3 cache the futures structures come back entirely NaN, ``run_cell`` skips
+    every week, those cells score NaN, and the run still reports a complete
+    2048-cell grid with a p-value -- computed from the one instrument that
+    happened to be readable. Nothing in the output says so. This makes it an
+    assertion instead.
+    """
+    rows = []
+    for s in structures:
+        priced = [int(np.isfinite(a).sum()) for (name, _h), a in return_bank.items()
+                  if name == s]
+        best = max(priced) if priced else 0
+        rows.append({"structure": s, "weeks": len(support), "best_priced": best,
+                     "share": best / max(len(support), 1)})
+    out = pd.DataFrame(rows)
+    bad = out[out["share"] < min_share]
+    assert bad.empty, (
+        f"G-P3 FAILED: {sorted(bad['structure'])} price fewer than "
+        f"{min_share:.0%} of the {len(support)} weeks in the support -- the grid "
+        f"would report a full search over instruments it cannot actually trade. "
+        f"Seed the SR3 settle cache with fed_detachment_refresh_settles.py.")
+    return out
+
+
 def run_sample(
     *,
     label: str,
@@ -93,6 +124,8 @@ def run_sample(
         panel = PX.settle_panel(syms)
     return_bank, return_diag = G.build_return_bank(
         panel, support, cfg, structures=structures, rate=rate)
+
+    gate_bank = gate_return_bank_coverage(return_bank, structures, support)
 
     keys = G.cell_keys(constructions=constructions, structures=structures)
     league, dmat, streams, keys, key_row, streams_both = G.run_grid(
@@ -159,6 +192,7 @@ def run_sample(
         "support": support, "full_support": full_support,
         "panel": panel, "rate": rate, "rate_gate": rate_gate,
         "return_bank": return_bank, "return_diag": return_diag,
+        "gate_bank": gate_bank,
         "league": league, "dmat": dmat, "streams": streams,
         "streams_both": streams_both, "keys": keys, "key_row": key_row,
         "sharpes": sharpes, "observed": observed, "best_index": bj,

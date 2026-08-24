@@ -428,3 +428,59 @@ def test_family_test_is_anti_conservative_if_the_family_is_subset(monkeypatch):
     assert subset < full, (
         "subsetting the family by observed rank must lower the adjusted p -- if "
         "it does not on this fixture the test cannot catch the defect")
+
+
+def test_trailing_rank_ignores_the_NaN_prefix_it_is_reindexed_onto():
+    """A rank must not count NaN slots as observations it failed to beat.
+
+    Both sides arrive at ``detachment`` reindexed onto a union index -- the
+    surprise composite runs from 2005, the sentiment index from 2023 -- so every
+    window straddling the start of the shorter series is part real, part NaN.
+    Counting those slots compresses the rank toward -1 for a full window's worth
+    of weeks. On a strictly RISING series every observation is by construction
+    the top of its own window and must score +1.0; the broken version returned
+    -0.02 on all 25 affected weeks, the opposite end of the range.
+    """
+    idx = pd.date_range("2023-01-06", periods=80, freq="W-FRI")
+    rising = pd.Series(np.arange(80, dtype=float), index=idx)
+    with_gap = rising.copy()
+    with_gap.iloc[:30] = np.nan
+
+    clean = D._trailing_rank(rising, 52, 26).dropna()
+    gapped = D._trailing_rank(with_gap, 52, 26).dropna()
+    assert np.allclose(clean.to_numpy(), 1.0), "a rising series must rank +1 everywhere"
+    assert np.allclose(gapped.to_numpy(), 1.0), (
+        "the NaN prefix changed the rank -- the denominator is counting NaN slots")
+    # and the two agree wherever both are defined
+    both = pd.concat([clean.rename("a"), gapped.rename("b")], axis=1).dropna()
+    assert len(both) > 20
+    assert float((both["a"] - both["b"]).abs().max()) < 1e-12
+
+
+def test_rankgap_is_unchanged_by_NaN_PADDING_the_sentiment_side():
+    """The end-to-end version of the same invariant.
+
+    ``detachment`` puts both sides on a union index, so the shorter series --
+    the sentiment index -- acquires a long NaN prefix. Extending that prefix
+    must not change D anywhere: NaN is absence of data, not data.
+
+    Note what this does NOT assert. Truncating the COMPOSITE's real history does
+    legitimately change its own trailing rank, because a rank is a statement
+    about the observations in the window and there are then fewer of them. That
+    is the statistic working, not a defect, and an invariance test over it would
+    be wrong.
+    """
+    idx = pd.date_range("2022-01-07", periods=200, freq="W-FRI")
+    rng = np.random.default_rng(3)
+    zc = pd.Series(np.cumsum(rng.normal(size=200)) * 0.1, index=idx)
+    zs = pd.Series(np.cumsum(rng.normal(size=120)) * 0.1, index=idx[-120:])
+    cfg = dataclasses.replace(D.PRIMARY, construction="rankgap", lead_k=0)
+
+    padded = zs.reindex(idx)                       # explicit leading NaN
+    a = D.detachment(zc, zs, cfg)
+    b = D.detachment(zc, padded, cfg)
+    both = pd.concat([a.rename("a"), b.rename("b")], axis=1).dropna()
+    assert len(both) > 30
+    assert float((both["a"] - both["b"]).abs().max()) < 1e-12, (
+        "extending the sentiment side's NaN prefix moved D -- the rank is "
+        "reading its own padding")

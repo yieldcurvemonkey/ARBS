@@ -1,9 +1,9 @@
 r"""The grid, the nulls that pay for it, and the harness's own calibration.
 
-Everything here is built so that one number -- ``max |Sharpe|`` over the whole
-grid -- is the statistic under test, and so that the null is scored by exactly
-that same statistic. A null scored at one cell while the reported number is a
-maximum over 1,792 flatters the result by precisely the value of the search.
+Everything here is built so that one number -- the best Sharpe over the whole
+grid, with each cell scored at BOTH trade directions -- is the statistic
+under test, and so that the null is scored by exactly that same statistic.
+A null scored at one cell while the reported number is a maximum over 2,048 flatters the result by precisely the value of the search.
 
 The conservative null is a **circular rotation of the finished detachment
 series against the price**, with every rotation re-scored across the entire
@@ -23,8 +23,8 @@ measuring where the argmax sits -- a weaker r 0.093 scored p 0.0018 while a
 stronger r 0.122 scored 0.0027.
 
 The cost is resolution. With ``n`` weeks the reference set holds ``n - 78``
-distinct rotations, so on the ~145-week JPM sample the exact p-value cannot go
-below about 0.015 however strong the signal is. That floor is reported, never
+distinct rotations, so on the 121-week JPM sample the exact p-value cannot go
+below 0.0227 however strong the signal is. That floor is reported, never
 rounded past.
 """
 from __future__ import annotations
@@ -613,8 +613,15 @@ def spectral_null(
 
     rng = rng or cfg.rng(13)
     draws = int(draws if draws is not None else cfg.surrogate_draws)
-    zc_w = zc.reindex(weeks).to_numpy(float)
-    zs_w = zs.reindex(weeks).to_numpy(float)
+    # Randomise on each series' OWN finite span and reindex afterwards, which is
+    # what production does: the constructions are computed on the full series and
+    # ``common_support`` intersects after. Reindexing FIRST and randomising the
+    # truncated series lets every warm-up and every lead k eat from inside the
+    # test window -- measured on one draw, the surrogate's ``resid``/k11 row had
+    # 85 finite weeks against the observed 121.
+    zc_w = zc.dropna().to_numpy(float)
+    zs_w = zs.dropna().to_numpy(float)
+    zc_idx, zs_idx = zc.dropna().index, zs.dropna().index
     okc, oks = np.isfinite(zc_w), np.isfinite(zs_w)
     if okc.sum() < 30 or oks.sum() < 30:
         return {"max_abs_sharpe": np.array([]), "draws_used": 0, "q95": np.nan,
@@ -633,11 +640,8 @@ def spectral_null(
             pass
     maxima = []
     for _ in it:
-        a, b = zc_w.copy(), zs_w.copy()
-        a[okc] = phase_randomise(zc_w[okc], rng)
-        b[oks] = phase_randomise(zs_w[oks], rng)
-        sc = pd.Series(a, index=weeks)
-        ss = pd.Series(b, index=weeks)
+        sc = pd.Series(phase_randomise(zc_w, rng), index=zc_idx)
+        ss = pd.Series(phase_randomise(zs_w, rng), index=zs_idx)
         rows = []
         for (c, k) in sig_keys:
             sub = dataclasses.replace(cfg, construction=c, lead_k=int(k))
@@ -651,6 +655,68 @@ def spectral_null(
             "q50": float(np.quantile(m, 0.50)) if m.size else np.nan,
             "q95": float(np.quantile(m, 0.95)) if m.size else np.nan,
             "p_floor": 1.0 / (m.size + 1) if m.size else np.nan}
+
+
+def follow_share_null(
+    dmat: np.ndarray,
+    keys: Sequence[CellKey],
+    key_row: Sequence[int],
+    return_bank: Dict[Tuple[str, int], np.ndarray],
+    cfg: D.DetachConfig,
+    *,
+    top: int = 100,
+    max_k: Optional[int] = None,
+    max_h: Optional[int] = None,
+    min_trades: int = 8,
+) -> Dict[str, object]:
+    """Is 'follow' dominating the top of the league, or is that what noise does?
+
+    "82 of the best 100 cells are follow" reads like a finding until you ask how
+    often a MISALIGNED copy of the same signal produces a top hundred that
+    lopsided. Both readings of a cell are scored, so whichever wins is the sign
+    of a difference between two noisy numbers, and the winners will cluster on
+    one side whenever the instruments share a directional drift over the window
+    -- which SR3 did. This measures the observed share against the same rotation
+    set the p-value uses, so the claim is either supported or withdrawn on
+    evidence rather than eyeballed.
+    """
+    n_weeks = dmat.shape[1]
+
+    def _share(mat: np.ndarray) -> float:
+        srs = np.full(len(keys), np.nan)
+        sgn = np.ones(len(keys))
+        for j, (_c, _k, thr, h, struct) in enumerate(keys):
+            r = return_bank.get((struct, int(h)))
+            if r is None:
+                continue
+            cost = (2.0 * cfg.cost_bp_one_way * D.STRUCTURES[struct][2]
+                    / D.STRUCTURES[struct][3])
+            srs[j], sgn[j], _i, _p = best_of_both(
+                mat[key_row[j]], r, threshold=float(thr), horizon=int(h),
+                cost_bp=cost, n_weeks=n_weeks, min_trades=min_trades)
+        ok = np.flatnonzero(np.isfinite(srs))
+        if ok.size < top:
+            return np.nan
+        best = ok[np.argsort(-srs[ok])][:top]
+        return float((sgn[best] < 0).mean())
+
+    observed = _share(dmat)
+    max_k = max_k if max_k is not None else max(int(k) for (_c, k, _t, _h, _s) in keys)
+    max_h = max_h if max_h is not None else max(int(h) for (_c, _k, _t, h, _s) in keys)
+    shares = []
+    for d in rotation_offsets(n_weeks, max_k, max_h):
+        v = _share(np.roll(dmat, int(d), axis=1))
+        if np.isfinite(v):
+            shares.append(v)
+    s = np.asarray(shares, float)
+    return {
+        "observed_follow_share": observed,
+        "null_follow_shares": s,
+        "null_median": float(np.median(s)) if s.size else np.nan,
+        "p_at_least_as_lopsided": (float((1 + np.sum(s >= observed)) / (1 + s.size))
+                                   if s.size and np.isfinite(observed) else np.nan),
+        "draws": int(s.size), "top": int(top),
+    }
 
 
 def rotation_pvalue(observed: float, null: Dict[str, object]) -> float:
@@ -759,12 +825,28 @@ def synthetic_bank(
     return out
 
 
-def _ar1(n: int, phi: float, rng: np.random.Generator) -> np.ndarray:
+def _ar1(n: int, phi: float, rng: np.random.Generator, *, unit_sd: bool = True
+         ) -> np.ndarray:
+    """One AR(phi) path, rescaled to unit standard deviation by default.
+
+    The rescaling matters for the calibration and is not cosmetic. An AR(0.97)
+    path with unit innovations has a standard deviation near 4, while the real
+    inputs are z-scores of order 1 -- and the grid's entry thresholds (0.5, 1.0,
+    1.5) are ABSOLUTE. Feeding an unscaled path means the thresholds almost
+    never bind, the synthetic grid takes a different number of trades from the
+    real one, and the "identical pipeline" the size measurement claims to run is
+    not identical. Scaling is a full-sample operation, which would be a leak in a
+    trading signal but is simply how the null-data generator is parameterised.
+    """
     e = rng.normal(size=n)
     x = np.empty(n)
     x[0] = e[0]
     for i in range(1, n):
         x[i] = phi * x[i - 1] + e[i]
+    if unit_sd:
+        sd = float(np.std(x, ddof=1))
+        if sd > 0:
+            x = x / sd
     return x
 
 
@@ -801,15 +883,23 @@ def measure_harness_size(
             pass
     for i in it:
         rng = np.random.default_rng(seed + i)
-        a = pd.Series(_ar1(len(weeks), 0.97, rng), index=weeks)
-        b = pd.Series(_ar1(len(weeks), 0.97, rng), index=weeks)
-        bank = _bank_from(a, b, cfg)
-        sup = common_support(bank)
-        if len(sup) < 60:
+        # Generate on an index extended BACKWARDS, then reindex to ``weeks``.
+        # Generating on ``weeks`` itself leaves every construction's own warm-up
+        # inside the test window: measured at the shipped seeds, the calibration
+        # dmat was 14.9% NaN with ragged per-row prefixes of 0-36 weeks, where
+        # production's is 0.0% NaN -- and ``np.roll`` then moves that dead block
+        # around under every rotation, which is the ragged-prefix hazard
+        # ``common_support``'s own docstring exists to prevent. So the surrogate
+        # would not have been the "identical pipeline" the size claim asserts.
+        ext = _extend_back(weeks, _CALIBRATION_PAD_W)
+        a = pd.Series(_ar1(len(ext), 0.97, rng), index=ext)
+        b = pd.Series(_ar1(len(ext), 0.97, rng), index=ext)
+        bank = {k: v.reindex(weeks) for k, v in _bank_from(a, b, cfg).items()}
+        if len(common_support(bank)) < len(weeks):
             continue
         sig_keys = sorted(bank)
         row_of = {sk: j for j, sk in enumerate(sig_keys)}
-        dmat = np.vstack([bank[sk].reindex(weeks).to_numpy(float) for sk in sig_keys])
+        dmat = np.vstack([bank[sk].to_numpy(float) for sk in sig_keys])
         key_row = [row_of[(c, int(k))] for (c, k, _t, _h, _s) in keys]
         obs, _, _ = grid_statistic(dmat, keys, key_row, return_bank, cfg)
         if which == "rotation":
@@ -831,6 +921,19 @@ def measure_harness_size(
             "size": rejected / n if n else np.nan,
             "wilson_lo": lo, "wilson_hi": hi, "alpha": alpha,
             "median_p": float(np.median(ps)) if ps else np.nan}
+
+
+#: Weeks of synthetic history generated BEFORE the test window so every
+#: construction's warm-up happens outside it. 120 comfortably covers the longest
+#: chain: a 52-week rolling window, an 11-week lead and a 4-week difference.
+_CALIBRATION_PAD_W = 120
+
+
+def _extend_back(weeks: pd.DatetimeIndex, pad: int) -> pd.DatetimeIndex:
+    """``weeks`` with ``pad`` more weekly points prepended at the same spacing."""
+    step = weeks[1] - weeks[0]
+    head = pd.DatetimeIndex([weeks[0] - step * (pad - i) for i in range(pad)])
+    return head.append(pd.DatetimeIndex(weeks))
 
 
 def _bank_from(zc: pd.Series, zs: pd.Series, cfg: D.DetachConfig
@@ -870,10 +973,21 @@ def measure_harness_power(
     detected, ps = 0, []
     for i in range(trials):
         rng = np.random.default_rng(seed + i)
+        # The edge is planted in the SENTIMENT INPUT and then pushed through
+        # ``build_signal_bank`` unchanged, so the sixteen constructions differ
+        # from one another exactly as they do in production. An earlier version
+        # planted it directly into the bank, giving sixteen IDENTICAL rows --
+        # which is a grid with no internal diversity, and therefore a different
+        # maximum and a different null bar from the one the real run faces.
+        ext = _extend_back(weeks, _CALIBRATION_PAD_W)
         base = np.where(np.isfinite(r), np.sign(np.nan_to_num(r)), 0.0)
-        planted = base + noise * _ar1(len(weeks), 0.5, rng)
-        bank = {(c, int(k)): pd.Series(planted, index=weeks)
-                for c in D.CONSTRUCTIONS for k in D.LEAD_KS}
+        # the padded prefix carries noise only; it exists so the constructions
+        # warm up OUTSIDE the test window, exactly as they do in production
+        padded = np.concatenate([np.zeros(len(ext) - len(weeks)), base])
+        zs_planted = pd.Series(padded + noise * _ar1(len(ext), 0.5, rng), index=ext)
+        zc_null = pd.Series(_ar1(len(ext), 0.97, rng), index=ext)
+        bank = {k: v.reindex(weeks)
+                for k, v in _bank_from(zc_null, zs_planted, cfg).items()}
         sig_keys = sorted(bank)
         row_of = {sk: j for j, sk in enumerate(sig_keys)}
         dmat = np.vstack([bank[sk].to_numpy(float) for sk in sig_keys])
