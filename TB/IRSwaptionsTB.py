@@ -625,15 +625,8 @@ class IRSwaptionsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
             date_keys = sorted({_eod_key(d) for d in missing_by_date})
             stored_by_date = load_stored_cubes("USD", date_keys)
-            # Dates the store is warm either side of but holds nothing for -
-            # market holidays. The provider already refuses to drive Excel for
-            # them; recognising them here as well means the ordinary path is not
-            # entered at all, so there is no context build and no per-date
-            # "No swaption context" warning for a day that has no market.
-            gap_dates = (
-                stored_gap_dates("USD", [d for d in date_keys if d not in stored_by_date])
-                if stored_by_date
-                else frozenset()
+            gap_dates = stored_gap_dates(
+                "USD", [d for d in date_keys if d not in stored_by_date]
             )
         except Exception as exc:  # never let a fast-path cache read block pricing
             self._logger.debug("Citi native cube fast path unavailable: %s", exc)
@@ -657,15 +650,9 @@ class IRSwaptionsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         self._citivelo_native_smile_cube(stored),
                     )
                 if value is None:
-                    # A weekday with no stored cube is a coverage gap (normally a
-                    # market holiday), not a reason to enter Excel.  Leave the row
-                    # absent, matching the curve side's treatment of a non-session
-                    # date.  `offline_only` says so as a policy; `is_store_gap`
-                    # says so from the store's own shape, which is why an
-                    # interactive caller no longer has to set the flag to avoid a
-                    # fetch that cannot succeed.  A date PAST the warm is neither,
-                    # and still falls through to the live path below.
-                    if (offline_only or is_store_gap) and _is_citivelo_native_nvol_query(q):
+                    if is_store_gap:
+                        continue
+                    if offline_only and _is_citivelo_native_nvol_query(q):
                         continue
                     unresolved.append(q)
                     continue

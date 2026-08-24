@@ -816,13 +816,19 @@ def make_linear_regression_builder(
         else:
             suffix = ""
 
+        single_x = len(xcols) == 1
+        if single_x:
+            x_data = state["X_used"][xcols[0]]
+        else:
+            x_data = y_hat
+
         fig, ax = plt.subplots()
-        _scatter_with_optional_date(ax, y_hat, y_used, use_date_color_bar=use_bar, cmap=cmap)
+        _scatter_with_optional_date(ax, x_data, y_used, use_date_color_bar=use_bar, cmap=cmap)
 
         last_idx = y_used.index[-1]
         last_date = state["date_used"][-1]
         ax.scatter(
-            [y_hat.loc[last_idx]],
+            [x_data.loc[last_idx]],
             [y_used.loc[last_idx]],
             s=75,
             color="red",
@@ -832,18 +838,27 @@ def make_linear_regression_builder(
             label=f"Most Recent: {_format_last_date(last_date)}",
         )
 
-        low = np.nanmin([y_hat.min(), y_used.min()])
-        high = np.nanmax([y_hat.max(), y_used.max()])
-        pad = 0.02 * (high - low) if np.isfinite(high - low) else 0.0
-        x0, x1 = low - pad, high + pad
-        ax.set_xlim(x0, x1)
-        ax.set_ylim(x0, x1)
-        # ax.plot([x0, x1], [x0, x1], "k--", linewidth=1)
+        if single_x:
+            xlo, xhi = float(x_data.min()), float(x_data.max())
+            pad_x = 0.05 * (xhi - xlo) if np.isfinite(xhi - xlo) else 0.0
+            x0, x1 = xlo - pad_x, xhi + pad_x
+            ax.set_xlim(x0, x1)
 
-        show_calibration = True
-        if show_calibration:
             xs = np.array([x0, x1])
+            intercept = float(res.params.get("const", 0.0))
+            slope = float(res.params[xcols[0]])
+            ax.plot(xs, intercept + slope * xs, "--", linewidth=1.2, color="gray")
 
+            ax.set_xlabel(f"{x_name}{suffix}")
+        else:
+            low = np.nanmin([y_hat.min(), y_used.min()])
+            high = np.nanmax([y_hat.max(), y_used.max()])
+            pad = 0.02 * (high - low) if np.isfinite(high - low) else 0.0
+            x0, x1 = low - pad, high + pad
+            ax.set_xlim(x0, x1)
+            ax.set_ylim(x0, x1)
+
+            xs = np.array([x0, x1])
             if state["model"] == "TLS":
 
                 def _f(p, x):
@@ -858,7 +873,8 @@ def make_linear_regression_builder(
                 m = float(cal.params[cal.params.index.difference(["const"])[0]])
                 ax.plot(xs, m * xs + b, "k--", linewidth=1.2, color="gray")
 
-        ax.set_xlabel(f"{x_name}{suffix}")
+            ax.set_xlabel(f"Predicted {y_used.name}{suffix}")
+
         ax.set_ylabel(f"{y_used.name}{suffix}")
         ax.set_title(title or f"{state['model']}{suffix}: {y_used.name} vs {x_name}")
 
