@@ -140,43 +140,74 @@ def main(argv: list[str] | None = None) -> int:
         print("\nDRY RUN -- nothing deleted. Re-run with --apply.")
         return 0
 
+    # THE MIRROR GOES FIRST, AND THAT ORDER IS THE WHOLE POINT.
+    #
+    # This used to purge Parquet first and then run a DuckDB statement filtered
+    # on a column called ``ts``. The schema's column is ``trading_date``
+    # (Caching/duckdb_timeseries_cache.py:45), so any run carrying --start or
+    # --end raised a Binder Error on the SELECT -- AFTER the Parquet partitions
+    # had already been deleted.
+    #
+    # That is exactly inverted from what this script is for. Parquet is the
+    # source of truth and the mirror is a cache in front of it, so the failure
+    # destroyed the authoritative tier and left the stale one serving reads --
+    # the precise outcome the comment below was written to prevent. Without
+    # --start/--end the clause was just ``symbol LIKE ?`` and it worked, which is
+    # why it survived.
+    #
+    # Now: the mirror is purged first, and the statement is validated before
+    # anything is deleted. If the DuckDB half fails, Parquet is still intact and
+    # the store still answers correctly -- a mirror-less store reads Parquet.
+    # The reverse is not recoverable.
+    db_path = base / "computed_ts.duckdb"
+    con = None
+    if not db_path.exists():
+        print("no DuckDB mirror present")
+    else:
+        try:
+            import duckdb
+
+            con = duckdb.connect(str(db_path))
+        except Exception as exc:
+            print(f"\nREFUSING TO PURGE: the DuckDB mirror is locked "
+                  f"({exc.__class__.__name__}) and nothing has been deleted.\n"
+                  f"         Parquet is untouched. A router holds this handle for its "
+                  f"whole life, so close the notebook kernel or warm job holding\n"
+                  f"         {db_path} and re-run with --apply.")
+            return 1
+
+    if con is not None:
+        try:
+            where = ["symbol LIKE ?"]
+            params: list[object] = [f"%{needle}%" if needle else "%"]
+            if start:
+                where.append("trading_date >= ?")
+                params.append(start)
+            if end:
+                where.append("trading_date <= ?")
+                params.append(end)
+            clause = " AND ".join(where)
+            # Validate BEFORE deleting anything, in either tier. A bad column
+            # name is then a message, not a half-purged store.
+            n = con.execute(
+                f"SELECT count(*) FROM computed_timeseries WHERE {clause}", params
+            ).fetchone()[0]
+            con.execute(f"DELETE FROM computed_timeseries WHERE {clause}", params)
+            print(f"deleted {n} DuckDB row(s)")
+        except Exception as exc:
+            print(f"\nREFUSING TO PURGE: the DuckDB statement failed "
+                  f"({exc.__class__.__name__}: {exc}).\n"
+                  f"         Parquet is untouched -- nothing has been deleted.")
+            return 1
+        finally:
+            con.close()
+
     removed = 0
     for sym_dir, _, _ in plan:
         for part in _partition_days(sym_dir, start, end):
             shutil.rmtree(part, ignore_errors=True)
             removed += 1
     print(f"\ndeleted {removed} Parquet partition(s)")
-
-    # DuckDB mirror. Serves reads on its own, so stale rows there would keep the
-    # poisoned values alive even with the Parquet gone.
-    db_path = base / "computed_ts.duckdb"
-    if not db_path.exists():
-        print("no DuckDB mirror present")
-        return 0
-    try:
-        import duckdb
-
-        con = duckdb.connect(str(db_path))
-    except Exception as exc:
-        print(f"\nWARNING: DuckDB mirror is locked ({exc.__class__.__name__}); Parquet purged but the "
-              f"mirror still holds these rows.\n"
-              f"         Close the kernel holding {db_path} and re-run with --apply.")
-        return 1
-    try:
-        where = ["symbol LIKE ?"]
-        params: list[object] = [f"%{needle}%" if needle else "%"]
-        if start:
-            where.append("ts >= ?")
-            params.append(datetime.datetime.combine(start, datetime.time.min))
-        if end:
-            where.append("ts < ?")
-            params.append(datetime.datetime.combine(end + datetime.timedelta(days=1), datetime.time.min))
-        clause = " AND ".join(where)
-        n = con.execute(f"SELECT count(*) FROM computed_timeseries WHERE {clause}", params).fetchone()[0]
-        con.execute(f"DELETE FROM computed_timeseries WHERE {clause}", params)
-        print(f"deleted {n} DuckDB row(s)")
-    finally:
-        con.close()
     return 0
 
 
