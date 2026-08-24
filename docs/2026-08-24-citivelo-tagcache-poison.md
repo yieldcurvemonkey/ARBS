@@ -332,6 +332,21 @@ touched it.
 Re-run of the sweep after the repair: `DAILY`, `MI01` and `HOURLY` all report
 **no foreign rows**.
 
+### A band-free confirmation
+
+The sweep above can only speak for families whose unit is known, and only five
+tag patterns have a band. So the whole cache was also checked a second way, which
+needs no band at all: build a reverse index from *value* to *vol tag* on four
+probe dates, then ask of every other tag whether its value on those dates equals
+some vol series' value to the last bit.
+
+**14,689 non-vol parquets across every frequency. Zero matches on two or more
+probe dates.** No tag in any family, banded or not, still carries the vol series.
+
+Its limit, stated: four probe dates with a two-hit threshold would miss a tag
+poisoned only on a date set disjoint from all four. It is a cross-check on the
+band-and-donor sweep, not a replacement for it — but the two disagree nowhere.
+
 ### Getting the old bytes back
 
 Every file the repair touched was copied before it was touched, parquet and
