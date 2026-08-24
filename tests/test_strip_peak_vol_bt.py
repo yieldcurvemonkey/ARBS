@@ -19,10 +19,12 @@ def test_build_butterfly_grid_known_date():
     Reference value note: the task-5 brief's skeleton test asserted a modal body
     of 96.1250 (3.875%). A clean-room rebuild here computes the argmax at body
     96.2500 (3.75%, gap -5bp vs the 96.20 forward) -- exactly one 6.25bp grid step
-    away from the brief's value, and coincidentally exactly at the brief's own
-    2-tick tolerance boundary (|96.25 - 96.125| == 0.125, and the brief's assert
-    used strict '<', so its literal form is unsatisfiable regardless of which side
-    is "correct").
+    away from the brief's value. Given that verified 96.2500 mode, the brief's own
+    assertion fails deterministically at its own boundary: |96.25 - 96.125| ==
+    0.125 exactly, and the brief's assert used strict '<' against a tolerance of
+    0.0625*2 == 0.125, so 0.125 < 0.125 is False. Recentering the assertion on
+    96.250 (below) keeps the same tolerance width and still discriminates --
+    96.125 fails it by the same strict-'<' symmetry from the other side.
 
     This is independently corroborated by memory note
     reference_sofr_butterfly_grid.md, written from prior work that explicitly
