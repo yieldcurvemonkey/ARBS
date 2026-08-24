@@ -1,6 +1,8 @@
 # CITI — the published convexity trade, backtested in its own framework
 
-**Verdict: DEAD, and the most useful part of the answer is WHY.**
+**Verdict: DEAD — a small-sample gross edge on the trades it selects, killed by
+its own execution costs, on a book too sparse to run. The most useful part of
+the answer is WHY the rule almost never fires at all.**
 
 Pre-registration: `docs/convexityrv/citi-framework-preregistration.md`, frozen
 and committed **before any P&L was computed** (commit `b539df62`). Notebook:
@@ -16,16 +18,33 @@ and committed **before any P&L was computed** (commit `b539df62`). Notebook:
 | declared cells | **23** (16 primary, 2 secondary, 5 diagnostic), one headline |
 | window | 2021-01-04 .. 2026-08-21, 1,409 CA dates |
 | **tradeable** span | **4.682 y**, from 2021-12-15 |
-| bar: `E[max SR \| null]` at 23 trials | **0.9066** annualised, 0.9808 per-hold |
-| cells clearing it at 1× costs | **0 of 23** |
-| best NET Sharpe on the panel | **+0.2020** (`S\|z1.0\|screen_best_all5\|citi_2017`) |
-| best GROSS Sharpe on the panel | **+0.4155** (same cell) |
-| best NET Sharpe on the **engine** | **+0.1657** (same cell) |
-| **the headline cell** | 2 episodes in 4.7 years, net **−$1,189,942**, Sharpe **−0.5177** |
+| **the headline cell** | 2 episodes in 4.7 years, net **−$1,189,942** |
+| **annualised clock** — cells clearing `E[max SR \| null]` = **0.9066** at 23 trials | **0 of 23 gross, 0 of 23 net** |
+| **per-hold clock** — cells clearing their own `emax_perhold` at their own `n_eff` | **8 of 23 GROSS, 0 of 23 NET** |
+| best NET annualised Sharpe on the panel | **+0.2020** (`S\|z1.0\|screen_best_all5\|citi_2017`) |
+| best NET annualised Sharpe on the **engine** | **+0.1657** (same cell) |
+| best per-hold Sharpe, gross / net | **+1.3346 / +0.6362** (`P\|z1.0\|screen_best\|fitted_refit`, 4 trades, bar 0.9808) |
+| shared-sign-flip p on NET per-episode P&L, best of 23 | **0.161** |
 
-Nothing is close. The best number in the block is under a quarter of the bar,
-and it belongs to a *secondary* cell built on the two structures whose daily
-marks this package has measured at or past the pure-noise bound.
+**Read the two clocks together, because apart they say different things and
+both are true.**
+
+* On the **annualised** clock — the equity curve an investor would actually
+  hold — nothing clears at any cost level, and it cannot: four trades in
+  4.7 years is not a book.
+* On the **per-hold** clock — the quality of the trades that were *taken* —
+  eight cells clear their own bar **gross**, the best at 1.33 against 0.98.
+  **Costs kill every one of them**: 0 of 23 clear net, and no cell's
+  shared-sign-flip p on net per-episode P&L is below 0.16.
+
+So the framework is not *nothing* on the trades it selects. It is a
+small-sample gross edge that does not survive its own execution costs, on a
+book too sparse to run — and the honest headline is the conjunction of those
+three facts, not any one of them.
+
+The pre-registration required both clocks (§6, §11); the grid runner initially
+graded only the annualised one and the per-hold grading is amendment A1,
+computed after the grid ran and before this verdict was written.
 
 ---
 
@@ -101,8 +120,8 @@ it does not walk. Days on which some primary structure passes all five:
 | 0.5 *(not scored)* | 30 | 59 | 84 |
 | 0.0 *(not scored)* | 51 | 108 | 161 |
 
-At 1.0σ the framework trades 4–5 times per cell (23 for the all-five-colour
-secondary) and still fails:
+At 1.0σ the framework trades 4–5 times per cell (22–23 for the all-five-colour
+secondary). Annualised clock:
 
 | cell | n | gross SR | net SR (1×) | net SR (2×) | break-even bp | carry share |
 |---|---:|---:|---:|---:|---:|---:|
@@ -114,6 +133,36 @@ secondary) and still fails:
 
 Every one of them is below **0.9066**, and every one except the unhedged cell
 is negative at 2× costs.
+
+### The per-hold clock — the same cells, graded on the trades they took
+
+`mean / sd` over the **episodes**, against `E[max SR | null]` at 23 trials with
+`σ = 1/sqrt(n_eff)` and `n_eff = min(n_episodes, span·252/mean_hold)`. Every
+cell that clears its bar gross:
+
+| cell | n | per-hold SR gross | per-hold SR net | bar | sign-flip p (gross) | sign-flip p (net) |
+|---|---:|---:|---:|---:|---:|---:|
+| `P\|z1.0\|screen_best\|fitted_refit` | 4 | **1.3346** | 0.6362 | 0.9808 | 0.062 | 0.191 |
+| `P\|z1.0\|screen_best\|fitted_frozen` | 4 | **1.3212** | 0.6439 | 0.9808 | 0.065 | 0.190 |
+| `D\|z1.0\|drop_positive_roll` | 4 | **1.3346** | 0.6362 | 0.9808 | 0.063 | 0.191 |
+| `D\|z1.0\|drop_positioning_stretched` | 4 | **1.2183** | 0.2804 | 0.9808 | 0.064 | 0.378 |
+| `P\|z1.0\|screen_best\|unhedged` | 4 | **1.0712** | 0.5448 | 0.9808 | 0.063 | 0.186 |
+| `D\|z1.0\|drop_implied_rich` | 8 | **0.9240** | 0.3505 | 0.6935 | 0.012 | 0.199 |
+| `D\|z1.0\|drop_wide_to_fly` | 7 | **0.7820** | 0.1510 | 0.7414 | 0.039 | 0.354 |
+| `S\|z1.0\|screen_best_all5\|citi_2017` | 22 | **0.4429** | 0.2194 | 0.4182 | 0.023 | 0.161 |
+
+**8 of 23 clear gross; 0 of 23 clear net.** The gap between the two Sharpe
+columns is the declared cost model doing its job, and the gap between the two
+p-columns says the same thing: gross, five cells sit under p = 0.07 on their
+own sign-flip null (before any family adjustment for 23 trials); net, the best
+p in the whole block is 0.161.
+
+Two cautions the numbers demand. First, a per-hold Sharpe on **four**
+observations has enormous estimation error — its own null sd is 0.5, which is
+why the bar is 0.98. Second, three of the eight are drop-one *diagnostics*, and
+`drop_positive_roll` is byte-identical to the headline construction because the
+positive-roll condition passes on 99.9% of dates and so removes nothing. That
+leaves the real content: the `screen_best` z=1.0 family, at four trades.
 
 ---
 
@@ -327,10 +376,20 @@ request to "save a round trip".
 | **23 (declared)** | **0.9808** | **0.9066** |
 | for reference, block 4 at 298 trials / 5.626 y | 1.1812 | 1.2199 |
 
-The bar is computed against the **tradeable** span, not the 5.626 y panel span:
-a book that cannot open until its fair value and its z-scores exist has not been
-running for the whole panel. Even graded against a *single* trial — a bar of
-zero — the best engine-certified book in this block is +0.166.
+The annualised bar is computed against the **tradeable** span, not the 5.626 y
+panel span: a book that cannot open until its fair value and its z-scores exist
+has not been running for the whole panel. The per-hold bar in the table above
+is at `n_eff = 6`; each cell is graded at **its own** `n_eff`, which for the
+four-trade cells is 4 and gives a bar of 0.9808.
+
+**Which clock a number lives on is part of the number.** An annualised daily
+Sharpe and a per-hold Sharpe are not two estimates of one quantity, and each has
+its own null: `σ = 1/sqrt(span_years)` for the first, `1/sqrt(n_eff)` for the
+second. Grading either against the other's bar is the "which column is the claim
+true in" error, and it is why this block reports both and quotes neither alone.
+On the annualised clock the best engine-certified book is +0.166 against 0.907;
+on the per-hold clock the best *gross* book is +1.335 against 0.981 and the best
+*net* book is +0.644 against the same 0.981.
 
 **Standing caveat.** This is the fifth pass over the same CA panel (block 1
 `strat2`, block 3 `cavf`/PR #492, block 4 `gv`/PR #496, the reproduction/PR
@@ -342,6 +401,12 @@ same data, and no single-rule null bar can undo that.
 
 ## 8. What this block adds to the programme
 
+0. **The two clocks disagree and the disagreement is the result.** Eight of 23
+   cells clear their own per-hold null bar **gross** and none clears it **net**;
+   none clears the annualised bar at any cost level. The framework selects
+   trades that are better than chance and cannot pay for them, on a book too
+   sparse to run. A one-line verdict that quotes only one of those clocks is
+   wrong whichever one it picks.
 1. **Citi's published rule does not trade on SOFR**, and the reason is inside
    the rule rather than in the data: three of its five entry conditions are
    mutually antagonistic here, with the two that the note treats as saying the

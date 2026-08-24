@@ -14,11 +14,24 @@ Sources: Citi Research, *NA Rates Trade Idea*, 09 Feb 2017, Bikbov & Williams,
 
 ## Verdict
 
-**0 of 23 declared cells clear `E[max SR | null] = 0.9066` annualised**
-(23 trials, 4.682 y tradeable span). Best net Sharpe on the panel **+0.2020**;
-best on the **engine +0.1657**. The headline — the note's own trade at the
-note's own thresholds — opens **twice in 4.7 years** for a net of
-**−$1,189,942**.
+**A small-sample gross edge on the trades it selects, killed by its own
+execution costs, on a book too sparse to run.** The two clocks the
+pre-registration required say different things and both are true:
+
+| clock | gross | net of 1× costs |
+|---|---:|---:|
+| **annualised** (`E[max SR \| null]` = 0.9066 at 23 trials, 4.682 y) | 0 of 23 | 0 of 23 |
+| **per-hold** (each cell at its own `n_eff`) | **8 of 23** | **0 of 23** |
+
+Best annualised net Sharpe on the panel **+0.2020**, on the **engine +0.1657**.
+Best per-hold Sharpe **+1.3346 gross / +0.6362 net** against a bar of 0.9808 —
+on **four trades**. The best shared-sign-flip p on net per-episode P&L anywhere
+in the block is **0.161**. The headline — the note's own trade at the note's own
+thresholds — opens **twice in 4.7 years** for a net of **−$1,189,942**.
+
+Quoting only one of those clocks is wrong whichever one you pick, and the
+per-hold grading is recorded as amendment A1 because the grid runner initially
+computed only the annualised one.
 
 ## The finding that generalises
 

@@ -545,6 +545,69 @@ print("\nThe first is the March-2023 regional-bank week: the Blues CA was "
       "and is still open.")
 
 # %% [markdown]
+# ## The second clock — per-hold, not annualised
+#
+# The pre-registration requires `E[max SR | null]` on **both** clocks (§6, §11)
+# and the grid above grades only the annualised one. For a book that is flat on
+# 99% of its dates the two are not interchangeable:
+#
+# * the **annualised daily** Sharpe divides by the sd of a series that is mostly
+#   zeros, so it measures the equity curve an investor would actually hold, idle
+#   capital included. Four trades over 1,409 dates score low almost by
+#   construction;
+# * the **per-hold** Sharpe is `mean / sd` over the EPISODES and measures the
+#   quality of the trades that were taken. Its null sd is `1/sqrt(n_eff)`, which
+#   is exactly what `null_bars(..., n_eff=...)["emax_perhold"]` returns.
+#
+# Grading either against the other's bar is the "which column is the claim true
+# in" error. Amendment A1 of the pre-registration records that this grading was
+# computed after the grid ran; it adds no cells and no trials.
+
+# %%
+PH = pd.read_parquet(DATA / "p4_perhold.parquet")
+_pc = ["cell_id", "tier", "headline", "n", "n_eff", "trades_per_year",
+       "perhold_sharpe_gross", "perhold_sharpe_net", "bar_perhold",
+       "clears_perhold_gross", "clears_perhold_net", "p_signflip_gross",
+       "p_signflip_net"]
+print(PH[_pc].round(4).to_string(index=False))
+_cg = PH[PH["clears_perhold_gross"].astype("boolean").fillna(False).astype(bool)]
+_cn = PH[PH["clears_perhold_net"].astype("boolean").fillna(False).astype(bool)]
+print(f"\ncells clearing their own per-hold bar GROSS: {len(_cg)} of {len(PH)}")
+print(f"cells clearing it NET of 1x costs:          {len(_cn)} of {len(PH)}")
+print(f"best per-hold Sharpe gross {PH['perhold_sharpe_gross'].max():+.4f}, "
+      f"net {PH['perhold_sharpe_net'].max():+.4f}")
+print(f"best shared-sign-flip p on NET per-episode P&L: "
+      f"{PH['p_signflip_net'].min():.4f}")
+assert len(_cn) == 0, "a cell clears the per-hold bar NET -- the verdict changes"
+
+# %% [markdown]
+# ### Read the two clocks together
+#
+# Apart they say different things and both are true. The framework selects
+# trades that are better than chance *gross* and cannot pay for them; and the
+# book it produces is far too sparse to run whatever the trades are worth.
+
+# %%
+_join = STATS[["cell_id", "sharpe_0.0", "sharpe_1.0"]].merge(
+    PH[["cell_id", "n", "perhold_sharpe_gross", "perhold_sharpe_net",
+        "bar_perhold"]], on="cell_id", how="left")
+_join["bar_annualised"] = BAR
+_join["clears_annualised_gross"] = _join["sharpe_0.0"] > BAR
+_join["clears_perhold_gross"] = (_join["perhold_sharpe_gross"]
+                                 > _join["bar_perhold"])
+print(_join.round(4).to_string(index=False))
+print(f"\nannualised clock: {int(_join['clears_annualised_gross'].sum())} of "
+      f"{len(_join)} clear GROSS, "
+      f"{int((STATS['sharpe_1.0'] > BAR).sum())} clear NET")
+print(f"per-hold clock:   {int(_join['clears_perhold_gross'].fillna(False).sum())} "
+      f"of {len(_join)} clear GROSS, {len(_cn)} clear NET")
+print("\nThree of the eight gross-clearing cells are drop-one DIAGNOSTICS, and "
+      "`drop_positive_roll` is byte-identical to the headline construction "
+      "because that condition passes on 99.9% of dates and removes nothing. "
+      "What is left is the screen_best z=1.0 family, on four trades, whose own "
+      "per-hold null sd is 0.5 -- which is why its bar is 0.98.")
+
+# %% [markdown]
 # ## Engine certification
 #
 # The panel decides WHEN; the engine says what it was worth. Every reported book
@@ -763,23 +826,37 @@ print(f"* The reason is measurable and it is in the note's own conditions. "
       f"{LIFT.loc['wide_to_model', 'positioning_stretched']:.2f}) on SOFR, and "
       "the note's own positioning mechanism runs the other way here "
       f"(corr {CERTIN['cftc']['corr_vsmodel_vs_dealerz']:+.3f}).")
-print(f"* Widened to 1 sigma the framework trades 4-23 times and still fails. "
-      f"Best net Sharpe on the panel {_best_panel:+.4f}, best on the ENGINE "
-      f"{_best_eng:+.4f}, against E[max SR | null] = {BAR:.4f} at "
-      f"{CFG.n_declared} declared trials over {SPAN:.2f} tradeable years. "
-      f"{len(_alive)} of {len(STATS)} cells clear it.")
-print("* Costs are not the marginal issue but they are not nothing: break-even "
-      f"runs {STATS['breakeven_bp'].abs().median():.2f} bp of gross DV01 traded "
-      "at the median, against a declared 0.75 bp on the CA package alone.")
+print(f"* Widened to 1 sigma the framework trades 4-23 times. On the "
+      f"ANNUALISED clock it still fails: best net Sharpe on the panel "
+      f"{_best_panel:+.4f}, best on the ENGINE {_best_eng:+.4f}, against "
+      f"E[max SR | null] = {BAR:.4f} at {CFG.n_declared} declared trials over "
+      f"{SPAN:.2f} tradeable years, and {len(_alive)} of {len(STATS)} cells "
+      "clear it at any cost level.")
+print(f"* On the PER-HOLD clock it is not nothing GROSS and is nothing NET. "
+      f"{len(_cg)} of {len(PH)} cells clear their own per-hold bar gross -- "
+      f"best {PH['perhold_sharpe_gross'].max():+.4f} against a bar of "
+      f"{float(PH.loc[PH['perhold_sharpe_gross'].idxmax(), 'bar_perhold']):.4f} "
+      f"on four trades -- and {len(_cn)} of {len(PH)} clear it net of 1x costs. "
+      f"The best shared-sign-flip p on NET per-episode P&L in the whole block "
+      f"is {PH['p_signflip_net'].min():.3f}. So the framework selects trades "
+      "that are better than chance and cannot pay for them.")
+print(f"* Costs ARE the marginal issue on the per-hold clock -- they take "
+      f"{len(_cg)} cells to {len(_cn)} on their own. Break-even runs "
+      f"{STATS['breakeven_bp'].abs().median():.2f} bp of gross DV01 traded at "
+      "the median, against a declared 0.75 bp on the CA package alone before "
+      "the fly's three legs are charged at all.")
 print("* Citi's own fair value is not stable enough to hedge with on this "
       f"window: {int(FVT['b_sign_flips'].max())} sign reversals of b in "
       f"{int(FVT['n_refits'].max())} refits, and w2 pinned at a grid boundary "
       f"on {int(FVT['w2_at_a_boundary'].max())} of them.")
-print("* What the trade IS, when it works, is short-convexity carry. The "
-      "always-short control earns $14k-$149k per trade with the signal "
-      "switched off, and the declared carry share of the books that make money "
-      f"runs {STATS.loc[STATS['net_0.0'] > 0, 'carry_share'].median():.2f} at "
-      "the median.")
+_pos = STATS.loc[STATS["net_0.0"] > 0, "carry_share"]
+print(f"* What the trade IS, when it works, is short-convexity carry. The "
+      f"always-short control is profitable on "
+      f"{int((_raw['per_trade_usd'] > 0).sum())} of {len(_raw)} "
+      f"(cell, structure) pairs with the signal switched OFF, up to "
+      f"${_raw['per_trade_usd'].max():,.0f} per trade, and the declared carry "
+      f"share of the {len(_pos)} cells with a positive gross runs "
+      f"{_pos.median():.2f} at the median.")
 print("=" * 78)
 print("\nSTANDING CAVEAT")
 print("-" * 78)

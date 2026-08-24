@@ -500,7 +500,35 @@ a headline:
 
 ---
 
-## 11. Honesty requirements
+## 11. Amendment A1 (2026-08-24, after the grid ran, before the verdict) — the second clock was declared and initially not graded
+
+§6 and §11 require `E[max SR | null]` **on both clocks**. `_p4_run_grid.py`
+reported the annualised Sharpe of the daily P&L series and graded it against
+`emax_annualised`, which is a correct comparison — but it is one of the two,
+and the other one says something different. `_p4_perhold.py` adds it.
+
+For a book that is flat on 99% of its dates the two clocks are not
+interchangeable:
+
+* the **annualised daily** Sharpe divides by the sd of a series that is mostly
+  zeros, so it measures the equity curve an investor would actually hold, idle
+  capital included. Four trades over 1,409 dates score low almost by
+  construction;
+* the **per-hold** Sharpe is `mean / sd` over the EPISODES and measures the
+  quality of the trades that were taken. Its null sd is `1/sqrt(n_eff)`, which
+  is what `null_bars(..., n_eff=...)["emax_perhold"]` already returned.
+
+**This adds no cells and no trials** — it grades the 23 already-declared cells
+on the clock this document already required. It is recorded as a dated
+amendment because the grading was computed *after* the grid ran, and because it
+changes what the verdict says: **8 of 23 cells clear their own per-hold bar
+GROSS and 0 of 23 clear it NET**, against 0 of 23 on the annualised clock at
+either cost level. Both numbers are in the results doc and neither is quoted
+without the other.
+
+---
+
+## 12. Honesty requirements
 
 * Quote `E[max SR | null]` at **23** trials on both clocks with the honest
   `n_eff`, and state the cumulative-search caveat.
