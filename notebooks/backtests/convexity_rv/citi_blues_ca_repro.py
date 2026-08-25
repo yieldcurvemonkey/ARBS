@@ -79,6 +79,7 @@ pio.renderers.default = "plotly_mimetype+notebook_connected"
 pd.set_option("display.width", 220)
 pd.set_option("display.max_columns", 60)
 
+from RVUtils.ConvexityRV import citi_fv as FV
 from RVUtils.ConvexityRV import gv_universe as U
 from RVUtils.ConvexityRV.holee import pack_ca_bp, pack_time_weight
 
@@ -224,11 +225,9 @@ assert abs(_net) > 0.05, "a 3-rate regression does not constrain the weights"
 # reading is wrong and everything downstream is fitted to a fiction.
 
 # %%
-def annuity(rate_pct: float, years: float) -> float:
-    """Flat-curve annual annuity factor; DV01 per $1mm is `annuity * 100`."""
-    r = rate_pct / 100.0
-    n = int(round(years))
-    return (1.0 - (1.0 + r) ** (-n)) / r
+#: Promoted to ``RVUtils/ConvexityRV/citi_fv.py`` so the backtest and this
+#: reproduction cannot drift.  The notebook keeps the name.
+annuity = FV.annuity
 
 
 _R = 2.0  # a flat ~2% USD curve, which is where 2017 sat
@@ -632,64 +631,27 @@ print("The three rates are nearly collinear on this window, so the individual "
       "number. That is what the `free` path below shows.")
 
 
-#: Fly START conventions. Citi's Figure 6 uses SPOT 2y/5y/10y; the CA is a
-#: FORWARD object, so spot is the one start guaranteed not to sit where the risk
-#: is. IMM_1 is the brief's own example; IMM_13 starts at the Blues pack's own
-#: front contract.
-SPOT_COLS = ("r2y_pct", "r5y_pct", "r10y_pct")
-FLY_STARTS = {
-    "spot (Citi's own)": SPOT_COLS,
-    "IMM_1": ("imm1_2y_pct", "imm1_5y_pct", "imm1_10y_pct"),
-    "IMM_2": ("imm2_2y_pct", "imm2_5y_pct", "imm2_10y_pct"),
-    "IMM_5 (Reds front)": ("imm5_2y_pct", "imm5_5y_pct", "imm5_10y_pct"),
-    "IMM_9 (Greens front)": ("imm9_2y_pct", "imm9_5y_pct", "imm9_10y_pct"),
-    "IMM_13 (Blues front)": ("imm13_2y_pct", "imm13_5y_pct", "imm13_10y_pct"),
-    "IMM_17 (Golds front)": ("imm17_2y_pct", "imm17_5y_pct", "imm17_10y_pct"),
-    "1y fwd (CM)": ("cm1y_2y_pct", "cm1y_5y_pct", "cm1y_10y_pct"),
-    "2y fwd (CM)": ("cm2y_2y_pct", "cm2y_5y_pct", "cm2y_10y_pct"),
-    "3y fwd (CM)": ("cm3y_2y_pct", "cm3y_5y_pct", "cm3y_10y_pct"),
-}
+#: Fly START conventions, the combination, and the three fits all now live in
+#: ``RVUtils/ConvexityRV/citi_fv.py``.  A backtest cannot import from a
+#: notebook, so the machinery was promoted to a module with its own test suite
+#: and its own mutation harness; this notebook imports it so the two can never
+#: drift.  ``_p4_tieout_repro.py`` pins the module against the numbers this
+#: notebook printed when the machinery still lived in these cells.
+SPOT_COLS = FV.SPOT_COLS
+FLY_STARTS = FV.FLY_STARTS
 
 
 def _combo(p: pd.DataFrame, w2: float, w10: float,
            cols: Tuple[str, str, str] = SPOT_COLS) -> pd.Series:
-    return -w2 * p[cols[0]] + p[cols[1]] - w10 * p[cols[2]]
+    return FV.fly_combo(p, w2, w10, cols)
 
 
 def _fit_on(y: pd.Series, p: pd.DataFrame, kind: str,
             cols: Tuple[str, str, str] = SPOT_COLS) -> dict:
     """One fit on one window. `kind` in {'free', 'fly', 'citi'}."""
-    if kind == "free":
-        j = pd.concat([y.rename("y"), p[list(cols)]], axis=1).dropna()
-        if len(j) < 60:
-            return {}
-        X = np.column_stack([np.ones(len(j)), j[cols[0]], j[cols[1]],
-                             j[cols[2]]])
-        c, *_ = np.linalg.lstsq(X, j["y"].to_numpy(), rcond=None)
-        a, b2, b5, b10 = c
-        if abs(b5) < 1e-9:
-            return {}
-        w2, w10, b = -b2 / b5, -b10 / b5, b5
-        e = j["y"].to_numpy() - X @ c
-        r2 = 1 - e.var(ddof=0) / j["y"].to_numpy().var(ddof=0)
-        return {"a": float(a), "b": float(b), "w2": float(w2),
-                "w10": float(w10), "r2": float(r2), "n": len(j)}
-    grid = ([(CFG.fig6_w2, CFG.fig6_w10)] if kind == "citi"
-            else [(w, 1.0 - w) for w in np.linspace(0.05, 0.95, 91)])
-    best = {}
-    for w2, w10 in grid:
-        x = _combo(p, w2, w10, cols)
-        j = pd.concat([y.rename("y"), x.rename("x")], axis=1).dropna()
-        if len(j) < 60:
-            continue
-        X = np.column_stack([np.ones(len(j)), j["x"]])
-        c, *_ = np.linalg.lstsq(X, j["y"].to_numpy(), rcond=None)
-        e = j["y"].to_numpy() - X @ c
-        r2 = 1 - e.var(ddof=0) / j["y"].to_numpy().var(ddof=0)
-        if not best or r2 > best["r2"]:
-            best = {"a": float(c[0]), "b": float(c[1]), "w2": float(w2),
-                    "w10": float(w10), "r2": float(r2), "n": len(j)}
-    return best
+    fit = FV.fit_fair_value(y, p, kind, cols, fixed_w2=CFG.fig6_w2,
+                            fixed_w10=CFG.fig6_w10)
+    return fit.as_dict() if fit is not None else {}
 
 
 IMM_ROLLS = U.ca_roll_dates(P.index)
@@ -728,29 +690,11 @@ def imm_refit(y: pd.Series, p: pd.DataFrame, kind: str, window_bd: int,
     """Refit at every quarterly IMM roll; apply until the next one.
 
     Causal by construction: the parameters in force on date t were estimated on
-    marks ending strictly before the roll that put them in force.
+    marks ending strictly before the roll that put them in force.  Promoted to
+    ``citi_fv.imm_refit``; this is the same call.
     """
-    rolls = [d for d in U.ca_roll_dates(p.index)]
-    rows, fitted = [], pd.Series(np.nan, index=p.index)
-    for i, r in enumerate(rolls):
-        pos = int(p.index.get_loc(r))
-        if pos < 60:
-            continue
-        hist = p.iloc[:pos].tail(window_bd)
-        fit = _fit_on(y.loc[hist.index], hist, kind, cols)
-        if not fit:
-            continue
-        if i + 1 < len(rolls):
-            mask = (p.index >= r) & (p.index < rolls[i + 1])
-        else:
-            mask = p.index >= r
-        if not mask.any():
-            continue
-        x = _combo(p.loc[mask], fit["w2"], fit["w10"], cols)
-        fitted.loc[mask] = fit["a"] + fit["b"] * x
-        rows.append({"fit_asof": p.index[pos - 1], "in_force_from": r,
-                     "in_force_to": p.index[mask][-1], **fit})
-    return pd.DataFrame(rows).set_index("fit_asof"), fitted
+    return FV.imm_refit(y, p, kind, window_bd, cols, fixed_w2=CFG.fig6_w2,
+                        fixed_w10=CFG.fig6_w10)
 
 
 # %% [markdown]
