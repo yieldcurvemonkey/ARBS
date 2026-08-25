@@ -368,15 +368,76 @@ def test_band_for_tag_knows_the_par_family():
 
 def test_a_vol_series_is_refused_under_a_par_tag(tmp_path: pathlib.Path):
     """The blunt check that would have caught this on day one, at the WRITE
-    boundary rather than at every read site."""
+    boundary rather than at every read site.
+
+    The series is the shape the real poison had - a long run of vol with the odd
+    genuine rate interleaved - rather than two rows. A two-row example would now
+    fall under MIN_BAD_ROWS, which is correct: two rows are not enough evidence
+    that a whole series is foreign.
+    """
     cache = CitiVeloTagCache(base_dir=tmp_path)
-    poisoned = pd.Series(
-        [102.0, 4.24], index=pd.DatetimeIndex(["2023-06-01", "2026-08-04"])
-    )
+    idx = pd.bdate_range("2023-06-01", periods=200)
+    values = [102.0 + (i % 40) for i in range(200)]
+    values[7] = 4.24          # a surviving real rate, as on disk
+    poisoned = pd.Series(values, index=idx)
+
     with pytest.raises(TagSanityError) as exc:
         cache.write(PAR_2Y, "DAILY", poisoned)
     assert "102" in str(exc.value)
     assert not cache.path(PAR_2Y, "DAILY").is_file()
+
+
+def test_one_bad_vendor_tick_does_not_cost_a_tag_its_whole_history(
+    tmp_path: pathlib.Path, caplog
+):
+    """THE REGRESSION FROM DAY TWO, and it is a real number.
+
+    Citi serves ``RATES.BOND.US9128284X55.YIELD`` as -6.5211 on 2023-08-30. The
+    repair deleted it; the next nightly fetched it back BIT-IDENTICAL, which is
+    what proves it is a vendor print rather than an artefact of this defect.
+
+    A gate that raised on it would refuse the whole 1,252-row series for ever -
+    one bad tick costing a tag its entire history. Refusing a wrong SERIES is the
+    job; refusing a wrong ROW is a denial of service against the good rows.
+    """
+    tag = "RATES.BOND.US9128284X55.YIELD"
+    idx = pd.bdate_range("2023-01-02", periods=1252)
+    values = [4.0] * len(idx)
+    values[170] = -6.5211
+    series = pd.Series(values, index=idx)
+
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    with caplog.at_level("WARNING"):
+        merged = cache.write(tag, "DAILY", series)
+
+    assert len(merged) == 1252, "the good rows were refused along with the tick"
+    assert cache.path(tag, "DAILY").is_file()
+    assert any("-6.5211" in r.getMessage() for r in caplog.records), (
+        "the tick was swallowed instead of logged"
+    )
+
+
+def test_a_series_that_is_mostly_foreign_is_still_refused(tmp_path: pathlib.Path):
+    """The other side of the threshold. The SMALLEST real poison event in this
+    cache was 2,687 of 41,415 MI01 rows - 6.5%, six times the 1% gate."""
+    tag = "RATES.BOND.US91282CHT18.YIELD"
+    idx = pd.bdate_range("2023-01-02", periods=1000)
+    values = [4.0] * len(idx)
+    for i in range(0, 1000, 15):          # 67 rows, 6.7%
+        values[i] = 76.5078
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    with pytest.raises(TagSanityError):
+        cache.write(tag, "DAILY", pd.Series(values, index=idx))
+    assert not cache.path(tag, "DAILY").is_file()
+
+
+def test_a_short_series_is_not_condemned_by_a_single_tick(tmp_path: pathlib.Path):
+    """MIN_BAD_ROWS exists so 1 of 3 rows - 33% - is not read as a foreign series."""
+    cache = CitiVeloTagCache(base_dir=tmp_path)
+    s = pd.Series([4.0, 99.0, 4.1],
+                  index=pd.DatetimeIndex(["2026-08-03", "2026-08-04", "2026-08-05"]))
+    merged = cache.write("RATES.BOND.USTEST.YIELD", "DAILY", s)
+    assert len(merged) == 3
 
 
 def test_a_real_par_series_writes_normally(tmp_path: pathlib.Path):

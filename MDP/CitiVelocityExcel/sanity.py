@@ -35,11 +35,14 @@ else; it is read at CALL time so a test can set and unset it.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Optional, Tuple
 
 import pandas as pd
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "TagSanityError",
@@ -138,8 +141,36 @@ def implausible_rows(tag: str, series: pd.Series) -> pd.Series:
     return series[mask.fillna(False)]
 
 
+#: How much of a series must be out of band before the write is refused.
+#:
+#: MEASURED, and the two populations do not overlap. A poisoned series is a
+#: DIFFERENT series: the smallest poison event in this cache was 2,687 of 41,415
+#: MI01 bond rows (6.5%) and the largest was 100%. A bad vendor tick is one row:
+#: the worst observed was 1 of 1,252 (0.08%). 1% sits two orders of magnitude
+#: from the ticks and six times below the smallest poison.
+#:
+#: Why this matters, learned the hard way: Citi really does serve
+#: ``RATES.BOND.US9128284X55.YIELD`` as -6.5211 on 2023-08-30. That row was
+#: deleted by the repair and came back BIT-IDENTICAL on the next fetch, which
+#: proves it is a vendor print and not an artefact. A gate that raised on it
+#: would refuse the whole 1,252-row series for ever, and one bad tick would cost
+#: a tag its entire history. Refusing a wrong SERIES is the job; refusing a wrong
+#: ROW is a denial of service against the good rows around it.
+MIN_BAD_FRACTION = 0.01
+
+#: ...but never fewer than this many rows, so a short series cannot be condemned
+#: by a single tick that happens to exceed 1% of three rows.
+MIN_BAD_ROWS = 3
+
+
 def assert_plausible(tag: str, series: pd.Series) -> None:
     """Raise :class:`TagSanityError` when ``series`` cannot belong to ``tag``.
+
+    Refuses only when enough of the series is out of band to mean it is a
+    DIFFERENT series (see :data:`MIN_BAD_FRACTION`). A handful of impossible rows
+    in an otherwise sane series is a bad vendor print: it is logged, loudly and
+    by date, and the write proceeds. The repair tool removes those separately,
+    where a human can see what was dropped.
 
     The message names the family, the band, how many rows broke it and the first
     few offending dates, because the cause is always "these values came from a
@@ -151,6 +182,16 @@ def assert_plausible(tag: str, series: pd.Series) -> None:
     if bad.empty:
         return
     lo, hi = band_for_tag(tag)  # type: ignore[misc]
+    if len(bad) < max(MIN_BAD_ROWS, MIN_BAD_FRACTION * len(series)):
+        _logger.warning(
+            "%s: %d of %d row(s) lie outside [%s, %s] - %s. Too few to mean the "
+            "whole series is foreign, so it is being banked; these look like bad "
+            "vendor prints. scripts/citivelo_tagcache_repair.py removes them.",
+            tag, len(bad), len(series), lo, hi,
+            ", ".join(f"{getattr(ts, 'date', lambda: ts)()}={float(v):.6g}"
+                      for ts, v in list(bad.items())[:5]),
+        )
+        return
     head = ", ".join(
         f"{ts.date() if hasattr(ts, 'date') else ts}={float(v):.6g}"
         for ts, v in list(bad.items())[:5]
