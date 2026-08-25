@@ -519,7 +519,7 @@ notebooks/backtests/convexity_rv/
   _p4_perhold.py            the second clock (amendment A1)
   _p4_engine.py             engine certification, gross and net  (~3 min)
   _p4_controls.py           the control battery
-  _p4_mutate_citi.py        41-mutant harness
+  _p4_mutate_citi.py        40-mutant harness
   citi_framework_backtest.py / .ipynb   executed, 0 unrun / 0 errors
 ```
 
