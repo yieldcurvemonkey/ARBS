@@ -50,6 +50,7 @@ import pandas as pd
 import global_hawk_dove_common as G
 import global_hawk_dove_grid as GRID
 import fomc_extras as FX
+import fed_signal_overlay as SIG
 
 
 # ===========================================================================
@@ -113,6 +114,27 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # HOW MUCH ------------------------------------------------------------
     "sizing": "equal",               # equal | conviction  (x |bucket|)
     "cost_bp": 0.0,                  # round trip, per unit of gross risk
+
+    # WHAT THE DATA SAID FIRST ---------------------------------------------
+    # A weekly macro state, joined to each event at the last W-FRI strictly
+    # before the position OPENS, that says which way the committee was already
+    # expected to lean. ``fed_signal_overlay`` builds it; this block only says
+    # how to read it.
+    #
+    #   mode      off | flip | gate | size
+    #   state     data   -- the surprise composite, L weeks back
+    #             detach -- Fedspeak minus what the data implies
+    #   when      agree    -- act on speeches that say what the data implied
+    #             disagree -- act on the ones that depart from it
+    #
+    # ``off`` is a perfect no-op and is the default, so every config written
+    # before this block existed reproduces exactly. ``flip`` leaves the BOOK
+    # untouched -- same events, same entries, same exits -- and changes only the
+    # direction of the selected subset, which makes it a paired comparison
+    # against the baseline. ``gate`` removes events and therefore runs before
+    # the one-position-at-a-time rule, so it trades a DIFFERENT book and may
+    # only be compared against a baseline carrying the same date filters.
+    "signal": dict(SIG.DEFAULT_SIGNAL),
 }
 
 #: Every direction rule a config may name. A typo must raise rather than fall
@@ -185,11 +207,18 @@ def _meetings() -> List[datetime.date]:
     return _ROLE_CACHE["m"]
 
 
-def event_attrs(ev: dict) -> dict:
-    """The per-event facts the filters read. All known at trade time."""
+def event_attrs(ev: dict, *, state: Optional[pd.Series] = None,
+                sig: Optional[Dict[str, Any]] = None) -> dict:
+    """The per-event facts the filters read. All known at trade time.
+
+    ``state``/``sig`` are keyword-with-default because this function has
+    single-positional-argument callers outside this module
+    (``_make_nonvoter_fade_notebook.py``, ``_nonvoter_fade_report.py``). Called
+    without them it returns exactly what it always returned.
+    """
     d = ev["speech_ts"].date()
     sym = ev["symbol"]
-    return {
+    a = {
         "date": d,
         "role": FX.role_of(ev["speaker"], d),
         "is_voter": FX.is_voter(ev["speaker"], d),
@@ -197,10 +226,19 @@ def event_attrs(ev: dict) -> dict:
         "era": "GE" if sym.startswith("GE") else "SR3",
         "weekday": d.weekday(),
     }
+    if state is not None and sig is not None:
+        a.update(SIG.attach(ev, state, sig))
+    return a
 
 
-def apply_filters(events: List[dict], f: Dict[str, Any]) -> tuple:
-    """-> (kept, {reason: n}). Reasons are counted, never swallowed."""
+def apply_filters(events: List[dict], f: Dict[str, Any], *,
+                  state: Optional[pd.Series] = None,
+                  sig: Optional[Dict[str, Any]] = None) -> tuple:
+    """-> (kept, {reason: n}). Reasons are counted, never swallowed.
+
+    ``state``/``sig`` are keyword-with-default: five call sites outside this
+    module pass two positional arguments and must keep working.
+    """
     from collections import defaultdict
     dropped: Dict[str, int] = defaultdict(int)
     kept: List[dict] = []
@@ -208,7 +246,7 @@ def apply_filters(events: List[dict], f: Dict[str, Any]) -> tuple:
     end = pd.Timestamp(f["end"]).date() if f.get("end") else None
 
     for ev in events:
-        a = event_attrs(ev)
+        a = event_attrs(ev, state=state, sig=sig)
         if start and a["date"] < start:
             dropped["before_start"] += 1; continue
         if end and a["date"] > end:
@@ -250,6 +288,17 @@ def apply_filters(events: List[dict], f: Dict[str, Any]) -> tuple:
 
         if f.get("weekdays") is not None and a["weekday"] not in f["weekdays"]:
             dropped["weekday"] += 1; continue
+
+        # The macro-state gate goes LAST so that it is the most specific reason
+        # an event can be dropped for, and so the funnel attributes a drop to it
+        # only when nothing coarser already applied. It runs here, before the
+        # one-position-at-a-time rule, which is what makes a gated book a
+        # different book rather than a subset of the ungated one.
+        if sig is not None and sig.get("mode") == "gate":
+            if a.get("state_missing", True):
+                dropped["no_macro_state"] += 1; continue
+            if not SIG.keeps(a, int(ev["bucket"]), sig):
+                dropped["macro_state_says_stand_aside"] += 1; continue
 
         e = dict(ev)
         e["_attrs"] = a
@@ -340,7 +389,17 @@ def run_config(config: Dict[str, Any], raw_events: List[dict], mdp,
     if flip_rule not in FLIP_RULES:          # up front, not per trade
         raise ValueError(f"unknown flip rule {flip_rule!r}; use one of {FLIP_RULES}")
 
-    filtered, drops = apply_filters(raw_events, cf["filters"])
+    # The macro state. Loaded here, once, and keyed by everything that changes
+    # the series -- never memoized in ``_ROLE_CACHE``, which is config-blind and
+    # would hand a second config the first one's data for the whole process.
+    sig = SIG.normalise(cf.get("signal"))
+    state = None
+    state_prov: Dict[str, Any] = {}
+    if sig["mode"] != "off":
+        state, state_prov = SIG.build_state(sig)   # raises RuntimeError, which
+                                                   # ``compare`` catches
+
+    filtered, drops = apply_filters(raw_events, cf["filters"], state=state, sig=sig)
     timed, tdrops = retime(filtered, cfg, t["entry_offset_min"], t["exit_offset_min"],
                            t.get("retime_synthetic", False))
 
@@ -371,7 +430,9 @@ def run_config(config: Dict[str, Any], raw_events: List[dict], mdp,
               "filter_drops": drops, "after_retime_overlap": len(timed),
               "retime_drops": tdrops, "gate_reasons": gate_reasons,
               "coverage": {k: v for k, v in cov.items() if k != "missing"},
-              "n_missing_bars": len(cov["missing"])}
+              "n_missing_bars": len(cov["missing"]),
+              "signal": {**{k: v for k, v in sig.items()},
+                         "provenance": state_prov}}
 
     if not frames:
         return Result(cf, st, pd.DataFrame(), funnel)
@@ -397,10 +458,27 @@ def run_config(config: Dict[str, Any], raw_events: List[dict], mdp,
         # a hawk is +1, so side_rate = -side and the structure's own sign never
         # has to be guessed. `fl` then trades that reading backwards where the
         # config says to fade it.
-        a = ev.get("_attrs") or event_attrs(ev)
+        # ``or`` here would recompute attrs on an empty-but-present dict and
+        # silently drop the macro state, producing an UNCONDITIONED book that is
+        # indistinguishable from a conditioned one that found no edge. ``is
+        # None`` cannot do that, and the assertion below closes it outright.
+        a = ev.get("_attrs")
+        if a is None:
+            a = event_attrs(ev, state=state, sig=sig)
+        if sig["mode"] != "off" and "state_sign" not in a:
+            raise RuntimeError(
+                f"event {ev.get('tag')} reached pricing without a macro state "
+                f"while signal mode is {sig['mode']!r} -- the book would be "
+                f"silently unconditioned")
         fl = flip_sign(a, flip_rule)
+        # The macro rule composes MULTIPLICATIVELY with the voting-status flip,
+        # so a config can fade the non-voters and fade the anticipatable
+        # speeches at once and each rule keeps its own meaning.
+        sfl = SIG.signal_sign(a, int(ev["bucket"]), sig)
+        fl = fl * sfl
         unit = fl * (-ev["side"]) * dr / gross
         size = abs(ev["bucket"]) if sized else 1.0
+        size = size * SIG.signal_size(a, int(ev["bucket"]), sig)
         rows.append({
             "tag": tag, "bank": ev["bank"], "ccy": ev["ccy"], "speaker": ev["speaker"],
             "role": a["role"], "is_voter": a["is_voter"], "era": a["era"],
@@ -408,6 +486,12 @@ def run_config(config: Dict[str, Any], raw_events: List[dict], mdp,
             "timestamp_source": ev.get("timestamp_source", "forexfactory"),
             "symbol": ev["symbol"], "structure": st.name,
             "bucket": ev["bucket"], "abs_bucket": abs(ev["bucket"]), "flip": fl,
+            "voter_flip": flip_sign(a, flip_rule), "signal_flip": sfl,
+            "signal_size": SIG.signal_size(a, int(ev["bucket"]), sig),
+            "state_value": a.get("state_value", np.nan),
+            "state_sign": a.get("state_sign", 0),
+            "state_week": a.get("state_week"),
+            "agrees": SIG.agrees(a, int(ev["bucket"])),
             "opened_at": pd.Timestamp(ev["entry_ts"]),
             "closed_at": pd.Timestamp(ev["exit_ts"]),
             "d_rate_bp": dr,
