@@ -164,6 +164,21 @@ MUTATIONS = [
              '''        for _kind in ("holee", "hw1f_sofr"):''',
              '''        for _kind in ("holee",):''',
              "a _MODEL2 request returns its frames"),
+    Mutation("injected-provider-shares-the-builtin-key",
+             '''        _injected = vol_provider is not None
+        if _injected:
+            _named = str(vol_source) != _CVX_BUILTIN_VOL_SOURCE
+            vol_source = f"injected:{vol_source}"''',
+             '''        _injected = vol_provider is not None
+        if _injected:
+            _named = str(vol_source) != _CVX_BUILTIN_VOL_SOURCE''',
+             "SHIPPED ONCE: a provider run overwrote the built-in model's rows"),
+    Mutation("unnamed-provider-is-persisted-anyway",
+             '''                    if _injected and not _named:
+                        continue''',
+             '''                    if False:
+                        continue''',
+             "two unnamed providers would share one key"),
     Mutation("mean-reversion-knob-not-plumbed",
              '''                mean_reversion=model2_mean_reversion,
                 payoff=model2_payoff,''',

@@ -3,8 +3,9 @@
 **Status:** shipped. `IRSwapsTB.sfr_cvx_adj(["BLUES_MODEL2", ...])`.
 **Code:** `RVUtils/ConvexityRV/hw1f_sofr.py`, wired in `TB/IRSwapsTB.py`.
 **Evidence:** `notebooks/backtests/convexity_rv/_hl2_verify.py` (7 checks, live
-data), `_hl2_mutate.py` (23/23 killed), `tests/test_convexity_rv_hw1f_sofr.py`
-(the arithmetic), `tests/test_irswaps_tb_model2.py` (the wiring).
+data), `_hl2_mutate.py` (25/25 killed), `_hl2_repair_cache.py` (the store
+repair, §3), `tests/test_convexity_rv_hw1f_sofr.py` (the arithmetic),
+`tests/test_irswaps_tb_model2.py` (the wiring).
 
 ```python
 df = tb.sfr_cvx_adj(["BLUES", "BLUES_MODEL", "BLUES_MODEL2"], start, end)
@@ -142,57 +143,98 @@ unmodified tree (max |diff| **0.000000000000**, 26 columns × 63 dates); a
 `_MODEL2`-only request makes **0** BarChart calls; the three cache entries for
 one structure stay three and do not cross-write.
 
-Mutation harness `_hl2_mutate.py`: **23 anchors, 23/23 killed**. Two survivors
+Mutation harness `_hl2_mutate.py`: **25 anchors, 25/25 killed**. Three survivors
 were found and fixed before merge — a wrong `cvx_model` provenance string (the
 other keys already separated the fingerprints, so nothing collided; the row
 would just have been *labelled* Ho-Lee), and `T2` hard-coded at `T1 + 0.25`
 (every test derived its expectation from the same helper, so the expectation
 moved with the mutant; the fix recomputes IMM dates from rateslib and asserts
-the accrual is 91 or 92 days, never 91.25).
+the accrual is 91 or 92 days, never 91.25). The third is instructive: removing
+the `injected:` namespace survived at first, because the *write* is already
+blocked for an unnamed provider — the damage is on the **read**, where a warm
+built-in cache is served back and the provider is never called. The test that
+kills it plants built-in rows first.
 
-**One defect was found by the model itself, not by a test.** The vol mapping
-originally read `vol·sqrt(T/V)/B(a,tail)`, missing the `·tail`. At the 1Y tail
-that factor is 1, so every test passed; at a 3M tail it is a **16× error in the
-adjustment**, and it left the mapping discontinuous at `a = 0`. It surfaced in a
-sensitivity probe across tails, and the regression test is continuity into
-`a → 0` at a *non-unit* tail — which no 1Y-tail test can express.
+**Two defects were found by measurement, not by a test.**
+
+*The vol mapping* originally read `vol·sqrt(T/V)/B(a,tail)`, missing the `·tail`.
+At the 1Y tail that factor is 1, so every test passed; at a 3M tail it is a
+**16× error in the adjustment**, and it left the mapping discontinuous at
+`a = 0`. It surfaced in a sensitivity probe across tails, and the regression
+test is continuity into `a → 0` at a *non-unit* tail — which no 1Y-tail test can
+express.
+
+*An injected volatility provider used to write under the built-in key.*
+`model_vol_provider=` did not appear in `value_kwargs`, so its rows landed under
+`cvx_vol_source="swaption_cube"` — the built-in model's own fingerprint — and
+`ignore_cache=True` recomputes the **read** while still performing the
+**write**. Both verification scripts did exactly that. Measured damage, still in
+the store days later:
+
+| column | stored | true | max abs |
+|---|---|---|---|
+| `BLUES_MODEL` | 5.9057 | 5.9549 | 0.202 bp |
+| `GOLDS_MODEL` | 9.5646 | 9.6369 | 0.232 bp |
+| `GREENS_MODEL` | 3.0598 | 3.0895 | 0.118 bp |
+| `REDS_MODEL` | 1.1450 | 1.1516 | 0.051 bp |
+| `WHITES_MODEL` | 0.1619 | 0.1419 | 0.038 bp |
+| `BLUES_MODEL2` | 6.5636 | 6.9853 | (self-healed mid-run) |
+
+Five of those were written by PR #504's own verification, which prices five
+packs with node-**snapped** vols; the sixth by this branch's check 2, which
+prices Blues at a fixed 95bp. The first draft of the table in §4 was reading
+them back.
+
+The fix is the same rule this repository keeps paying for — **the cache key must
+move with the inputs, and a provider is an input**. An injected provider is now
+served under `injected:<model_vol_source>`, so it can neither read nor overwrite
+the built-in rows, and an *unnamed* one is computed but never stored, because
+two different unnamed providers would otherwise share one key. `ignore_cache`
+still writes: with an honest key a recompute *should* refresh the row. The guard
+prevents recurrence and does not heal what is already stored — the built-in key
+did not change — so `_hl2_repair_cache.py` recomputes those rows under
+`ignore_cache=True` and asserts cached == recomputed afterwards (residual
+**0.000000000000**). It has been run against this machine's store.
 
 ---
 
 ## 4. What it prices, measured
 
-63 dates, 2025-06-02 → 2025-08-29, `a = 3%`, ATM 1Y-tail swaption vols. Mean bp.
+63 dates, 2025-06-02 → 2025-08-29, `a = 3%`, ATM 1Y-tail swaption vols, on a
+repaired store (§3). Mean bp.
 
 | label | observed | `_MODEL` | `_MODEL2` | obs − `_MODEL` | obs − `_MODEL2` |
 |---|---|---|---|---|---|
-| WHITES | 0.103 | 0.162 | 0.288 | −0.059 | −0.185 |
-| REDS | −0.627 | 1.145 | 1.578 | −1.772 | −2.205 |
-| GREENS | 2.831 | 3.060 | 3.824 | −0.229 | −0.993 |
-| BLUES | 6.786 | 5.906 | 6.564 | **+0.880** | **+0.222** |
-| GOLDS | 9.569 | 9.565 | 10.982 | **+0.004** | **−1.414** |
+| WHITES | 0.103 | 0.142 | 0.288 | −0.039 | −0.185 |
+| REDS | −0.627 | 1.152 | 1.578 | −1.779 | −2.205 |
+| GREENS | 2.831 | 3.090 | 3.824 | −0.258 | −0.993 |
+| BLUES | 6.786 | 5.955 | 6.985 | **+0.831** | **−0.199** |
+| GOLDS | 9.569 | 9.637 | 10.982 | −0.068 | −1.414 |
 | BUNDLE5Y | 3.851 | 4.083 | 4.732 | −0.233 | −0.881 |
 | SFR20 | 11.253 | 11.194 | 12.665 | +0.058 | −1.413 |
 
-**`_MODEL2` is the right model for the payoff and it is not uniformly the better
-fit.** It closes the Blues gap almost exactly (+0.880 → +0.222; at `a = 0` the
-compounded level is 6.811 against an observed 6.786, a 0.03bp miss) and it opens
-one on Golds (+0.004 → −1.414). Across the five colour packs the mean absolute
-gap goes **0.589 → 1.004 bp**.
+**`_MODEL2` is the right model for the payoff and it is not the better fit.**
+Every pack sits **below** it — the sign is uniform, −0.19 on Whites widening to
+−1.41 on Golds — and across the five colour packs the mean absolute gap goes
+**0.595 → 0.999 bp**. Ho-Lee's `T1²` weighting is closest on Golds (−0.068) and
+worst on Blues (+0.831); the compounded model is the reverse.
 
-That is a finding about the market, not a defect: **the observed convexity term
-structure is flatter across the strip than the ATM swaption curve implies.**
-Citi's `T1²` weighting under-weights the deep end by roughly the amount the
-market is cheap there, so two errors partly cancel in their screen — which is
-worth knowing before treating a `VsModel` print as richness.
+Two things follow, and only the first is a claim.
 
-The obvious next step, which this model now makes possible and which is **not**
-done here: calibrate a single `(a, σ)` to the ATM term structure and price the
-whole strip with it, instead of recalibrating per contract. At a fixed
-short-rate vol, `a = 3%` damps Golds 13% — close to the gap above — so the flat
-observed shape may be mean reversion that per-expiry recalibration erases. That
-is a fit worth running and a claim worth testing; it is not a claim made here.
-
----
+1. **The market prices SR3 convexity cheaper than an ATM-calibrated Hull-White
+   model on the correct payoff, and increasingly so with maturity.** That is
+   what the uniform negative column says. Citi's `T1²` weighting under-weights
+   the deep end by roughly the amount the market is cheap there, so two errors
+   partly cancel in their screen — worth knowing before reading a `VsModel`
+   print as richness.
+2. At `a = 0` the compounded model prices Blues at **6.811** against an observed
+   **6.786** — a 0.03bp miss — while over-pricing Golds by 1.08bp. So the
+   observed term structure is *flatter in maturity* than the ATM swaption curve
+   implies. The obvious next test, which this model makes possible and which is
+   **not** done here: fit a single `(a, σ)` to the ATM term structure and price
+   the whole strip with it, instead of recalibrating per contract. At a fixed
+   short-rate vol `a = 3%` damps Golds 13%, which is the order of the gap. That
+   is a fit worth running, not a conclusion.
 
 ## 5. Deliberate omissions
 

@@ -354,7 +354,35 @@ def test_the_payoff_knob_reaches_the_model():
 # ---------------------------------------------------------------------------
 # 5. cache behaviour and mixed requests
 # ---------------------------------------------------------------------------
-def test_the_second_call_is_served_from_cache_and_asks_the_provider_nothing():
+def test_a_NAMED_provider_is_cached_and_the_second_call_asks_it_nothing():
+    calls = {"n": 0}
+
+    def _p(_as_of, _t):
+        calls["n"] += 1
+        return SIGMA
+
+    tb = _tb()
+    kw = dict(model_vol_provider=_p, model_vol_source="test-fixed")
+    first = tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, **kw)
+    after_first = calls["n"]
+    assert after_first > 0
+    second = tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, **kw)
+    assert calls["n"] == after_first
+    pd.testing.assert_frame_equal(first, second)
+
+    third = tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, ignore_cache=True, **kw)
+    assert calls["n"] > after_first
+    pd.testing.assert_frame_equal(first, third)
+
+
+def test_an_unnamed_injected_provider_is_never_written():
+    """An unnamed provider is computed and returned, and stored nowhere.
+
+    Two different providers under the default source would share
+    ``injected:swaption_cube`` -- the same defect one namespace along -- so an
+    unnamed one does not persist at all. It still ANSWERS; only the store is
+    protected.
+    """
     calls = {"n": 0}
 
     def _p(_as_of, _t):
@@ -363,16 +391,95 @@ def test_the_second_call_is_served_from_cache_and_asks_the_provider_nothing():
 
     tb = _tb()
     first = tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, model_vol_provider=_p)
-    after_first = calls["n"]
-    assert after_first > 0
+    assert not first.empty
+    assert getattr(tb, tb._cache_attr) == {}, "an unnamed provider wrote rows"
+    n1 = calls["n"]
     second = tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, model_vol_provider=_p)
-    assert calls["n"] == after_first
+    assert calls["n"] == 2 * n1, "the second call was served from somewhere"
     pd.testing.assert_frame_equal(first, second)
 
-    third = tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, model_vol_provider=_p,
-                           ignore_cache=True)
-    assert calls["n"] > after_first
-    pd.testing.assert_frame_equal(first, third)
+
+def test_an_unnamed_injected_provider_is_not_SERVED_the_builtin_rows():
+    """Reads, not writes, are where the missing namespace bites hardest.
+
+    The write is already blocked for an unnamed provider, so removing the
+    ``injected:`` namespace looks harmless -- until the built-in rows are warm.
+    Then the lookup hits them, the provider is never called, and the caller gets
+    the built-in model's numbers back under their own experiment with nothing
+    raising. Planting the rows first is what makes that observable.
+    """
+    import rateslib as rl
+
+    tb = _tb()
+    mapping = getattr(tb, tb._cache_attr)
+    date_col = getattr(tb, "_date_col", "date")
+    colname = M._cvx_col_name("USD-SOFR-1D", "BLUES_MODEL2")
+    planted = -12345.0
+    for ts in pd.to_datetime(list(pd.bdate_range(START, END))):
+        codes = [M._cvx_imm_code_from_date_rank(ts.date(), r)
+                 for r in M._cvx_ranks_for_label("BLUES")]
+        q = IRSwapQuery(
+            curve="USD-SOFR-1D",
+            effective_date=rl.get_imm(code=codes[0]).date(),
+            maturity_date=rl.next_imm(rl.get_imm(code=codes[-1])).date(),
+            structure=IRSwapStructure.OUTRIGHT, structure_kwargs={"bpv": 1},
+            value=IRSwapValue.CVX_ADJ,
+            value_kwargs=M.cvx_model2_value_kwargs(vol_source="swaption_cube"))
+        mapping[tb._cache_key(ts.to_pydatetime(), "USD-SOFR-1D", q)] = {
+            date_col: ts.to_pydatetime(), colname: planted}
+
+    calls = {"n": 0}
+
+    def _p(_as_of, _t):
+        calls["n"] += 1
+        return SIGMA
+
+    out = tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, model_vol_provider=_p)
+    assert calls["n"] > 0, "the injected provider was never called"
+    assert not out.empty
+    assert (out.iloc[:, 0] != planted).all(), "served the built-in model's rows"
+    assert float(out.iloc[0, 0]) > 0.0
+
+
+def test_an_injected_provider_cannot_read_or_overwrite_the_builtin_rows():
+    """The defect this guard exists for, exercised in both directions.
+
+    A provider run used to write under ``cvx_vol_source="swaption_cube"`` -- the
+    BUILT-IN model's own key -- so a fixed-vol verification run silently
+    replaced real model rows, and later reads were served the fixed-vol number
+    with nothing raising. It is measured: 0.20-0.23bp wrong on five packs, days
+    after the run that did it.
+    """
+    builtin = M.cvx_model2_value_kwargs(vol_source="swaption_cube")
+    injected = M.cvx_model2_value_kwargs(vol_source="injected:swaption_cube")
+    named = M.cvx_model2_value_kwargs(vol_source="injected:my-capfloor")
+    keys = {_query_fingerprint(_q(k)) for k in (builtin, injected, named)}
+    assert len(keys) == 3
+
+    # the hole: without the namespace the injected run lands on the built-in key
+    assert (_query_fingerprint(_q(M.cvx_model2_value_kwargs(vol_source="swaption_cube")))
+            == _query_fingerprint(_q(builtin)))
+
+    # end to end: a named provider's rows do not appear under the built-in key
+    tb = _tb()
+    tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, model_vol_provider=_fixed(),
+                   model_vol_source="my-capfloor")
+    written = set(getattr(tb, tb._cache_attr))
+    assert written
+    tb2 = _tb()
+    setattr(tb2, tb2._cache_attr, dict(getattr(tb, tb._cache_attr)))
+    calls = {"n": 0}
+
+    def _count(_a, _t):
+        calls["n"] += 1
+        return 40.0
+
+    out = tb2.sfr_cvx_adj(["BLUES_MODEL2"], START, END, model_vol_provider=_count,
+                          model_vol_source="other-label")
+    assert calls["n"] > 0, "a different provider was served the first one's rows"
+    assert float(out.iloc[0, 0]) < float(
+        tb.sfr_cvx_adj(["BLUES_MODEL2"], START, END, model_vol_provider=_fixed(),
+                       model_vol_source="my-capfloor").iloc[0, 0])
 
 
 def test_the_two_models_do_not_read_each_others_rows():

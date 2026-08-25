@@ -371,7 +371,10 @@ def test_the_model_and_the_observed_label_can_be_asked_for_together():
 
 def test_the_model_write_does_not_land_on_the_observed_key():
     tb = _tb()
-    tb.sfr_cvx_adj(["BLUES_MODEL"], START, END, model_vol_provider=_fixed())
+    # NAMED, because an unnamed injected provider is no longer persisted at all
+    # -- see test_an_unnamed_injected_provider_is_never_written.
+    tb.sfr_cvx_adj(["BLUES_MODEL"], START, END, model_vol_provider=_fixed(),
+                   model_vol_source="test-fixed")
     mapping = getattr(tb, tb._cache_attr)
     assert mapping, "the model path wrote nothing to cache"
     written = set(mapping)
@@ -394,15 +397,18 @@ def test_the_model_write_does_not_land_on_the_observed_key():
 
 
 def test_a_second_call_is_served_from_cache_without_the_provider():
+    """...when the provider is NAMED. An unnamed one recomputes every time."""
     tb = _tb()
     first = tb.sfr_cvx_adj(["BLUES_MODEL"], START, END,
-                           model_vol_provider=_fixed())
+                           model_vol_provider=_fixed(),
+                           model_vol_source="test-fixed")
 
     def _explode(_a, _b):
         raise AssertionError("the provider was called on a warm cache")
 
     second = tb.sfr_cvx_adj(["BLUES_MODEL"], START, END,
-                            model_vol_provider=_explode)
+                            model_vol_provider=_explode,
+                            model_vol_source="test-fixed")
     pd.testing.assert_frame_equal(first, second)
 
 

@@ -677,6 +677,11 @@ CVX_MODEL_KINDS: Dict[str, str] = {
     CVX_MODEL2_SUFFIX: "hw1f_sofr",
 }
 
+#: The one volatility source this module implements itself. A caller who passes
+#: ``model_vol_provider`` is served under ``injected:<source>`` instead, so an
+#: injected run can neither read nor overwrite the built-in model's rows.
+_CVX_BUILTIN_VOL_SOURCE = "swaption_cube"
+
 #: Hull-White mean reversion for ``_MODEL2``, in absolute terms per year.
 #: 3% is mid-range for USD calibrations and it is a KNOB, not a constant: it
 #: travels in the cache key (:func:`cvx_model2_value_kwargs`), so changing it
@@ -1896,6 +1901,13 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         independent checks, and why the smile is injectable but not the
         default.
 
+        **An injected** ``model_vol_provider`` **is served under its own cache
+        namespace** (``injected:<model_vol_source>``), so it can neither read nor
+        overwrite the built-in model's rows. Pass ``model_vol_source="my-label"``
+        alongside it to have its rows persisted under that label; without a
+        label the values are computed and returned but never stored, because two
+        different providers would otherwise share one key.
+
         **The model and the observed value are separate cache entries and that
         is not automatic.** They price the same instrument window, so their
         queries agree on effective date, maturity date, value and
@@ -2330,6 +2342,25 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             raise ValueError(f"unknown model kind {kind!r}; "
                              f"expected one of {sorted(set(CVX_MODEL_KINDS.values()))}")
         suffix = CVX_MODEL_SUFFIX if kind == "holee" else CVX_MODEL2_SUFFIX
+
+        # An INJECTED provider is an input to the model, so it has to move the
+        # key -- and it cannot be hashed, so it gets its own namespace instead.
+        #
+        # Without this, `model_vol_provider=` writes its values under
+        # `cvx_vol_source="swaption_cube"`: the built-in model's own rows. It is
+        # silent in both directions and it is not hypothetical -- it happened.
+        # A verification script priced BLUES with a fixed 95bp vol under
+        # `ignore_cache=True`, which recomputes the READ but still WRITES, and
+        # three later checks in the same script were served 6.56bp where the
+        # model says 6.99bp. Rows from PR #504's own verification were still in
+        # the store days later, 0.20-0.23bp wrong on five packs.
+        #
+        # `ignore_cache` deliberately does not suppress the write: with an
+        # honest key a recompute SHOULD refresh the row. The defect was the key.
+        _injected = vol_provider is not None
+        if _injected:
+            _named = str(vol_source) != _CVX_BUILTIN_VOL_SOURCE
+            vol_source = f"injected:{vol_source}"
         if kind == "holee":
             value_kwargs = cvx_model_value_kwargs(
                 vol_source=vol_source, vol_tenor=vol_tenor, convention=convention)
@@ -2451,6 +2482,14 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         continue
                     ts = dts.to_pydatetime()
                     rows_by_label[label].append({date_col: ts, colname: val})
+                    # Two different injected providers under the default source
+                    # would share `injected:swaption_cube`, which is the same
+                    # defect one namespace along. A caller who wants their
+                    # provider's rows persisted names it via
+                    # `model_vol_source="my_capfloor_v1"`; an unnamed one is
+                    # computed and returned but never stored.
+                    if _injected and not _named:
+                        continue
                     if not _is_today(ts):
                         pending.append((
                             self._cache_key(ts, curve, _query(as_of, base)),
