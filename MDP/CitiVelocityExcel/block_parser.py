@@ -31,6 +31,7 @@ get it wrong:
 from __future__ import annotations
 
 import datetime
+import logging
 import math
 import re
 from dataclasses import dataclass, field
@@ -44,6 +45,8 @@ from MDP.CitiVelocityExcel.excel_constants import (
     PENDING_SENTINELS,
     XL_ERRORS,
 )
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "TshistBlock",
@@ -284,6 +287,12 @@ class TshistBlock:
     failures: Dict[str, str] = field(default_factory=dict)
     headers: List[str] = field(default_factory=list)
     n_rows: int = 0
+    #: Body rows that belonged to a DIFFERENT block in the same region and were
+    #: discarded. Non-zero means the region held more than one block, which is a
+    #: defect in the caller's sheet cursor, not in the data - see
+    #: :func:`_one_block_only`. Reported rather than silently swallowed, because
+    #: truncating quietly is how the caller stops finding out.
+    foreign_rows: int = 0
 
     @property
     def ok(self) -> bool:
@@ -298,11 +307,93 @@ class TshistBlock:
         return out.sort_index()
 
 
+def _one_block_only(
+    body: Sequence[Sequence[Any]],
+    *,
+    first_cell: str = "Date",
+) -> Tuple[List[Sequence[Any]], int]:
+    """Cut ``body`` at the first row that belongs to a DIFFERENT block.
+
+    Why this is needed
+    ------------------
+    ``find_header_row`` already defends the HEADER against a region that holds
+    more than one block ("``CurrentRegion`` absorbs adjacent cells"). Nothing
+    defended the BODY. So when the sheet cursor was left inside a live spill and
+    the next ``CVTSHIST`` landed inside it, the region came back holding two
+    blocks, the FIRST header won, and every row of the SECOND block was read as
+    data for the first block's columns - by position.
+
+    That is not a hypothetical. It put swaption normal vol under 36 of the 44
+    ``RATES.OIS.USD_SOFR.PAR.*`` tags back to 2015-10-08, and under CAD_CORRA and
+    JPY_TONAR_LCH as well, because ``DEFAULT_CHUNK_SIZE`` is 44 and so is a par
+    grid: column j of one block is column j of the other, one for one.
+
+    Three independent markers, because a region can be cut so that any one of
+    them is absent:
+
+    ``a second header row``
+        A ``Date`` first cell cannot recur inside one block.
+    ``a formula row``
+        A first cell beginning ``=`` is the next call's own formula text.
+    ``the dates stop being monotone``
+        A ``CVTSHIST`` body runs one way (newest-first from the add-in) and a
+        second block restarts at its own newest row. The direction is MEASURED
+        from the first two dated rows rather than assumed, so an oldest-first
+        block is not truncated at row two; a repeated stamp is not a reversal,
+        because the parser's own contract allows one across a chunk seam.
+
+    Returns ``(body_up_to_the_seam, n_rows_discarded)``.
+    """
+    wanted = str(first_cell).strip().lower()
+    direction = 0  # +1 ascending, -1 descending, 0 not yet known
+    last: Optional[datetime.datetime] = None
+
+    for i, row in enumerate(body):
+        head = row[0] if row else None
+
+        if isinstance(head, str):
+            text = head.strip()
+            if text.lower() == wanted or text.startswith("="):
+                return list(body[:i]), len(body) - i
+
+        stamp = coerce_excel_datetime(head) if row else None
+        if stamp is None:
+            # A blank or unparseable first cell is not by itself a seam - the
+            # add-in pads blocks - but it carries no ordering evidence either.
+            continue
+        if last is not None:
+            if stamp > last:
+                step = 1
+            elif stamp < last:
+                step = -1
+            else:
+                step = 0  # a repeated stamp across a chunk seam; not a reversal
+            if step != 0:
+                if direction == 0:
+                    direction = step
+                elif step != direction:
+                    return list(body[:i]), len(body) - i
+        last = stamp
+
+    return list(body), 0
+
+
+#: How far outside the requested window a row may still legitimately fall.
+#:
+#: The add-in resolves a bound against the tag's own calendar, so a request for
+#: a Saturday, or one whose end lands on a holiday, comes back a day or two
+#: inside or outside. Three days absorbs every such convention and is still four
+#: orders of magnitude tighter than the months-away rows the window guard exists
+#: to reject.
+_WINDOW_PAD = datetime.timedelta(days=3)
+
+
 def parse_tshist_block(
     raw: Any,
     tags: Sequence[str],
     *,
     price_point: str = "CLOSE",
+    window: Optional[Tuple[Optional[Any], Optional[Any]]] = None,
 ) -> TshistBlock:
     """Parse a ``CVTSHIST`` block into one series per requested tag.
 
@@ -347,12 +438,65 @@ def parse_tshist_block(
 
     headers = [c if isinstance(c, str) else ("" if c is None else str(c)) for c in rows[hdr_i]]
     out.headers = headers
-    body = rows[hdr_i + 1 :]
+    # ONE block only. A region that holds two blocks is a caller defect, and
+    # reading the second one's rows by column position is how swaption vol got
+    # banked under the OIS par tags - see :func:`_one_block_only`.
+    body, foreign = _one_block_only(rows[hdr_i + 1 :])
+    out.foreign_rows = foreign
+    if foreign:
+        _logger.warning(
+            "parse_tshist_block: the region held %d row(s) belonging to another "
+            "block below this one; they were discarded. The sheet cursor was left "
+            "inside a live spill - the first requested tag was %s.",
+            foreign,
+            next(iter(dict.fromkeys(tags)), "(none)"),
+        )
     out.n_rows = len(body)
 
     stamps: List[Optional[datetime.datetime]] = [
         coerce_excel_datetime(r[0]) if r else None for r in body
     ]
+
+    # THE WINDOW GUARD. A CVTSHIST was asked for a span; a row outside it is not
+    # this block's data, whatever it looks like.
+    #
+    # This is the marker that catches the layout the other three miss: a SHORT
+    # request planted inside a taller spill, so what follows the block is the
+    # older block's CONTINUATION rows - no second header, no formula row, and the
+    # dates never stop descending. That is the nightly-tail shape, and it is the
+    # one that kept re-poisoning the par tags after every heal.
+    #
+    # It only applies when the caller asked with explicit bounds; a relative
+    # ``period=`` has no window to check against, and an open end means "up to
+    # now". A wide request cannot be defended this way - but a wide request
+    # produces a block TALLER than the spill it was planted in, which leaves no
+    # continuation rows and lands back in the three markers above.
+    if window is not None:
+        lo, hi = window
+        lo = None if lo is None else pd.Timestamp(lo) - _WINDOW_PAD
+        hi = None if hi is None else pd.Timestamp(hi) + _WINDOW_PAD
+        if lo is not None or hi is not None:
+            kept_rows: List[Sequence[Any]] = []
+            kept_stamps: List[Optional[datetime.datetime]] = []
+            dropped = 0
+            for row, stamp in zip(body, stamps):
+                if stamp is not None:
+                    ts = pd.Timestamp(stamp)
+                    if (lo is not None and ts < lo) or (hi is not None and ts > hi):
+                        dropped += 1
+                        continue
+                kept_rows.append(row)
+                kept_stamps.append(stamp)
+            if dropped:
+                out.foreign_rows += dropped
+                _logger.warning(
+                    "parse_tshist_block: %d row(s) fell outside the requested window "
+                    "%s .. %s and were discarded; the region held part of another "
+                    "block. First requested tag: %s.",
+                    dropped, lo, hi, next(iter(dict.fromkeys(tags)), "(none)"),
+                )
+            body, stamps = kept_rows, kept_stamps
+            out.n_rows = len(body)
 
     for tag in tag_list:
         col = _column_for_tag(headers, tag)

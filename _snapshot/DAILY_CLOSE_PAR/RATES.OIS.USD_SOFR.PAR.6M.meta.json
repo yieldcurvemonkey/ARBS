@@ -1,0 +1,10 @@
+{
+ "tag": "RATES.OIS.USD_SOFR.PAR.6M",
+ "freq": "DAILY",
+ "price_point": "CLOSE",
+ "intraday": false,
+ "fetched_at": "2026-08-24T15:46:03",
+ "n_rows": 2792,
+ "first": "2015-10-08T00:00:00",
+ "last": "2026-08-21T00:00:00"
+}
