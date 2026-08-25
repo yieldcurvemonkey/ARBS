@@ -290,11 +290,19 @@ by donor runs starting at served indices 36, 72, 108 and 144.
 
 `HOURLY` was swept the same way and is clean.
 
-**8 isolated bad prints, also removed.** Five `RATES.BOND.*.YIELD` tags each held
-one or two impossible values with no donor at all — 1,460% and 1,463% on
-`US91282CQY02` against a 4.20% median, 10,040% on `CND10008R1W1` against 1.65%,
--6.52% on `US9128284X55`. Bad ticks rather than this defect, but a yield that
-cannot be a yield does not get to stay just because its cause is different.
+**8 isolated bad prints, also removed — and they are the vendor's, not ours.**
+Five `RATES.BOND.*.YIELD` tags each held one or two impossible values with no
+donor at all: 1,460% and 1,463% on `US91282CQY02` against a 4.20% median, 10,040%
+on `CND10008R1W1` against 1.65%, −6.52% on `US9128284X55`.
+
+The overnight nightly settled what they are. `US9128284X55.YIELD` came back
+**bit-identical** at −6.5211 on the next fetch. Citi genuinely serves that
+number, so removing these is a **recurring chore, not a one-time repair** — they
+will return whenever the tag is re-fetched. They are worth removing (a yield that
+cannot be a yield helps nobody) but the removal does not stick, and anything that
+depends on it should say so.
+
+That fact also exposed a defect in the guard itself; see below.
 
 ### Validating the MI01 survivors
 
@@ -388,9 +396,46 @@ attenuation would give: it means the studies could not have detected a real
 effect, not that a real effect would have shown up smaller. Both concluded the
 relationship does not reach the price, and both are still owed an honest test.
 
+## The overnight run, 2026-08-24 → 25
+
+The fix was still unmerged, so the nightly ran from the primary checkout on
+**pre-fix code** and rewrote **13,120 parquets** (the PAR grid at 19:30). That is
+the best test available of whether the repair holds in production, and it is not
+one I could have staged.
+
+**It held.** No re-poisoning anywhere: the OIS PAR families and the MI01 bond
+tags came through clean, and `PAR.2Y` went from 2,907 rows to 2,908 — the nightly
+added exactly one day (2026-08-24), max 5.74%, zero impossible values, interior
+holes intact. The nightly is doing exactly what it should against the repaired
+cache.
+
+Only three isolated ticks reappeared, in the bond YIELD family, and that is what
+proved them to be vendor prints.
+
+### It also found a defect in my own guard
+
+`assert_plausible` raised on **any** out-of-band row. So the moment this branch
+merged, that one genuine −6.5211 print would have refused the whole 1,252-row
+series — permanently, every night, for that tag. A denial of service against the
+good rows, built by the guard meant to protect them.
+
+`assert_plausible` now refuses only when enough of a series is out of band to
+mean it **is** a different series: ≥1% of rows, never fewer than 3. Below that
+the rows are logged loudly by date and the write proceeds. The threshold is
+measured, and the two populations do not overlap:
+
+| | share of rows |
+|---|---:|
+| smallest real poison event (2,687 of 41,415 MI01 rows) | 6.5% |
+| largest real poison event | 100% |
+| worst bad vendor tick (1 of 1,252) | 0.08% |
+
+1% sits two orders of magnitude above the ticks and six times below the smallest
+poison. **Refusing a wrong series is the job; refusing a wrong row is not.**
+
 ## Test state
 
-`tests/test_citivelo_tagcache_poison.py` — 23 cases. Every guard was mutated out
+`tests/test_citivelo_tagcache_poison.py` — 26 cases. Every guard was mutated out
 in turn and its tests confirmed red, each one **isolated**: two of them initially
 overlapped (a 2,700-row spill is cleared by the constant floor whether or not
 `_advance_past` runs), so the cases were split — a 12,000-row spill isolates
@@ -408,7 +453,9 @@ All four are accounted for and none is this branch's:
 
 The gate caught **three** fixtures that fed convenience sentinels to tags whose
 units now matter — a 39% par rate, a 111% par rate and a 100% bond yield. In each
-case the guard was right and the fixture was fixed, never the other way round.
+of those the guard was right and the fixture was fixed. In the fourth case, the
+−6.5211 vendor print, the guard was **wrong** and the guard was fixed. Both
+directions happened; neither was assumed.
 
 ## Operational note
 
