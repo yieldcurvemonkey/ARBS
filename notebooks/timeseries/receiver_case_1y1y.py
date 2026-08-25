@@ -459,6 +459,24 @@ for lbl, r, col, unit in (("1y1y   ", _rl, R_1Y1Y, "%"),
           f"residual {actual - fitted:+.3f}{unit} "
           f"({(actual - fitted) / sd:+.2f} sd), "
           f"DW {sm.stats.durbin_watson(r.resid):.3f}")
+# the same residual, on a shorter window -- the sample IS the answer here
+_short = reg_df[reg_df.index >= pd.Timestamp("2023-05-01")]
+_rs = sm.OLS(_short[R_1Y1Y], sm.add_constant(_short["SURPRISE_Z_L11"])).fit()
+def _last_resid_z(r):
+    """statsmodels hands back an ndarray or a Series depending on how the
+    design matrix was built; take the last residual in sd units either way."""
+    e = np.asarray(r.resid, dtype=float)
+    return float(e[-1] / e.std())
+
+
+_zf, _zs = _last_resid_z(_rl), _last_resid_z(_rs)
+print("\n   the SAME 1y1y residual, same day, two windows:")
+print(f"      2015-start ({len(reg_df)}w): {_zf:+.2f} sd")
+print(f"      2023-start ({len(_short)}w): {_zs:+.2f} sd")
+print("      -> opposite sides of zero, from the same data on the same day."
+      if _zf * _zs < 0 else
+      "      -> same side of zero, but the magnitudes are not comparable.")
+
 print("\n   Both fits have Durbin-Watson far below 2, so both residual z-scores")
 print("   are unreliable -- including the 1y1y one, whichever way it reads.")
 print("   Neither is evidence; the horizon fit above is what the directional")
@@ -532,12 +550,12 @@ f.show()
 # consistent across two independent judge models and **not distinguishable from
 # zero**: t 0.46–1.18 on 44–98 events.
 #
-# The level residuals in §4 make the same point from the other side. On the
-# 173-week window this notebook first used, the 1y1y level residual read −0.60 sd;
-# on the 608-week window it reads **+1.54 sd**. Same instrument, same day, same
-# signal — opposite conclusion, because the sample changed. A residual that does
-# that is a sample artefact, and it is inadmissible whichever way it happens to
-# point.
+# The level residuals in §4 make the same point from the other side, and the
+# notebook computes the demonstration rather than asserting it: the **same**
+# 1y1y level residual, on the **same day**, is printed for a 2015-start window
+# and a 2023-start one. Same instrument, same signal, opposite conclusion —
+# because the sample changed. A residual that does that is a sample artefact,
+# and it is inadmissible whichever way it happens to point.
 #
 # And the timing cuts against the near date rather than for it: at every measured
 # lead the data reaching Fed language at **Jackson Hole and the September FOMC is
