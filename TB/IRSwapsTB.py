@@ -592,11 +592,18 @@ def _cvx_ranks_for_label(label: str) -> Optional[List[int]]:
 
 
 def _cvx_structure_tag(label: str) -> str:
-    if _cvx_is_imm(label) or _cvx_cm_rank(label):
+    """``PACKS`` / ``BUNDLES`` / ``OUTRIGHT`` for a label, model suffix or not.
+
+    This is the ONE helper that strips ``_MODEL``, because the tag is
+    presentational -- it only names a column. Every helper that RESOLVES a
+    label to contracts stays suffix-blind; see :func:`_cvx_model_base`.
+    """
+    base, _ = _cvx_model_base(label)
+    if _cvx_is_imm(base) or _cvx_cm_rank(base):
         return "OUTRIGHT"
-    if label.upper() in CVX_PACK_MAP:
+    if base in CVX_PACK_MAP:
         return "PACKS"
-    if _CVX_BUNDLE_PAT.match(label.upper()) or _CVX_BUNDLE_Y_PAT.match(label.upper()):
+    if _CVX_BUNDLE_PAT.match(base) or _CVX_BUNDLE_Y_PAT.match(base):
         return "BUNDLES"
     return "OUTRIGHT"
 
@@ -635,6 +642,236 @@ def _cvx_imm_code_from_date_rank(d: datetime.date, n: int, *, use_globex: bool =
         imm_dt = rl.next_imm(imm_dt)
     letter = {3: "H", 6: "M", 9: "U", 12: "Z"}[imm_dt.month]
     return f"{letter}{imm_dt.year % 100:02d}"
+
+
+# ---------------------------------------------------------------------------
+# The Ho-Lee MODEL adjustment: `<LABEL>_MODEL`
+# ---------------------------------------------------------------------------
+#: Suffix that turns any label ``sfr_cvx_adj`` accepts into its MODEL level --
+#: ``BLUES_MODEL``, ``SFR9_MODEL``, ``BUNDLE5Y_MODEL``, ``H26_MODEL``.
+#:
+#: The observed adjustment is ``pack rate - matched swap rate``, a market
+#: observation. The model level is Ho-Lee's ``1/2 sigma^2 mean_i(T1_i^2)``, a
+#: function of one volatility and the contracts' own expiries. They are two
+#: different quantities about the same structure, and Citi's screen prints both
+#: side by side (``CA`` and ``Model``); their difference is its ``VsModel``.
+CVX_MODEL_SUFFIX = "_MODEL"
+
+#: Ho-Lee time-weight convention. ``citi`` is ``w_i = T1_i^2``, which is what
+#: Citi's published tables use; ``hull`` is the textbook ``T1_i * T2_i``. Both
+#: live in ``RVUtils.ConvexityRV.holee`` and this module does not re-implement
+#: either -- it passes the convention through.
+CVX_MODEL_CONVENTION = "citi"
+
+#: Swaption-surface expiry ladder the model vol is interpolated on. Deep enough
+#: to bracket every SR3 structure: the deepest declared pack (SILVERS, ranks
+#: 21-24) has a mean expiry of ~5.6y and the deepest bundle in the vocabulary
+#: is shallower still.
+CVX_MODEL_VOL_EXPIRIES: Tuple[str, ...] = (
+    "1M", "2M", "3M", "6M", "9M", "1Y", "18M", "2Y", "3Y", "4Y", "5Y", "7Y",
+    "10Y",
+)
+
+#: Swap tenor of the straddle the model vol is read from. 1Y is the incumbent
+#: convention (``RVUtils.ConvexityRV.gv_grid.VOL_BENCH`` uses ``<N>Yx1Y`` for
+#: every structure it declares). Under Ho-Lee every forward carries the same
+#: constant normal vol, so the tenor is a proxy-quality choice rather than a
+#: conversion -- which is why it is a named knob and not a constant.
+CVX_MODEL_VOL_TENOR = "1Y"
+
+_CVX_EXPIRY_PAT = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([DWMY])\s*$", re.I)
+_CVX_EXPIRY_UNIT_YEARS = {"D": 1.0 / 365.0, "W": 7.0 / 365.0, "M": 1.0 / 12.0,
+                          "Y": 1.0}
+
+
+def _cvx_model_base(label: str) -> Tuple[str, bool]:
+    """``("BLUES", True)`` for ``BLUES_MODEL``; ``("BLUES", False)`` otherwise.
+
+    Upper-cases and strips, like every other entry point in this vocabulary.
+    """
+    up = str(label).strip().upper()
+    if up.endswith(CVX_MODEL_SUFFIX) and len(up) > len(CVX_MODEL_SUFFIX):
+        return up[: -len(CVX_MODEL_SUFFIX)], True
+    return up, False
+
+
+def _cvx_expiry_years(token: str) -> float:
+    """``"18M" -> 1.5``, ``"3Y" -> 3.0``. Raises on anything else."""
+    m = _CVX_EXPIRY_PAT.match(str(token))
+    if not m:
+        raise ValueError(f"unparseable swaption expiry {token!r}")
+    return float(m.group(1)) * _CVX_EXPIRY_UNIT_YEARS[m.group(2).upper()]
+
+
+def _cvx_model_t1s(as_of: datetime.date, label: str, *,
+                   use_globex: bool = False) -> List[float]:
+    """``T1_i`` in ACT/365 years from *as_of* to each member contract's IMM date.
+
+    Accepts the model label or its base. An IMM code resolves to one contract
+    whose expiry is fixed in calendar time, so its ``T1`` shortens day by day
+    and goes NEGATIVE after delivery; a rank or a pack resolves through the
+    date's own rank map, so its ``T1`` resets at every roll. Both are returned
+    unclipped -- the caller decides what an expired contract means, and
+    ``sfr_cvx_adj`` records it as a failure rather than pricing it.
+    """
+    import rateslib as rl
+
+    base, _ = _cvx_model_base(label)
+    if _cvx_is_imm(base):
+        codes = [base]
+    else:
+        ranks = _cvx_ranks_for_label(base)
+        if not ranks:
+            raise ValueError(
+                f"{label!r} does not resolve to any SR3 contracts; expected an "
+                f"IMM code, SFR<n>, a pack colour {sorted(CVX_PACK_MAP)}, "
+                f"BUNDLE<n> or BUNDLE<n>Y, optionally suffixed "
+                f"{CVX_MODEL_SUFFIX}")
+        codes = [_cvx_imm_code_from_date_rank(as_of, r, use_globex=use_globex)
+                 for r in ranks]
+    out = []
+    for code in codes:
+        imm = rl.get_imm(code=code)
+        imm_d = imm.date() if hasattr(imm, "date") else imm
+        out.append((imm_d - as_of).days / 365.0)
+    return out
+
+
+def _cvx_cached_model_value(rec: Any, date_col: str,
+                            colname: str) -> Optional[float]:
+    """The float in a cached MODEL record, or ``None`` for a miss.
+
+    Deliberately narrower than the observed path's reader: this function only
+    has to understand the shape ``_sfr_cvx_adj_model_frames`` itself writes,
+    because the model's cache entries live under their own fingerprint and
+    nothing else can put a record there. A general parser here would be a
+    second copy of the observed one, and two plausible parsers is how a wrong
+    number gets served without anything raising.
+    """
+    if rec is None:
+        return None
+    if isinstance(rec, dict):
+        if colname in rec:
+            try:
+                return float(rec[colname])
+            except (TypeError, ValueError):
+                return None
+        vals = [v for k, v in rec.items() if k != date_col]
+        if len(vals) != 1:
+            return None
+        try:
+            return float(vals[0])
+        except (TypeError, ValueError):
+            return None
+    try:
+        _dt, _col, val = rec
+        return float(val)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _cvx_model_ca_bp(sigma_bp: float, t1s: Sequence[float], *,
+                     convention: str = CVX_MODEL_CONVENTION) -> float:
+    """Ho-Lee model adjustment in bp: ``sigma_bp^2 * mean_i(w_i) / 2e4``.
+
+    Delegates to ``RVUtils.ConvexityRV.holee`` rather than re-deriving it. That
+    module is the one place the two time-weight conventions are defined and the
+    one place they are tested against Citi's published implied-vol column; a
+    second copy here would be a divergence waiting to happen, and an invisible
+    one, because both would return a plausible number.
+    """
+    from RVUtils.ConvexityRV.holee import pack_ca_bp
+
+    return float(pack_ca_bp(float(sigma_bp), list(t1s), convention=convention))
+
+
+def cvx_model_value_kwargs(
+    *,
+    vol_source: str,
+    vol_tenor: str = CVX_MODEL_VOL_TENOR,
+    convention: str = CVX_MODEL_CONVENTION,
+    vol_interp: str = "linear_t",
+) -> Dict[str, Any]:
+    """The model's identity, as it travels in the query's ``value_kwargs``.
+
+    **This is load-bearing and it is not decoration.** ``_query_fingerprint``
+    hashes ``effective_date``, ``maturity_date``, ``value`` and
+    ``structure_kwargs`` -- all of which a model query shares EXACTLY with the
+    observed query for the same structure. Without a distinguishing
+    ``value_kwargs`` the two would share a cache key, so ``BLUES_MODEL`` would
+    read ``BLUES``'s observed adjustment and write the model level into
+    ``BLUES``'s slot. Every downstream panel would be silently corrupted and
+    nothing would raise.
+
+    Carrying the RULE rather than a per-date resolution is deliberate: the key
+    has to be stable across dates, and it has to move when the model spec moves
+    so that changing the vol source ORPHANS the rows computed under the old one
+    instead of serving them. That is the same mechanism ``matched_frequency``
+    already uses on the observed side.
+    """
+    return {
+        "cvx_model": "holee",
+        "cvx_convention": str(convention),
+        "cvx_vol_source": str(vol_source),
+        "cvx_vol_tenor": str(vol_tenor),
+        "cvx_vol_interp": str(vol_interp),
+    }
+
+
+def cvx_model_vol_from_cube(
+    dates: Sequence[Any],
+    *,
+    tenor: str = CVX_MODEL_VOL_TENOR,
+    expiries: Sequence[str] = CVX_MODEL_VOL_EXPIRIES,
+    asset: Optional[str] = None,
+) -> "Callable[[datetime.date, float], float]":
+    """A provider of ``sigma(as_of, mean_T1)`` in bp/yr, from the swaption cube.
+
+    One store read serves every date and every label. The returned callable
+    interpolates the ATMF normal vol **linearly in expiry** between the two
+    bracketing grid nodes, and clamps flat outside the ladder.
+
+    Interpolation rather than snapping to the nearest node, because snapping is
+    not stable within a quarter. A constant-rank structure's mean expiry slides
+    down by a full quarter between rolls -- BLUES runs 3.625y down to 3.375y --
+    which straddles the midpoint of the 3Y and 4Y nodes, so a nearest-node rule
+    would flip the vol mid-quarter and put a step in the model level that has
+    nothing to do with the market. It also gives SILVERS (mean expiry ~5.6y) an
+    answer at all, since the cube has no 6Y node.
+    """
+    import numpy as _np
+
+    from RVUtils.ConvexityRV import swaption_cube as _sc
+
+    ds = [pd.Timestamp(d).date() for d in dates]
+    if not ds:
+        return lambda _d, _t: float("nan")
+    kw = {"asset": asset} if asset else {}
+    panel = _sc.load_vol_panel([(e, tenor) for e in expiries],
+                               min(ds), max(ds), **kw)
+    if panel.empty:
+        return lambda _d, _t: float("nan")
+    atm = panel[panel["offset_bp"] == 0.0].copy()
+    atm["date"] = pd.to_datetime(atm["date"]).dt.date
+    atm["t"] = [_cvx_expiry_years(x) for x in atm["expiry"]]
+    by_date: Dict[datetime.date, Tuple[Any, Any]] = {}
+    for d, g in atm.sort_values("t").groupby("date"):
+        g = g[_np.isfinite(g["vol_bp"].to_numpy(dtype=float))]
+        if g.empty:
+            continue
+        by_date[d] = (g["t"].to_numpy(dtype=float),
+                      g["vol_bp"].to_numpy(dtype=float))
+
+    def _sigma(as_of: datetime.date, t1_mean: float) -> float:
+        node = by_date.get(as_of)
+        if node is None or not _np.isfinite(t1_mean):
+            return float("nan")
+        xs, ys = node
+        if xs.size == 0:
+            return float("nan")
+        return float(_np.interp(float(t1_mean), xs, ys))
+
+    return _sigma
 
 
 class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
@@ -1435,6 +1672,10 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         use_globex: bool = False,
         matched_frequency: Optional[str] = "Q",
         matched_leg2_frequency: Optional[str] = "Q",
+        model_vol_provider: Optional[Any] = None,
+        model_vol_source: str = "swaption_cube",
+        model_vol_tenor: str = CVX_MODEL_VOL_TENOR,
+        model_convention: str = CVX_MODEL_CONVENTION,
     ) -> pd.DataFrame:
         r"""Convexity adjustment ``pack_rate - matched_swap_rate`` in bp, by label.
 
@@ -1459,6 +1700,34 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         ``data/ts`` symbol: changing it orphans the rows computed under the old
         convention rather than silently serving them. The cache version is
         therefore derived from the inputs rather than hand-bumped.
+
+        **Any label suffixed** ``_MODEL`` **returns the HO-LEE MODEL level
+        instead of the observed adjustment** -- ``BLUES_MODEL``,
+        ``SFR9_MODEL``, ``BUNDLE5Y_MODEL``, ``H26_MODEL``, and so on for every
+        label above. The two are different quantities about the same structure:
+        the observed adjustment is ``pack rate - matched swap rate``, a market
+        observation that needs the futures settles; the model level is
+        ``1/2 sigma^2 mean_i(T1_i^2)``, a function of one volatility and the
+        contracts' own expiries. Citi's screen prints both (``CA`` and
+        ``Model``) and their difference is its ``VsModel`` column.
+
+        A model label therefore needs **no futures data at all**: a request for
+        model labels alone makes zero BarChart calls. It needs a volatility,
+        which by default is the ATMF normal vol of the ``1Y``-tail straddle,
+        interpolated linearly in expiry to the structure's own mean ``T1``
+        (:func:`cvx_model_vol_from_cube`). Pass ``model_vol_provider`` -- any
+        ``f(as_of, mean_T1) -> sigma_bp`` -- to source it otherwise; Citi's own
+        methodology calibrates to cap/floor vols, and
+        ``RVUtils.ConvexityRV.ca_valuation.pack_capfloor_vol`` implements that,
+        but it is **not** the default because it is measured unavailable beyond
+        rank 13 (0% at ranks 17 and 21) and so cannot serve the whole strip.
+
+        **The model and the observed value are separate cache entries and that
+        is not automatic.** They price the same instrument window, so their
+        queries agree on effective date, maturity date, value and
+        ``structure_kwargs``; only :func:`cvx_model_value_kwargs` separates
+        their fingerprints. Without it ``BLUES_MODEL`` would read and overwrite
+        ``BLUES``. See that function's note.
 
         **Failures are recorded, not swallowed.** A date this method cannot
         price lands in :attr:`sfr_cvx_adj_failures` with a reason. See that
@@ -1516,6 +1785,12 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         if not items:
             return pd.DataFrame()
 
+        # `<LABEL>_MODEL` is a different quantity with a different data
+        # dependency -- no futures, one volatility -- so it is split off here
+        # and never enters the observed loop, its ticker set or its fetch.
+        plain_items = [i for i in items if not _cvx_model_base(i)[1]]
+        model_items = [i for i in items if _cvx_model_base(i)[1]]
+
         start_ts = pd.to_datetime(start).normalize()
         end_ts = pd.to_datetime(end).normalize()
         eval_index = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), start_ts, end_ts)
@@ -1524,13 +1799,36 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         out_frames_cached: list[pd.DataFrame] = []
         need_fetch_labels: list[str] = []
 
+        # Appended BEFORE the observed machinery runs, because every one of this
+        # method's early returns already carries `out_frames_cached` -- so a
+        # request for model labels alone, or for model labels alongside fully
+        # cached observed ones, cannot lose them on a return path.
+        if model_items:
+            out_frames_cached.extend(self._sfr_cvx_adj_model_frames(
+                model_items,
+                eval_index,
+                curve=curve,
+                date_col=_date_col,
+                ignore_cache=ignore_cache,
+                use_globex=use_globex,
+                vol_provider=model_vol_provider,
+                vol_source=model_vol_source,
+                vol_tenor=model_vol_tenor,
+                convention=model_convention,
+                note_failure=_note_failure,
+            ))
+        if not plain_items:
+            if not out_frames_cached:
+                return pd.DataFrame()
+            return pd.concat(out_frames_cached, axis=1).sort_index(kind="mergesort")
+
         partial_missing_dates: dict[str, set[pd.Timestamp]] = {}
         missing_today_dates: dict[str, set[pd.Timestamp]] = {}
         pre_cached_rows: dict[str, list[dict]] = {}
 
         pending_writes: list[tuple[str, dict]] = []
 
-        for raw_label in items:
+        for raw_label in plain_items:
             label = raw_label.strip().upper()
             colname = _col_name(label)
 
@@ -1816,6 +2114,151 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         return pd.concat(out_frames, axis=1).sort_index(kind="mergesort")
 
+    def _sfr_cvx_adj_model_frames(
+        self,
+        labels: List[str],
+        eval_index: Iterable[Any],
+        *,
+        curve: str,
+        date_col: str,
+        ignore_cache: bool,
+        use_globex: bool,
+        vol_provider: Optional[Any],
+        vol_source: str,
+        vol_tenor: str,
+        convention: str,
+        note_failure: Any,
+    ) -> List[pd.DataFrame]:
+        """Ho-Lee model levels for ``<LABEL>_MODEL``, one frame per label.
+
+        Self-contained on purpose: it probes and writes its own cache entries
+        under its own fingerprint and flushes them itself, so the observed
+        path's ``pending_writes`` machinery and its four early returns are left
+        exactly as they were.
+
+        No futures data is read. The only external input is the volatility.
+        """
+        import rateslib as rl
+
+        value_kwargs = cvx_model_value_kwargs(
+            vol_source=vol_source, vol_tenor=vol_tenor, convention=convention)
+        mapping = getattr(self, self._cache_attr)
+        today_date = datetime.date.today()
+        dates = [pd.Timestamp(d) for d in eval_index]
+
+        def _query(as_of: datetime.date, base: str) -> IRSwapQuery:
+            if _cvx_is_imm(base):
+                eff = rl.get_imm(code=base)
+                mat = rl.next_imm(eff)
+            else:
+                ranks = _cvx_ranks_for_label(base)
+                codes = [_cvx_imm_code_from_date_rank(as_of, r, use_globex=use_globex)
+                         for r in ranks]
+                eff = rl.get_imm(code=codes[0])
+                mat = rl.next_imm(rl.get_imm(code=codes[-1]))
+            return IRSwapQuery(
+                curve=curve,
+                effective_date=eff.date(),
+                maturity_date=mat.date(),
+                structure=IRSwapStructure.OUTRIGHT,
+                structure_kwargs={"bpv": 1},
+                value=IRSwapValue.CVX_ADJ,
+                value_kwargs=dict(value_kwargs),
+            )
+
+        # ---- resolve every label up front, and REFUSE an unresolvable one ---
+        # Before this method existed, `sfr_cvx_adj(["BLUES_MODEL"])` returned an
+        # empty frame and recorded no failure -- a silent nothing. An unknown
+        # base is a caller error and says so.
+        plan: List[Tuple[str, str, str]] = []
+        for raw in labels:
+            base, _ = _cvx_model_base(raw)
+            if not (_cvx_is_imm(base) or _cvx_ranks_for_label(base)):
+                raise ValueError(
+                    f"{raw!r} is not a convexity structure: {base!r} resolves "
+                    f"to no SR3 contracts. Expected an IMM code, SFR<n>, one of "
+                    f"{sorted(CVX_PACK_MAP)}, BUNDLE<n> or BUNDLE<n>Y, "
+                    f"optionally suffixed {CVX_MODEL_SUFFIX}.")
+            plan.append((f"{base}{CVX_MODEL_SUFFIX}", base,
+                         _cvx_col_name(curve, f"{base}{CVX_MODEL_SUFFIX}")))
+
+        # ---- probe the cache -------------------------------------------------
+        rows_by_label: Dict[str, List[dict]] = {lab: [] for lab, _, _ in plan}
+        misses: List[Tuple[str, str, str, pd.Timestamp]] = []
+        for label, base, colname in plan:
+            for dts in dates:
+                if ignore_cache:
+                    misses.append((label, base, colname, dts))
+                    continue
+                rec = mapping.get(self._cache_key(dts.to_pydatetime(), curve,
+                                                  _query(dts.date(), base)))
+                val = _cvx_cached_model_value(rec, date_col, colname)
+                if val is None:
+                    misses.append((label, base, colname, dts))
+                else:
+                    rows_by_label[label].append(
+                        {date_col: dts.to_pydatetime(), colname: val})
+
+        # ---- compute the misses ---------------------------------------------
+        if misses:
+            provider = vol_provider
+            if provider is None:
+                if vol_source != "swaption_cube":
+                    raise ValueError(
+                        f"model_vol_source={vol_source!r} has no built-in "
+                        "provider; pass model_vol_provider=f(as_of, mean_T1) "
+                        "-> sigma_bp. Only 'swaption_cube' is built in, "
+                        "deliberately: Citi calibrates to cap/floor vols and "
+                        "RVUtils.ConvexityRV.ca_valuation.pack_capfloor_vol "
+                        "implements that, but it is measured unavailable "
+                        "beyond rank 13 and so cannot serve the whole strip.")
+                provider = cvx_model_vol_from_cube(
+                    sorted({d for _, _, _, d in misses}), tenor=vol_tenor)
+
+            pending: List[Tuple[str, dict]] = []
+            for label, base, colname, dts in misses:
+                try:
+                    as_of = dts.date()
+                    t1s = _cvx_model_t1s(as_of, base, use_globex=use_globex)
+                    if not t1s or min(t1s) <= 0.0:
+                        note_failure(label, dts, "expired: T1 <= 0")
+                        continue
+                    t1_mean = float(sum(t1s) / len(t1s))
+                    sigma_bp = float(provider(as_of, t1_mean))
+                    if not (sigma_bp == sigma_bp) or sigma_bp <= 0.0:
+                        note_failure(label, dts, f"bad vol: sigma={sigma_bp}")
+                        continue
+                    val = _cvx_model_ca_bp(sigma_bp, t1s, convention=convention)
+                    if not (val == val):
+                        note_failure(label, dts, "bad vol: model is not finite")
+                        continue
+                    ts = dts.to_pydatetime()
+                    rows_by_label[label].append({date_col: ts, colname: val})
+                    if not _is_today(ts):
+                        pending.append((
+                            self._cache_key(ts, curve, _query(as_of, base)),
+                            {date_col: ts, colname: val}))
+                except Exception as exc:  # noqa: BLE001
+                    note_failure(label, dts, f"{type(exc).__name__}: {exc}")
+
+            if pending:
+                with self.batched():
+                    m = getattr(self, self._cache_attr)
+                    for k, rec in pending:
+                        m[k] = rec
+
+        out: List[pd.DataFrame] = []
+        for label, _base, colname in plan:
+            rows = rows_by_label[label]
+            if not rows:
+                continue
+            out.append(
+                pd.DataFrame(rows)
+                .sort_values(date_col, kind="mergesort")
+                .drop_duplicates(subset=[date_col], keep="last")
+                .set_index(date_col)[[colname]])
+        return out
+
     #: Where :meth:`sfr_cvx_adj_intraday` records the ``(label, instant)`` pairs
     #: it could not price, as ``{label: {iso_instant: reason}}``. Cleared at the
     #: top of every call.
@@ -1977,6 +2420,21 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         from RVUtils.ConvexityRV.listed_cache_guard import cache_only, network_calls_blocked
 
         CI.assert_intraday_source(futures_source)
+
+        # `<LABEL>_MODEL` is a DAILY quantity built from a swaption surface;
+        # this method resolves labels to contracts and prices the observed
+        # adjustment from a minute tape. The shared `_cvx_*` vocabulary is
+        # suffix-blind precisely so a model label cannot fall through to here
+        # and be served as an observed value under a model name -- but that
+        # would make it resolve to nothing and vanish quietly, so refuse it
+        # loudly instead.
+        _model_labels = [i for i in items if _cvx_model_base(i)[1]]
+        if _model_labels:
+            raise ValueError(
+                f"{_model_labels} are Ho-Lee MODEL labels and this method "
+                "prices the OBSERVED adjustment from an intraday tape. The "
+                "model level is a daily quantity -- use "
+                "`sfr_cvx_adj([...{}])` instead.".format(CVX_MODEL_SUFFIX))
 
         self.sfr_cvx_adj_intraday_failures = {}
         self.sfr_cvx_adj_intraday_network_blocked = 0

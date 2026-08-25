@@ -1,0 +1,10 @@
+{
+ "tag": "RATES.OIS.CAD_CORRA.PAR.19Y",
+ "freq": "DAILY",
+ "price_point": "CLOSE",
+ "intraday": false,
+ "fetched_at": "2026-08-21T19:18:20",
+ "n_rows": 3767,
+ "first": "2012-01-03T00:00:00",
+ "last": "2026-08-21T00:00:00"
+}

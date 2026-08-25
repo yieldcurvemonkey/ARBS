@@ -346,8 +346,15 @@ def test_a_batch_of_matured_bonds_is_not_reported_as_a_broken_transport(tmp_path
         [100.0, 100.5, 101.0],
         index=pd.date_range("2026-08-18 09:30", periods=3, freq="1min", name="Date"),
     )
+    # A separate series for YIELD. Nothing here asserts on the values - the test
+    # is about which BATCHES are warmed - but cache.write now refuses a series
+    # whose values cannot belong to its tag family, and 100.0 is a price, not a
+    # yield. Reusing one series for both columns was only ever convenience.
+    yields = pd.Series([4.00, 4.02, 4.05], index=minutes.index)
     rows = {
-        f"RATES.BOND.{b.isin}.{v}": minutes for b in live for v in ("PRICE", "YIELD")
+        f"RATES.BOND.{b.isin}.{v}": (minutes if v == "PRICE" else yields)
+        for b in live
+        for v in ("PRICE", "YIELD")
     }
     quotes = _FakeQuotes(cache, rows)
     W, _ = _install_warm_fakes(monkeypatch, tmp_path, dead + live, quotes)
@@ -395,7 +402,16 @@ def test_a_transport_that_fetches_rows_and_persists_none_still_stops_the_warm(tm
         [100.0, 100.5, 101.0],
         index=pd.date_range("2026-08-18 09:30", periods=3, freq="1min", name="Date"),
     )
-    rows = {f"RATES.BOND.{b.isin}.{v}": minutes for b in live for v in ("PRICE", "YIELD")}
+    # A separate series for YIELD. Nothing here asserts on the values - the test
+    # is about which BATCHES are warmed - but cache.write now refuses a series
+    # whose values cannot belong to its tag family, and 100.0 is a price, not a
+    # yield. Reusing one series for both columns was only ever convenience.
+    yields = pd.Series([4.00, 4.02, 4.05], index=minutes.index)
+    rows = {
+        f"RATES.BOND.{b.isin}.{v}": (minutes if v == "PRICE" else yields)
+        for b in live
+        for v in ("PRICE", "YIELD")
+    }
     quotes = _FakeQuotes(cache, rows, persist=False)  # returns data, caches nothing
     W, _ = _install_warm_fakes(monkeypatch, tmp_path, live, quotes)
 

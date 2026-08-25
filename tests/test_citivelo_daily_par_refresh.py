@@ -89,9 +89,16 @@ def cache(tmp_path, monkeypatch):
 
 
 def _plant(cache, tag: str, last: datetime.date, n: int = 40) -> None:
-    """Bank ``n`` daily rows ending on ``last``, so the sidecar carries a real date."""
+    """Bank ``n`` daily rows ending on ``last``, so the sidecar carries a real date.
+
+    The values are a ramp in PERCENT (0.00 .. 1.95), not ``range(n)``. Nothing here
+    asserts on them - every assertion is about dates and sidecars - but ``PAR``
+    tags now carry a plausibility band, and a bare ``range(40)`` puts a 39% par
+    rate on a SOFR tag. Scaling keeps every row distinguishable, which is the only
+    property this fixture ever needed.
+    """
     idx = pd.date_range(end=pd.Timestamp(last), periods=n, freq="D")
-    cache.write(tag, "DAILY", pd.Series(range(n), index=idx, dtype="float64"))
+    cache.write(tag, "DAILY", pd.Series([i / 20.0 for i in range(n)], index=idx, dtype="float64"))
 
 
 class FakeClient:
