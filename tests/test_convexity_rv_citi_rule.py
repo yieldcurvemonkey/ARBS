@@ -57,6 +57,7 @@ def _ctx(label: str, *, ca: pd.Series, beta: float = 0.206,
         dcombo_held=combo.diff(), fitted=zeros, rich_bp=ca, z_fly=zeros + 3.0,
         z_model=zeros + rank, roll_3m=zeros + 1.0, impl_rlzd=zeros + 1.5,
         z_pos=zeros + 1.5, conds=conds, all_ok=ok,
+        defined=pd.Series(True, index=idx),
         rank_metric=pd.Series(rank, index=idx),
         restrike_dates=(restrikes if restrikes is not None
                         else pd.DatetimeIndex([])),
@@ -230,7 +231,8 @@ def test_frozen_weights_and_refit_weights_diverge_when_the_weights_move():
         z_fly=ca * 0, z_model=ca * 0, roll_3m=ca * 0, impl_rlzd=ca * 0,
         z_pos=ca * 0, conds=pd.DataFrame({k: True for k in R.CONDITIONS},
                                          index=idx),
-        all_ok=pd.Series(True, index=idx), rank_metric=pd.Series(1.0, index=idx),
+        all_ok=pd.Series(True, index=idx), defined=pd.Series(True, index=idx),
+        rank_metric=pd.Series(1.0, index=idx),
         restrike_dates=pd.DatetimeIndex([idx[20]]), rates=(r0, r1, r2))
     ep = R.CitiEpisode("BLUES", idx[5], idx[6], idx[35], idx[36], -1,
                        200_000.0, 0.2, 0.2, 0.8, "max_hold")
@@ -724,3 +726,62 @@ def test_the_memo_fingerprint_separates_a_permutation_of_the_same_values():
     q["r5y_pct"] = q["r5y_pct"].to_numpy()[::-1]
     b = R.build_contexts(q, SC.build_screen(q), cfg)["BLUES"].fitted
     assert float((a - b).abs().max()) > 1e-6
+
+
+# ---------------------------------------------------------------------------
+# 9. the clock a Sharpe is measured on -- one adversarial review found this
+#    same defect through four independent lenses
+# ---------------------------------------------------------------------------
+def test_defined_marks_where_the_ACTIVE_conditions_inputs_exist():
+    """A dropped condition must not hold a cell out of the market waiting for a
+    column it never reads."""
+    p = _real_panel()
+    p["dealer_net"] = np.nan                     # positioning input never exists
+    s = SC.build_screen(p)
+    full = R.build_contexts(p, s, R.RuleConfig())["BLUES"]
+    rest = tuple(c for c in R.CONDITIONS if c != "positioning_stretched")
+    drop = R.build_contexts(p, s, R.RuleConfig(conditions=rest))["BLUES"]
+    assert not full.defined.any(), "the full rule needs a column that is absent"
+    assert drop.defined.any(), "the drop-one cell must still be tradeable"
+
+
+def test_defined_is_a_superset_of_all_ok():
+    """`defined` says the inputs EXIST; `all_ok` says they pass."""
+    p = _real_panel()
+    s = SC.build_screen(p)
+    c = R.build_contexts(p, s, R.RuleConfig())["BLUES"]
+    assert (c.all_ok & ~c.defined).sum() == 0
+    assert int(c.defined.sum()) > int(c.all_ok.sum())
+
+
+def test_the_sharpe_is_measured_from_the_first_tradeable_date_not_the_panel_start():
+    """Zero-padding a book back to the panel start scales its Sharpe by
+    sqrt(n_active/N) -- and the null bar was deliberately built on the shorter
+    span, so the two sat on different clocks."""
+    p = _real_panel()
+    s = SC.build_screen(p)
+    spec = [c for c in R.declared_cells()
+            if c.cell_id == "P|z1.0|screen_best|fitted_refit"][0]
+    r = R.run_cell(spec, p, s)
+    assert r.first_tradeable is not None
+    assert r.first_tradeable > p.index[0], "the fixture must have a burn-in"
+    f = R.stats_frame([r], span_years=5.0)
+    assert f["first_tradeable"].iloc[0] == r.first_tradeable
+    assert 0 < float(f["cell_span_years"].iloc[0]) < 5.0
+    d = r.daily_by_mult[1.0]
+    want = float(d.loc[r.first_tradeable:].pipe(
+        lambda x: x.mean() / x.std(ddof=1) * np.sqrt(252.0)))
+    padded = float(d.mean() / d.std(ddof=1) * np.sqrt(252.0))
+    assert float(f["sharpe_1.0"].iloc[0]) == pytest.approx(want, rel=1e-9)
+    assert abs(padded - want) > 1e-6, "the fixture must actually be padded"
+
+
+def test_two_cells_with_different_condition_sets_get_different_windows():
+    p = _real_panel()
+    p.loc[p.index[:300], "dealer_net"] = np.nan
+    s = SC.build_screen(p)
+    by = {c.cell_id: c for c in R.declared_cells()}
+    a = R.run_cell(by["P|z1.0|screen_best|fitted_refit"], p, s)
+    b = R.run_cell(by["D|z1.0|drop_positioning_stretched"], p, s)
+    assert a.first_tradeable is not None and b.first_tradeable is not None
+    assert b.first_tradeable < a.first_tradeable

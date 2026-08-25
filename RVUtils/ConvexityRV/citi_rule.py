@@ -301,6 +301,10 @@ class StructureContext:
     z_pos: pd.Series
     conds: pd.DataFrame        # one boolean column per declared condition
     all_ok: pd.Series
+    #: True where every input the ACTIVE conditions need is finite, ignoring
+    #: whether they pass.  This is "the rule could have opened here", which is
+    #: the window a Sharpe must be annualised over -- not the panel's own span.
+    defined: pd.Series
     rank_metric: pd.Series
     restrike_dates: pd.DatetimeIndex
     #: the three percent par-rate columns the fitted combination is built from,
@@ -471,7 +475,18 @@ def build_contexts(panel: pd.DataFrame, screen: Mapping[str, pd.DataFrame],
         # Every cell -- including the unhedged one -- may only open once the
         # fair value exists, so all fifteen share one tradeable window and their
         # Sharpes are graded against one span.
-        all_ok &= np.isfinite(beta) & np.isfinite(rich) & np.isfinite(ca_sig)
+        base_ok = np.isfinite(beta) & np.isfinite(rich) & np.isfinite(ca_sig)
+        all_ok &= base_ok
+        # the inputs the ACTIVE conditions read, finite or not -- a dropped
+        # condition does not hold the cell out of the market waiting for a
+        # column it never looks at
+        _need = {"wide_to_model": z_model, "wide_to_fly": z_fly,
+                 "positive_roll": roll3, "implied_rich": ir,
+                 "positioning_stretched": z_pos}
+        defined = base_ok.copy()
+        for _k in cfg.conditions:
+            if _k in _need:
+                defined &= np.isfinite(pd.Series(_need[_k]).astype(float))
 
         if cfg.signal_lag_bd:
             sh = int(cfg.signal_lag_bd)
@@ -485,7 +500,7 @@ def build_contexts(panel: pd.DataFrame, screen: Mapping[str, pd.DataFrame],
             label=lab, ca_pnl=ca_pnl, beta=beta, w2=par["w2"], w10=par["w10"],
             combo=combo, dcombo_held=dcombo_held, fitted=fitted, rich_bp=rich,
             z_fly=z_fly, z_model=z_model, roll_3m=roll3, impl_rlzd=ir,
-            z_pos=z_pos, conds=conds, all_ok=all_ok,
+            z_pos=z_pos, conds=conds, all_ok=all_ok, defined=defined,
             rank_metric=z_model.rename("rank_metric"),
             restrike_dates=pd.DatetimeIndex(frame["in_force_from"])
             if not frame.empty else pd.DatetimeIndex([]),
@@ -785,6 +800,11 @@ class CellResult:
     carry_usd: float = 0.0
     n_dates: int = 0
     binding: Optional[pd.DataFrame] = None
+    #: the first date on which this cell's own inputs all exist.  Its Sharpe is
+    #: annualised from here and its null bar is built on the same span; the two
+    #: sat on different clocks until an adversarial review found it through
+    #: four separate lenses.
+    first_tradeable: Optional[pd.Timestamp] = None
 
     @property
     def n_episodes(self) -> int:
@@ -811,8 +831,11 @@ def run_cell(spec: CellSpec, panel: pd.DataFrame,
         if theta_bp_per_bd is not None and e.structure in theta_bp_per_bd:
             th = theta_bp_per_bd[e.structure].reindex(p.index)
             carry += float(cfg.side) * float(th.sum()) * float(e.ca_dv01)
+    firsts = [c.defined.index[c.defined.to_numpy()][0] for c in ctx.values()
+              if bool(c.defined.any())]
+    first_tradeable = min(firsts) if firsts else None
     return CellResult(spec, cfg, eps, daily, per_ep, carry, len(idx),
-                      condition_binding(ctx, cfg))
+                      condition_binding(ctx, cfg), first_tradeable)
 
 
 # ---------------------------------------------------------------------------
@@ -830,9 +853,14 @@ def _sharpe(daily: pd.Series) -> float:
 
 def stats_frame(results: Sequence[CellResult], *, span_years: float
                 ) -> pd.DataFrame:
+    """One row per cell.  ``span_years`` is the fallback span for a cell that
+    never became tradeable; every cell that did is measured and graded on its
+    OWN window, because a Sharpe annualised over dates the rule could not trade
+    is a different number from the one the null bar was built for."""
     rows = []
     for r in results:
         s, cfg = r.spec, r.cfg
+        t0 = r.first_tradeable
         holds = [e.hold_bd for e in r.episodes]
         mean_hold = float(np.mean(holds)) if holds else float("nan")
         n_eff_hold = ((span_years * ANN / mean_hold)
@@ -866,10 +894,20 @@ def stats_frame(results: Sequence[CellResult], *, span_years: float
         for reason in ("target", "stop", "max_hold", "end_of_sample"):
             row[f"exit_{reason}"] = sum(1 for e in r.episodes
                                         if e.exit_reason == reason)
+        _first = None
         for m in sorted(r.daily_by_mult):
             d = r.daily_by_mult[m]
+            if t0 is not None:
+                d = d.loc[t0:]
+            if _first is None:
+                _first = d
             row[f"net_{m}"] = float(d.sum())
             row[f"sharpe_{m}"] = _sharpe(d)
+        cell_span = (float((_first.index[-1] - _first.index[0]).days / 365.25)
+                     if _first is not None and len(_first) > 1 else span_years)
+        row["first_tradeable"] = t0
+        row["cell_span_years"] = cell_span
+        row["n_marks_graded"] = int(len(_first)) if _first is not None else 0
         g = row.get("net_0.0", np.nan)
         row["breakeven_bp"] = (g / gross) if gross else np.nan
         row["residual_usd"] = g - r.carry_usd

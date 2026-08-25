@@ -386,13 +386,34 @@ for _lab, _d in PRE["fair_value"].items():
                     "b_sign_flips": _d["b_sign_flips"],
                     "w2_at_a_boundary": _d["n_boundary_w2"],
                     "oos_resid_sd_bp": _d["oos_resid_sd_bp"],
-                    "oos_resid_mae_bp": _d["oos_resid_mae_bp"]})
+                    "oos_resid_mae_bp": _d["oos_resid_mae_bp"],
+                    "spliced_b_median": _d.get("spliced_b_median"),
+                    "spliced_b_flips": _d.get("spliced_b_sign_flips"),
+                    "spliced_resid_sd": _d.get("spliced_oos_resid_sd_bp")})
 FVT = pd.DataFrame(_fvrows).set_index("structure")
 print(FVT.round(3).to_string())
-print(f"\nOn the reproduction's narrower window (2022 start) BLUES has ONE sign "
-      f"flip and a residual sd of {TIE['residuals']['sd_refit']:.3f} bp. Adding "
-      "2021 doubles both. The window was not narrowed to hide that: the panel "
-      "is the full CA panel and the instability is a result.")
+_bl = FVT.loc["BLUES"]
+print(f"\nThe fitted scale changes sign inside its own sample on all three "
+      f"packs -- {int(FVT['b_sign_flips'].min())} to "
+      f"{int(FVT['b_sign_flips'].max())} times in "
+      f"{int(FVT['n_refits'].max())} refits -- and w2 sits at a grid boundary "
+      f"on {int(FVT['w2_at_a_boundary'].min())}-"
+      f"{int(FVT['w2_at_a_boundary'].max())} of them.")
+print(f"\nOn the reproduction's narrower window (2022 start) BLUES has "
+      f"{TIE['refit']['b_sign_flips']} sign flip and a residual sd of "
+      f"{TIE['residuals']['sd_refit']:.3f} bp; extending to 2021 leaves the "
+      f"flips at {int(_bl['b_sign_flips'])} and multiplies the residual by "
+      f"{_bl['oos_resid_sd_bp'] / TIE['residuals']['sd_refit']:.2f}. The window "
+      "was not narrowed to hide anything.")
+print(f"\nThe last three columns are the SPLICED path, which the rule never "
+      f"fits and which the first version of this table reported by mistake: on "
+      f"BLUES it inverts the sign of b ({_bl['spliced_b_median']:+.2f} against "
+      f"{_bl['b_median']:+.2f}) and inflates the residual by "
+      f"{100 * (_bl['spliced_resid_sd'] / _bl['oos_resid_sd_bp'] - 1):.0f}%. "
+      "An adversarial review of the finished work found it; it is printed here "
+      "rather than deleted.")
+assert FVT["b_sign_flips"].min() >= 1, (
+    "the 'not stable enough to hedge with' claim needs at least one flip")
 
 _f = go.Figure()
 for _lab, _d in PRE["fair_value"].items():
@@ -629,21 +650,32 @@ _ec = ["cell_id", "n_episodes", "n_closed_positions", "n_marks",
        "panel_sharpe_net", "engine_sharpe_net", "daily_corr_engine_panel",
        "carry_usd", "engine_residual_usd"]
 E = ENG[_ec].copy()
-E["engine_over_panel_gross"] = E["engine_gross_usd"] / E["panel_gross_usd"]
+E["engine_minus_panel_gross"] = E["engine_gross_usd"] - E["panel_gross_usd"]
 print(E.round(4).to_string(index=False))
-print(f"\nbest ENGINE net Sharpe of any certified book: "
+_neg = int((ENG["engine_net_usd"] < 0).sum())
+print(f"\nEVERY certified book loses money on the engine: {_neg} of {len(ENG)} "
+      f"have a negative engine NET. The best is "
+      f"{ENG.loc[ENG['engine_net_usd'].idxmax(), 'cell_id']} at "
+      f"${ENG['engine_net_usd'].max():,.0f}, whose engine GROSS is "
+      f"${float(ENG.loc[ENG['engine_net_usd'].idxmax(), 'engine_gross_usd']):,.0f} "
+      f"against ${float(ENG.loc[ENG['engine_net_usd'].idxmax(), 'fee_total_usd']):,.0f} "
+      "of its own declared fees.")
+print(f"best ENGINE net Sharpe of any certified book: "
       f"{ENG['engine_sharpe_net'].max():+.4f} "
       f"({ENG.loc[ENG['engine_sharpe_net'].idxmax(), 'cell_id']}), against a "
       f"bar of {BAR:.4f}.")
-print("\nThe gap between the two columns is the point of running both. It is "
-      "not noise and it does not have one sign: on "
-      f"{(E['engine_over_panel_gross'] < 0).sum()} of {len(E)} books the engine "
-      "and the panel disagree on the SIGN of the gross P&L, and the largest "
-      "single disagreement is "
-      f"{E.loc[E['engine_over_panel_gross'].abs().idxmax(), 'cell_id']} at a "
-      f"ratio of {E['engine_over_panel_gross'].abs().max():.2f}. A par-rate "
-      "panel prices par-rate changes; the engine prices struck instruments that "
-      "age, and the omitted term is carry.")
+assert (ENG["engine_net_usd"] < 0).all(), (
+    "a book makes money on the engine -- the verdict prose is wrong")
+_lower = int((E["engine_minus_panel_gross"] < 0).sum())
+_signdis = int((np.sign(E["engine_gross_usd"])
+                != np.sign(E["panel_gross_usd"])).sum())
+print(f"\nThe gap between the two columns is the point of running both. The "
+      f"engine gross is LOWER than the panel gross on {_lower} of {len(E)} "
+      f"books and higher on {len(E) - _lower} -- the higher ones are the books "
+      "whose panel gross is NEGATIVE, where a smaller loss is the engine being "
+      f"kinder. The two disagree on the SIGN of the gross on {_signdis} of "
+      f"{len(E)}. A par-rate panel prices par-rate changes; the engine prices "
+      "struck instruments that age, and the omitted term is carry.")
 
 # %%
 _f = go.Figure()
@@ -726,12 +758,21 @@ print(f"\nThe static short is profitable on its own on "
 print(pd.DataFrame(CTRL["beta_zero"]).round(4).to_string(index=False))
 _b0 = pd.DataFrame(CTRL["beta_zero"])
 _worst = _b0.loc[_b0["hedge_adds_sharpe"].idxmin()]
-print(f"\nThe fly adds Sharpe on {int((_b0['hedge_adds_sharpe'] > 0).sum())} "
-      f"of {len(_b0)} and removes it on "
-      f"{int((_b0['hedge_adds_sharpe'] < 0).sum())}. The worst is "
-      f"{_worst['cell_id']} at {_worst['hedge_adds_sharpe']:+.4f} of Sharpe "
-      "against the same book with the hedge removed -- and that is Citi's "
-      "own published fixed weights, held fixed.")
+assert bool(_b0["same_episodes"].all()), (
+    "the beta=0 control is not like-for-like -- it must keep the SAME episodes")
+print(f"\nSame contexts, same episodes, fly leg removed. The fly adds Sharpe on "
+      f"{int((_b0['hedge_adds_sharpe'] > 0).sum())} of {len(_b0)} and removes "
+      f"it on {int((_b0['hedge_adds_sharpe'] < 0).sum())}. The worst is "
+      f"{_worst['cell_id']} at {_worst['hedge_adds_sharpe']:+.4f} of Sharpe and "
+      f"${_worst['hedge_adds_usd']:,.0f} against the SAME "
+      f"{int(_worst['n_hedged'])} episodes with the hedge simply removed -- and "
+      "that is Citi's own published fixed weights.")
+print("\n(An earlier version of this control rebuilt the comparator by "
+      "re-running the cell with hedge='unhedged', which routes the fair value "
+      "through a different fit and so produced a different entry set. It "
+      "compared two strategies rather than isolating the leg, and it read "
+      "-0.39 where the like-for-like control reads "
+      f"{_worst['hedge_adds_sharpe']:+.2f}.)")
 
 # %% [markdown]
 # ### 5. The splice control
@@ -765,15 +806,26 @@ print("\nA row permutation leaves a Sharpe unchanged, so the null is 20,000 "
 # ### 7. The convexity signature, as a point prediction
 
 # %%
-print(pd.DataFrame(CTRL["convexity_signature"]).round(4).to_string(index=False))
+_CS = pd.DataFrame(CTRL["convexity_signature"])
+print(_CS.round(4).to_string(index=False))
+_un = _CS[_CS["hedged"] == "unhedged"]
 print("\nThe CA is exactly quadratic in sigma, so a convexity claim has a "
-      "NUMBER attached: the fitted quadratic coefficient must equal "
-      "`CA_DV01 * w / 2e4` USD per (bp/yr)^2. At four to twenty-two episodes "
-      "this is a three-parameter regression on a handful of points and the "
-      "fitted coefficients run 9-51x the prediction with the wrong sign half "
-      "the time. The test cannot confirm or deny the claim at this sample size, "
-      "and the honest reading is that the book never got large enough to have "
-      "a convexity signature to test.")
+      "NUMBER attached -- and for a SHORT book it is NEGATIVE. For an unhedged "
+      "short, `P&L = side*CA_DV01*dCA = side*CA_DV01*w/2e4 * d(sigma^2)`, so "
+      "the slope of P&L on d(implied^2) IS the predicted coefficient. That is "
+      "a two-parameter fit; the quadratic form of the same test needs three "
+      "and cannot be resolved on four points, so read `var_slope_ratio` and "
+      "ignore `quad_ratio`.")
+if len(_un):
+    _u = _un.iloc[0]
+    print(f"\nThe only CLEAN row is the unhedged one ({_u['cell_id']}): a "
+          f"hedged book carries the fly's own P&L inside the left-hand side. "
+          f"It fits {_u['var_slope_fitted']:+.2f} against a prediction of "
+          f"{_u['var_slope_predicted']:+.2f} -- ratio "
+          f"{_u['var_slope_ratio']:.2f}, R^2 {_u['var_r2']:.2f}, on "
+          f"{int(_u['n'])} points. Right sign, about half the magnitude, and "
+          "four points cannot say more than that.")
+    assert _u["var_slope_fitted"] < 0 and _u["var_slope_predicted"] < 0
 
 # %% [markdown]
 # ### 8. Sub-period split, and the sensitivities
@@ -851,10 +903,16 @@ print(f"* Costs ARE the marginal issue on the per-hold clock -- they take "
       f"{STATS['breakeven_bp'].abs().median():.2f} bp of gross DV01 traded at "
       "the median, against a declared 0.75 bp on the CA package alone before "
       "the fly's three legs are charged at all.")
+print(f"* On the ENGINE, which prices the real dated instruments net of the "
+      f"declared costs, ALL {len(ENG)} certified books lose money. The best is "
+      f"${ENG['engine_net_usd'].max():,.0f} and the headline is "
+      f"${float(ENG.loc[ENG.cell_id == _h['cell_id'], 'engine_net_usd'].iloc[0]):,.0f}.")
 print("* Citi's own fair value is not stable enough to hedge with on this "
-      f"window: {int(FVT['b_sign_flips'].max())} sign reversals of b in "
-      f"{int(FVT['n_refits'].max())} refits, and w2 pinned at a grid boundary "
-      f"on {int(FVT['w2_at_a_boundary'].max())} of them.")
+      f"window: b reverses sign {int(FVT['b_sign_flips'].min())}-"
+      f"{int(FVT['b_sign_flips'].max())} times in "
+      f"{int(FVT['n_refits'].max())} refits on the three packs, and w2 is "
+      f"pinned at a grid boundary on up to "
+      f"{int(FVT['w2_at_a_boundary'].max())} of them.")
 _pos = STATS.loc[STATS["net_0.0"] > 0, "carry_share"]
 print(f"* What the trade IS, when it works, is short-convexity carry. The "
       f"always-short control is profitable on "

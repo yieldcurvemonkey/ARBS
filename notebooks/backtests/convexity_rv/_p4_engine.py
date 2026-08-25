@@ -44,8 +44,10 @@ DATA = REPO / "notebooks" / "data" / "convexity_rv"
 P = pd.read_parquet(DATA / "p4_citi.parquet")
 P.index = pd.to_datetime(P.index)
 S = SC.build_screen(P)
-SPAN = float(json.loads((DATA / "p4_preflight.json").read_text())
-             ["span_tradeable_years"])
+_PRE = json.loads((DATA / "p4_preflight.json").read_text())
+SPAN = float(_PRE["span_tradeable_years"])
+#: One clock for the whole certification table -- see the row builder below.
+FIRST_DEFINED = _PRE["first_defined"]
 ANN = 252.0
 
 #: The certification set: the headline, every hedge scheme at the rung that
@@ -128,15 +130,23 @@ for cid in WANT:
     hi = max(s.exit for s in specs)
     grid = P.index[(P.index >= pd.Timestamp(lo) - pd.Timedelta(days=7))
                    & (P.index <= pd.Timestamp(hi) + pd.Timedelta(days=7))]
-    bt = CE.run_backtest(specs, grid, show_progress=False)
+    # BOTH runs: the fee-free one gives the engine's GROSS, the charged one
+    # its NET.  An earlier version passed no fee_by_tag at all and then labelled
+    # the fee-free equity "net" -- so every engine "net" in the certification
+    # table was a gross number, and the block's best engine book was reported at
+    # +$3.36m when its own declared fees are $3.55m.
+    bt_g = CE.run_backtest(specs, grid, show_progress=False)
+    eq_g = CE.assert_ran(bt_g, specs, expect_days=len(grid))
+    bt = CE.run_backtest(specs, grid, fee_by_tag=fees, show_progress=False)
     eq = CE.assert_ran(bt, specs, expect_days=len(grid))
+    fee_total = float(sum(fees.values()))
+    assert abs((float(eq_g.iloc[-1]) - float(eq.iloc[-1])) - fee_total) < 1.0, (
+        "the charged run must differ from the free one by exactly the fees")
     daily = eq.diff().fillna(0.0)
     closed = bt.portfolio.closed_positions_log
     print(f"  engine: {len(grid)} marks, {len(closed)} closed positions, "
-          f"end equity ${float(eq.iloc[-1]):,.0f}   ({time.time() - t0:.0f}s)")
-
-    # gross fee total, so the engine's NET can be quoted against the panel's
-    fee_total = float(sum(fees.values()))
+          f"gross ${float(eq_g.iloc[-1]):,.0f}  fees ${fee_total:,.0f}  "
+          f"NET ${float(eq.iloc[-1]):,.0f}   ({time.time() - t0:.0f}s)")
     panel_gross = R.book_daily(eps, ctx, cfg, index=P.index, cost_mult=0.0)
     panel_net = R.book_daily(eps, ctx, cfg, index=P.index, cost_mult=1.0)
     pg = panel_gross.reindex(grid).fillna(0.0)
@@ -151,28 +161,38 @@ for cid in WANT:
         carry += float(cfg.side) * float(theta[ep.structure].reindex(p.index)
                                          .sum()) * float(ep.ca_dv01)
 
+    # ONE clock for both columns.  The engine grid is per-cell (it starts a
+    # week before that cell's first entry), so annualising the engine on it and
+    # the panel on all 1,409 dates put the two columns of the same table on
+    # different denominators.  Both are now measured on the COMMON tradeable
+    # window, reindexed and zero-filled where a book was not yet open.
+    common = P.index[P.index >= pd.Timestamp(FIRST_DEFINED)]
+    daily_c = daily.reindex(common).fillna(0.0)
+    pg_c = panel_gross.reindex(common).fillna(0.0)
+    pn_c = panel_net.reindex(common).fillna(0.0)
     row = {
         "cell_id": cid, "n_episodes": len(eps),
         "n_closed_positions": len(closed), "n_marks": len(grid),
-        "engine_gross_usd": float(eq.iloc[-1]) + fee_total,
+        "engine_gross_usd": float(eq_g.iloc[-1]),
         "engine_net_usd": float(eq.iloc[-1]),
-        "engine_sharpe_net": _sharpe(daily),
+        "engine_sharpe_net": _sharpe(daily_c),
         "panel_gross_usd": float(panel_gross.sum()),
         "panel_net_usd": float(panel_net.sum()),
-        "panel_sharpe_gross": _sharpe(panel_gross),
-        "panel_sharpe_net": _sharpe(panel_net),
+        "panel_sharpe_gross": _sharpe(pg_c),
+        "panel_sharpe_net": _sharpe(pn_c),
         "fee_total_usd": fee_total,
         "daily_corr_engine_panel": corr,
         "carry_usd": carry,
-        "engine_residual_usd": float(eq.iloc[-1]) + fee_total - carry,
+        "engine_residual_usd": float(eq_g.iloc[-1]) - carry,
+        "n_marks_graded": int(len(common)),
         "elapsed_s": round(time.time() - t0, 1),
     }
     rows.append(row)
     eq_cols[cid] = eq
+    eq_cols[cid + " (gross)"] = eq_g
     print(f"  panel gross ${row['panel_gross_usd']:>13,.0f}   "
           f"engine gross ${row['engine_gross_usd']:>13,.0f}   "
-          f"ratio {row['engine_gross_usd'] / row['panel_gross_usd']:+.2f}"
-          if row["panel_gross_usd"] else "  panel gross 0")
+          f"engine - panel ${row['engine_gross_usd'] - row['panel_gross_usd']:>+13,.0f}")
     print(f"  panel net   ${row['panel_net_usd']:>13,.0f}   "
           f"engine net   ${row['engine_net_usd']:>13,.0f}")
     print(f"  daily-change corr(engine, panel) {corr:+.4f}   "

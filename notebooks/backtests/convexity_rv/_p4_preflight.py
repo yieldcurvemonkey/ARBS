@@ -147,9 +147,21 @@ OUT["null_bars"] = {str(n): R.null_bars(n, n_eff=8.0, span_years=span_trade)
 sec("4. The fair value on the WIDER window -- does the mid-2023 flip survive?")
 # ---------------------------------------------------------------------------
 rolls = list(P.index[P["is_ca_roll"].astype(bool)])
+print("The fit is on the RAW quoted CA, because that is what the rule fits: "
+      f"RuleConfig.splice_signal = {cfg.splice_signal} and citi_rule."
+      "build_contexts passes the raw series to the refit. An earlier version of "
+      "this cell spliced it and reported a fair value that is never struck -- "
+      "on BLUES that inverted the sign of b median and inflated the residual "
+      "sd by 39-44%. The spliced path is printed beside it so the difference "
+      "is visible rather than assumed.")
 for lab in R.PRIMARY_UNIVERSE:
-    ca = GS.roll_spliced(P[f"{lab.lower()}_ca_bp"], rolls)
+    raw = P[f"{lab.lower()}_ca_bp"].astype(float)
+    ca = GS.roll_spliced(raw, rolls) if cfg.splice_signal else raw
     W, F = FV.imm_refit(ca, P, "fly", cfg.fit_window_bd, roll_dates=rolls)
+    Ws, Fs = FV.imm_refit(GS.roll_spliced(raw, rolls), P, "fly",
+                          cfg.fit_window_bd, roll_dates=rolls)
+    ss = FV.refit_summary(Ws)
+    rs = (GS.roll_spliced(raw, rolls) - Fs).dropna()
     s = FV.refit_summary(W)
     res = (ca - F).dropna()
     print(f"\n{lab}: {s['n_refits']} refits, w2 median {s['w2_median']:.2f} "
@@ -157,8 +169,13 @@ for lab in R.PRIMARY_UNIVERSE:
           f"b sign flips {s['b_sign_flips']}, boundary w2 {s['n_boundary_w2']}")
     print(f"       OOS residual sd {res.std(ddof=1):.3f} bp, "
           f"mae {res.abs().mean():.3f} bp, first fitted {F.dropna().index[0].date()}")
+    print(f"       [the spliced path, NOT traded: b median {ss['b_median']:+.2f}, "
+          f"flips {ss['b_sign_flips']}, resid sd {rs.std(ddof=1):.3f} bp]")
     OUT.setdefault("fair_value", {})[lab] = {
-        **s, "oos_resid_sd_bp": float(res.std(ddof=1)),
+        **s, "spliced_b_median": ss["b_median"],
+        "spliced_b_sign_flips": ss["b_sign_flips"],
+        "spliced_oos_resid_sd_bp": float(rs.std(ddof=1)),
+        "oos_resid_sd_bp": float(res.std(ddof=1)),
         "oos_resid_mae_bp": float(res.abs().mean()),
         "first_fitted": str(F.dropna().index[0].date()),
         "b_path": [float(x) for x in W["b"]],

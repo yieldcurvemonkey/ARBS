@@ -179,18 +179,33 @@ jointly.
 Citi's method (fly-constrained 3-rate fit, refit at every CA roll, 504 bd
 trailing window or all available history):
 
-| pack | refits | w2 median | w2 range | b median | **b sign flips** | w2 at a boundary | OOS resid sd | first fitted |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| GREENS | 21 | 0.31 | 0.90 | −8.95 | **4** | 11/21 | 2.350 bp | 2021-06-16 |
-| BLUES | 21 | 0.70 | 0.90 | +12.42 | **4** | 9/21 | 4.537 bp | 2021-06-16 |
-| GOLDS | 21 | 0.34 | 0.90 | +31.20 | **2** | 6/21 | 7.280 bp | 2021-06-16 |
+On the **raw** quoted CA — the series M2 declares the conditions are evaluated
+on, and the one `build_contexts` actually fits:
 
-On the reproduction's own narrower window (2022-01-03 start) BLUES has **one**
-sign flip and a residual sd of 2.232 bp; adding 2021 doubles the residual and
-doubles the flips. **The window is not narrowed to make this look better.** The
-panel is the full CA panel, the fit uses whatever history exists, and the
-instability of Citi's fair value on this window is a result, not a nuisance to
-be tuned away.
+| pack | refits | w2 median | b median | **b sign flips** | w2 at a boundary | OOS resid sd | first fitted |
+|---|---:|---:|---:|---:|---:|---:|---|
+| GREENS | 21 | 0.52 | −2.84 | **2** | 4/21 | 1.426 bp | 2021-06-16 |
+| BLUES | 21 | 0.83 | −5.45 | **1** | 8/21 | 2.766 bp | 2021-06-16 |
+| GOLDS | 21 | 0.64 | +14.52 | **6** | 14/21 | 4.048 bp | 2021-06-16 |
+
+The fitted scale changes sign inside its own sample on all three packs, and
+`w2` sits at a grid boundary on 4–14 of 21 refits. **The window is not narrowed
+to make this look better**: the panel is the full CA panel, the fit uses
+whatever history exists, and the instability is a result rather than a nuisance
+to be tuned away. On the reproduction's narrower window (2022-01-03 start)
+BLUES has one sign flip and a residual sd of 2.232 bp; extending to 2021 leaves
+the flips at one and multiplies the residual by 1.24.
+
+> **Correction, dated 2026-08-24 (post-review).** The first version of this
+> table was fitted on the roll-SPLICED CA — a series the rule never fits — and
+> read GREENS/BLUES/GOLDS at b median −8.95 / **+12.42** / +31.20, sign flips
+> 4 / 4 / 2 and residual sd 2.350 / **4.537** / 7.280 bp. On BLUES the splice
+> inverted the sign of `b` and inflated the residual by 64%. It also produced
+> the sentence "adding 2021 doubles the residual and doubles the flips", which
+> is **false on the fitted series**. Found by the adversarial review of the
+> finished work; `_p4_preflight.py` now fits what the rule fits and prints the
+> spliced path beside it. Nothing scored changes — the traded path was always
+> the raw fit — but the evidence table did.
 
 ### M6 — the threshold ladder, measured before it was declared
 

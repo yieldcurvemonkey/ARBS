@@ -85,7 +85,7 @@ OUT["splice_effect"] = json.loads(D0.reset_index().to_json(orient="records"))
 sec("1. The conjunction on the RAW quoted CA (Citi's own screen object)")
 # ---------------------------------------------------------------------------
 for splice in (True, False):
-    cfg = R.RuleConfig(splice=splice)
+    cfg = R.RuleConfig(splice_signal=splice)
     ctx = R.build_contexts(P, S, cfg)
     B = R.condition_binding(ctx, cfg)
     tag = "SPLICED" if splice else "RAW"
@@ -141,7 +141,7 @@ print("Reported so the pre-registration can DECLARE a ladder rather than "
 rows = []
 for z in (2.0, 1.5, 1.0, 0.5, 0.0):
     for ir in (1.3, 1.0, 0.0):
-        cfg = R.RuleConfig(splice=False, z_model_min=z, z_fly_min=z,
+        cfg = R.RuleConfig(splice_signal=False, z_model_min=z, z_fly_min=z,
                            impl_rlzd_min=ir)
         ctx = R.build_contexts(P, S, cfg)
         any_ok = pd.concat([x.all_ok.rename(l) for l, x in ctx.items()], axis=1)
@@ -158,7 +158,7 @@ rows = []
 rest = tuple(k for k in R.CONDITIONS if k != "positioning_stretched")
 for z in (2.0, 1.5, 1.0):
     for ir in (1.3, 1.0, 0.0):
-        cfg = R.RuleConfig(splice=False, z_model_min=z, z_fly_min=z,
+        cfg = R.RuleConfig(splice_signal=False, z_model_min=z, z_fly_min=z,
                            impl_rlzd_min=ir, conditions=rest)
         ctx = R.build_contexts(P, S, cfg)
         any_ok = pd.concat([x.all_ok.rename(l) for l, x in ctx.items()], axis=1)

@@ -69,8 +69,19 @@ def sec(t: str) -> None:
     print(f"\n{'=' * 78}\n{t}\n{'=' * 78}")
 
 
+def cfg_h(cid: str) -> str:
+    return BY_ID[cid].config().hedge
+
+
+#: The window every Sharpe in this file is annualised over.  A book padded
+#: back to the panel start with structural zeros has its Sharpe scaled by
+#: sqrt(n_active/N), and the grid grades on the tradeable window -- so the
+#: controls have to as well or the two files disagree by a constant.
+TRADEABLE = P.index[P.index >= pd.Timestamp(PRE["first_defined"])]
+
+
 def sharpe(d: pd.Series) -> float:
-    d = pd.Series(d).astype(float)
+    d = pd.Series(d).astype(float).reindex(TRADEABLE).fillna(0.0)
     if len(d[d != 0.0]) < 3 or d.std(ddof=1) == 0:
         return float("nan")
     return float(d.mean() / d.std(ddof=1) * np.sqrt(ANN))
@@ -194,19 +205,30 @@ L3.to_parquet(DATA / "p4_controls_static.parquet")
 # ---------------------------------------------------------------------------
 sec("4. beta = 0 -- does the fly leg contribute?")
 # ---------------------------------------------------------------------------
+# LIKE FOR LIKE.  An earlier version built the comparator by re-running the
+# whole cell with hedge="unhedged", which routes the fair value through a
+# DIFFERENT fit ("fly" instead of "citi") and therefore produced a different
+# entry set -- so "hedge_adds_sharpe" was the gap between two strategies, not
+# the marginal contribution of the fly leg.  The control now keeps the SAME
+# contexts and the SAME episodes and removes only the fly's P&L.
 rows = []
 for cid in TARGETS:
     base = BY_ID[cid].config()
     if base.hedge == "unhedged":
         continue
-    _, eps_h, g_h, n_h, _ = BASE[cid]
+    ctx, eps_h, g_h, n_h, _ = BASE[cid]
     cfg0 = R.RuleConfig(**{**base.__dict__, "hedge": "unhedged"})
-    _, eps_0, g_0, n_0, _ = run(cfg0)
-    rows.append({"cell_id": cid, "n_hedged": len(eps_h), "n_beta0": len(eps_0),
+    g_0 = R.book_daily(eps_h, ctx, cfg0, index=P.index, cost_mult=0.0)
+    n_0 = R.book_daily(eps_h, ctx, cfg0, index=P.index, cost_mult=1.0)
+    same = set((e.structure, e.entry_fill) for e in eps_h)
+    rows.append({"cell_id": cid, "n_hedged": len(eps_h),
+                 "n_beta0": len(eps_h), "same_episodes": len(same) == len(eps_h),
                  "gross_hedged": float(g_h.sum()),
                  "gross_beta0": float(g_0.sum()),
+                 "net_hedged": float(n_h.sum()), "net_beta0": float(n_0.sum()),
                  "sharpe_hedged": sharpe(g_h), "sharpe_beta0": sharpe(g_0),
-                 "hedge_adds_sharpe": sharpe(g_h) - sharpe(g_0)})
+                 "hedge_adds_sharpe": sharpe(g_h) - sharpe(g_0),
+                 "hedge_adds_usd": float(g_h.sum()) - float(g_0.sum())})
 L4 = pd.DataFrame(rows)
 print(L4.round(4).to_string(index=False))
 OUT["beta_zero"] = json.loads(L4.to_json(orient="records"))
@@ -279,39 +301,69 @@ L6.to_parquet(DATA / "p4_controls_signflip.parquet")
 # ---------------------------------------------------------------------------
 sec("7. Convexity signature -- a POINT prediction, not a shape")
 # ---------------------------------------------------------------------------
+# TWO corrections an adversarial review found here.  (1) the prediction is
+# ``side * CA_DV01 * w / 2e4`` and the book is SHORT, so the coefficient is
+# NEGATIVE -- dropping the side inverted the sign of every ratio.  (2) the
+# regressor must be the CA's OWN implied vol, because the identity that gives
+# the point prediction (``implied^2 * w / 2e4 == CA``, verified to 7e-15) holds
+# for that vol and not for the market swaption vol the screen quotes beside it.
 rows = []
 for cid in TARGETS:
     ctx, eps, g, n, per = BASE[cid]
     if len(eps) < 4:
         continue
-    d_sigma, pnl, pred = [], [], []
+    d_sigma, d_var, pnl, pred = [], [], [], []
     for e, p in zip(eps, per):
-        v = P[SC.VOL_COL[e.structure]].astype(float)
         w = P[f"{e.structure.lower()}_w"].astype(float)
+        v = SC.implied_vol_bp(P[f"{e.structure.lower()}_ca_bp"].astype(float), w)
         try:
             ds = float(v.loc[e.exit_fill] - v.loc[e.entry_fill])
+            dv = float(v.loc[e.exit_fill] ** 2 - v.loc[e.entry_fill] ** 2)
         except KeyError:
             continue
+        if not (np.isfinite(ds) and np.isfinite(dv)):
+            continue
         d_sigma.append(ds)
+        d_var.append(dv)
         pnl.append(float(p))
-        pred.append(float(e.ca_dv01) * float(w.loc[e.entry_fill]) / 2e4)
+        pred.append(float(e.side) * float(e.ca_dv01)
+                    * float(w.loc[e.entry_fill]) / 2e4)
     if len(d_sigma) < 4:
         continue
     x = np.asarray(d_sigma)
     y = np.asarray(pnl)
     X = np.column_stack([np.ones(len(x)), x, x ** 2])
     c, *_ = np.linalg.lstsq(X, y, rcond=None)
-    rows.append({"cell_id": cid, "n": len(x), "quad_coef_fitted": float(c[2]),
+    # The SAME claim with one parameter fewer.  The identity behind the point
+    # prediction is exact and LINEAR in variance:
+    #   P&L = side*DV01*dCA = side*DV01*w/2e4 * d(sigma^2)
+    # so for an unhedged book the slope of P&L on d(implied^2) IS the predicted
+    # coefficient.  A 3-parameter quadratic on four points cannot resolve that;
+    # a 2-parameter line can.
+    xv = np.asarray(d_var)
+    Xv = np.column_stack([np.ones(len(xv)), xv])
+    cv, *_ = np.linalg.lstsq(Xv, y, rcond=None)
+    ev = y - Xv @ cv
+    r2v = (1.0 - ev.var(ddof=0) / y.var(ddof=0)) if y.var(ddof=0) > 0 else np.nan
+    rows.append({"cell_id": cid, "n": len(x), "hedged": cfg_h(cid),
+                 "quad_coef_fitted": float(c[2]),
                  "quad_coef_predicted": float(np.mean(pred)),
-                 "linear_coef": float(c[1]),
-                 "ratio": float(c[2] / np.mean(pred)) if np.mean(pred) else np.nan})
+                 "quad_ratio": float(c[2] / np.mean(pred)) if np.mean(pred) else np.nan,
+                 "var_slope_fitted": float(cv[1]),
+                 "var_slope_predicted": float(np.mean(pred)),
+                 "var_slope_ratio": float(cv[1] / np.mean(pred)) if np.mean(pred) else np.nan,
+                 "var_r2": float(r2v)})
 L7 = pd.DataFrame(rows)
 print(L7.round(4).to_string(index=False) if len(L7) else "  too few episodes")
-print("\nThe prediction is CA_DV01 * w / 2e4 USD per (bp/yr)^2 -- the CA is "
-      "exactly quadratic in sigma, so a convexity claim has a NUMBER attached "
-      "and not merely a U-shape.  At this episode count the fit is a three-"
-      "parameter regression on 4-23 points and cannot confirm or deny it; the "
-      "ratio is reported so the order of magnitude is on the record.")
+print("\nOn a HEDGED cell the fly leg's own P&L sits inside the LHS, so only "
+      "the unhedged rows can test the prediction cleanly; the hedged rows are "
+      "printed for completeness and are confounded by construction.")
+print("\nThe prediction is side * CA_DV01 * w / 2e4 USD per (bp/yr)^2 -- NEGATIVE, "
+      "because the book is short.  Two fits of the same claim: the quadratic "
+      "coefficient of P&L on d(sigma), which needs three parameters and cannot "
+      "be resolved on four points, and the SLOPE of P&L on d(sigma^2), which "
+      "needs two and IS the identity exactly for an unhedged book.  Read the "
+      "var_slope_ratio column on the unhedged row and ignore the quadratic one.")
 OUT["convexity_signature"] = json.loads(L7.to_json(orient="records")) if len(L7) else []
 if len(L7):
     L7.to_parquet(DATA / "p4_controls_signature.parquet")
