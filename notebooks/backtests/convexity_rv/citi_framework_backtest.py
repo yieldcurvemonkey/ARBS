@@ -683,8 +683,8 @@ for _c in EQ.columns:
     _f.add_trace(go.Scatter(x=pd.to_datetime(EQ.index), y=EQ[_c], name=_c,
                             mode="lines"))
 _f.add_hline(y=0.0, line_dash="dot")
-_f.update_layout(title="Engine equity, net of the declared costs — every "
-                       "certified book",
+_f.update_layout(title="Engine equity, every certified book — each one twice, "
+                       "gross and NET of its own declared costs",
                  yaxis_title="USD", height=520,
                  legend=dict(orientation="h", y=-0.25))
 _f.show()
