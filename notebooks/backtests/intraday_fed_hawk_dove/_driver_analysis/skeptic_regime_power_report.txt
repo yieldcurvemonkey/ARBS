@@ -1,0 +1,84 @@
+panel rows=1912  span 2019-01-02 -> 2026-08-24
+clean sample (ex-FOMC/CPI/NFP, non-null |d|) = 1672 of 1912
+
+=== (5) is the chair_regime LABEL consistent with the claimed 2026-05-22 date? ===
+chair_regime value counts (full panel):
+   Powell: 1848
+   Warsh: 64
+   Powell: 2019-01-02 .. 2026-05-21  n=1848
+   Warsh: 2026-05-22 .. 2026-08-24  n=64
+   first 'Warsh' panel day = 2026-05-22; last Powell panel day = 2026-05-21
+   label boundary consistent with 2026-05-22: True
+   raw calendar events on/after 2026-05-22: 61
+     of which Chair-titled: 0   Warsh-named: 0
+
+=== (1) ARM SIZES, recomputed independently ===
+   Powell   clean days= 1616  speech= 753  nonspeech= 863  mean|d| sp=3.847 ns=3.824  ratio=1.0060
+   Warsh    clean days=   56  speech=  22  nonspeech=  34  mean|d| sp=3.722 ns=3.153  ratio=1.1807
+   pre-mask (full panel) day counts by regime:
+     Powell   days= 1848  speech= 837
+     Warsh    days=   64  speech=  25
+   >>> LATER-REGIME SPEECH DAYS = 22   (skeptic threshold ~60: BELOW)
+
+=== (2) RATIOS, RATIO-OF-RATIOS, BOOTSTRAP CI (own seed) ===
+   Powell excess ratio = 1.0060  CI95 [0.862, 1.169]
+   Warsh  excess ratio = 1.1807  CI95 [0.849, 1.615]
+   ratio-of-ratios     = 1.1737  CI95 [0.816, 1.664]  spans 1.0: True   two-sided boot p = 0.381
+   individual CIs span 1.0?  Powell True   Warsh True
+   permutation p (5,000 label shuffles inside each regime) = 0.376
+
+=== (3) MDE at 80% power / alpha=0.05, recomputed analytically ===
+   SE(log excess ratio) Powell = 0.0768   Warsh = 0.1644
+   SE(log ratio-of-ratios)     = 0.1815
+   ANALYTIC MDE (ratio-of-ratios) at 80% power = 1.663
+   observed ratio-of-ratios                   = 1.174
+   MDE > observed effect: True
+   achieved power at observed effect (analytic) = 0.143
+   sim cross-check: size at rho=1.00 -> 0.063 (nominal 0.05)
+                    power at rho=1.66 -> 0.723 (target 0.80)
+                    power at rho=1.174 -> 0.158
+
+   how long until this is answerable at the OBSERVED effect size?
+   >8000 clean days needed (effect too small to ever resolve at this vol)
+
+=== (4) BOUNDARY-SHIFT SENSITIVITY  (the check the original script never ran) ===
+    post-arm := date >= shifted transition; pre-arm := everything before it
+
+  shift         date | post_n post_sp post_ns  post_r |  pre_n   pre_r |     rho           rho_CI95  spans1    MDE              verdict
+     -3   2026-02-22 |    112      53      59   1.288 |   1560   0.994 |   1.296 [ 0.949, 1.744]    True  1.551  undetermined_sample
+     -2   2026-03-22 |     95      48      47   1.488 |   1577   0.990 |   1.503 [ 1.094, 2.049]   False  1.551  undetermined_sample
+     -1   2026-04-22 |     75      32      43   1.193 |   1597   1.004 |   1.188 [ 0.865, 1.618]    True  1.566  undetermined_sample
+     +0   2026-05-22 |     56      22      34   1.181 |   1616   1.006 |   1.174 [ 0.822, 1.662]    True  1.663  undetermined_sample
+     +1   2026-06-22 |     40      15      25   1.438 |   1632   1.003 |   1.434 [ 0.993, 2.041]    True  1.675  undetermined_sample
+     +2   2026-07-22 |     21       6      15   1.701 |   1651   1.005 |   1.693 [ 0.994, 2.742]    True  2.100  undetermined_sample
+     +3   2026-08-22 |      1       0       1      -- |   1671   1.011 | DEGENERATE (post arm too small to form a ratio)
+
+   verdicts across non-degenerate shifts: ['undetermined_sample']
+   any shift flips to DETECTED: False
+   post-arm ratio vs shift: -3m=1.288  -2m=1.488  -1m=1.193  +0m=1.181  +1m=1.438  +2m=1.701
+   post-arm ratio range across shifts = [1.181, 1.701]  (monotone-in-earlier-shift: False)
+
+=== extra: is the DIRECTION ('higher under the later chair') stable? ===
+   sign of log(rho) across shifts:
+     -3m : rho=1.296  UP
+     -2m : rho=1.503  UP
+     -1m : rho=1.188  UP
+     +0m : rho=1.174  UP
+     +1m : rho=1.434  UP
+     +2m : rho=1.693  UP
+     +3m : degenerate
+   all shifts agree in direction: True
+
+=== extra: season-matched placebo, recomputed (22 May - 24 Aug of each year) ===
+   2019: ratio=0.649  n=58  speech=21
+   2020: ratio=1.053  n=58  speech=15
+   2021: ratio=1.153  n=57  speech=22
+   2022: ratio=1.205  n=57  speech=25
+   2023: ratio=1.369  n=58  speech=20
+   2024: ratio=1.194  n=58  speech=32
+   2025: ratio=1.289  n=56  speech=30
+   later-regime window ratio 1.181; 4 of 7 prior summers were >= it (one-sided rank p = 0.625)
+
+=== self-test: inject a KNOWN 2.0x effect into the later arm; estimator must recover it ===
+   injected 2.00x -> recovered ratio-of-ratios 2.347 (expect ~2.347)
+   would a 2.0x effect be DETECTED here? |z| = 4.70 (yes)

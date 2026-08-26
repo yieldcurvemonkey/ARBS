@@ -262,3 +262,5 @@ MDP/ETFHoldings/etf_holdings_cache/
 notebooks/backtests/etf_rebalance/_data/
 _scratch/
 _*.log
+
+notebooks/backtests/intraday_fed_hawk_dove/_event_study/bars_event_study.pkl

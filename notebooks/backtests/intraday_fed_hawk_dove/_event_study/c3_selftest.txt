@@ -1,0 +1,42 @@
+=== TEST 1: simple_fit slope/t/r2 vs scipy.stats.linregress ===
+  PASS  trial 0: slope/t/r2/p/intercept match linregress   slope 2.097752 vs 2.097752
+  PASS  trial 1: slope/t/r2/p/intercept match linregress   slope 2.881799 vs 2.881799
+  PASS  trial 2: slope/t/r2/p/intercept match linregress   slope 2.846972 vs 2.846972
+  PASS  trial 3: slope/t/r2/p/intercept match linregress   slope 2.416615 vs 2.416615
+  PASS  trial 4: slope/t/r2/p/intercept match linregress   slope 3.065211 vs 3.065211
+
+=== TEST 2: analytic 3-point fit with a hand-computable answer ===
+  PASS  exact line: slope == 2   got 1.999999999999999
+  PASS  exact line: intercept == 1   got 1.0000000000000018
+  PASS  exact line: r2 == 1   got 1.0
+  PASS  leverage sums to k=2   got 1.9999999999999993
+
+=== TEST 3: leverage identifies the known high-leverage point ===
+  PASS  far-out x has max leverage   argmax=20 h=0.9950
+
+=== TEST 4: Cook's D identifies the point whose removal moves the slope most ===
+  PASS  argmax Cook's D == argmax |slope shift on removal|   cook argmax=20 shift argmax=20
+
+=== TEST 5: cluster SE with singleton clusters == HC0-style, and shrinks vs grouped ===
+  PASS  singleton-cluster SE within 20% of plain OLS SE (iid data)   ratio 1.0634
+  PASS  cluster-correlated x AND e: cluster SE >> plain SE   cluster 0.3243 vs plain 0.0764 ratio 4.25
+
+=== TEST 5b: cluster SE vs statsmodels (independent implementation) ===
+  PASS  cluster SE matches statsmodels CR1 to 1e-6   mine [0.73674816 0.32428181] vs sm [0.73674816 0.32428181]
+  PASS  beta matches statsmodels
+  PASS  plain OLS SE matches statsmodels
+
+=== TEST 6: cluster point estimate identical to OLS point estimate ===
+  PASS  beta identical   [-0.02238906  0.77538005] vs [-0.02238906  0.77538005]
+
+=== TEST 7: WLS with equal weights reproduces OLS ===
+  PASS  equal-weight WLS beta == OLS beta   [0.11968812 1.45708407] vs [0.11968812 1.45708407]
+  PASS  zero-weighting a point == dropping it   [0.13170057 1.45963123] vs [0.13170057 1.45963123]
+
+=== MUTATION CHECKS: broken inputs that MUST be caught ===
+  PASS  M1 a zero-slope stub would FAIL test 1   true slope 2.2059 != 0
+  PASS  M2 x/y swap changes the slope (test would catch it)   2.2059 vs 0.3547
+  PASS  M3 negating y flips slope sign   -2.2059 vs -2.2059
+
+============================================================
+ALL SELF-TESTS PASSED

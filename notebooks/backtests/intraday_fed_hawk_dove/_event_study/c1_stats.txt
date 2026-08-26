@@ -1,0 +1,54 @@
+==============================================================================
+NONOVERLAP  -  non-overlapping, signed, rank 3
+  n=224 signed events (173 hawk / 51 dove) on 200 distinct days;  years {'2023': 47, '2024': 70, '2025': 65, '2026': 42}
+  PRE-EVENT SLOPE (-120..-5, anchor -60 excluded): -0.108 bp/hour  (SE 0.101, t=-1.07, 1542 rows / 180 days)
+                   (anchor included):            -0.104 bp/hour  (t=-1.02)
+  JUMP -5 -> +5 (paired):  +0.0838 bp  (SE 0.0973, t=+0.86, n=191 events / 173 days)
+  HAWK-minus-DOVE gap at +240: +0.584 bp  (SE 0.705, t=+0.83, n=184 / 165 days)
+  BALANCED-through-+240 subset: n=138 (103H/35D, 130 days); signed move at +240 = +0.4855 bp (t=+1.11)
+     landed by +  5m: +0.1558 bp =    32.1% of +240   CI95 [-257%, 356%]
+     landed by + 15m: +0.1159 bp =    23.9% of +240   CI95 [-267%, 336%]
+     landed by + 30m: +0.1377 bp =    28.4% of +240   CI95 [-267%, 337%]
+     landed by + 60m: +0.3333 bp =    68.7% of +240   CI95 [-353%, 495%]
+     DRIFT after +30m: +0.3478 bp = 71.6% of +240 (t=+0.84)  CI95 [-237%, 367%]
+  REVERSION +240 -> +300 (paired, n=169): -0.0178 bp (t=-0.19); +0.3728 -> +0.3550 bp (95% retained)
+  COMPOSITE at +240: event-weighted +0.3614 bp   arm-balanced +0.2920 bp (hawk d_rate +0.4250, dove d_rate -0.1591)
+
+==============================================================================
+ALL  -  all events, signed, rank 3
+  n=985 signed events (767 hawk / 218 dove) on 438 distinct days;  years {'2023': 142, '2024': 297, '2025': 373, '2026': 173}
+  PRE-EVENT SLOPE (-120..-5, anchor -60 excluded): +0.042 bp/hour  (SE 0.061, t=+0.69, 7163 rows / 419 days)
+                   (anchor included):            +0.044 bp/hour  (t=+0.72)
+  JUMP -5 -> +5 (paired):  +0.0407 bp  (SE 0.0341, t=+1.19, n=884 events / 410 days)
+  HAWK-minus-DOVE gap at +240: +0.485 bp  (SE 0.314, t=+1.55, n=808 / 399 days)
+  BALANCED-through-+240 subset: n=655 (507H/148D, 357 days); signed move at +240 = +0.2763 bp (t=+1.36)
+     landed by +  5m: +0.1000 bp =    36.2% of +240   CI95 [-108%, 183%]
+     landed by + 15m: +0.0672 bp =    24.3% of +240   CI95 [-157%, 226%]
+     landed by + 30m: +0.1328 bp =    48.1% of +240   CI95 [-134%, 197%]
+     landed by + 60m: +0.1511 bp =    54.7% of +240   CI95 [-123%, 202%]
+     DRIFT after +30m: +0.1435 bp = 51.9% of +240 (t=+1.06)  CI95 [-97%, 234%]
+  REVERSION +240 -> +300 (paired, n=695): +0.0201 bp (t=+0.45); +0.2324 -> +0.2525 bp (109% retained)
+  COMPOSITE at +240: event-weighted +0.2321 bp   arm-balanced +0.2425 bp (hawk d_rate +0.2230, dove d_rate -0.2620)
+
+==============================================================================
+PLACEBO  -  placebo (time-of-day + calendar matched), rank 3
+  n=2931 signed events (2279 hawk / 652 dove) on 376 distinct days;  years {'2023': 438, '2024': 914, '2025': 1084, '2026': 495}
+  PRE-EVENT SLOPE (-120..-5, anchor -60 excluded): -0.004 bp/hour  (SE 0.034, t=-0.13, 21923 rows / 374 days)
+                   (anchor included):            -0.006 bp/hour  (t=-0.19)
+  JUMP -5 -> +5 (paired):  +0.0109 bp  (SE 0.0177, t=+0.61, n=2711 events / 374 days)
+  HAWK-minus-DOVE gap at +240: -0.217 bp  (SE 0.189, t=-1.15, n=2455 / 371 days)
+  BALANCED-through-+240 subset: n=1991 (1541H/450D, 367 days); signed move at +240 = +0.0485 bp (t=+0.40)
+     landed by +  5m: -0.0241 bp =   -49.7% of +240   CI95 [-680%, 434%]
+     landed by + 15m: -0.0231 bp =   -47.7% of +240   CI95 [-712%, 458%]
+     landed by + 30m: -0.0040 bp =    -8.3% of +240   CI95 [-566%, 424%]
+     landed by + 60m: -0.0123 bp =   -25.4% of +240   CI95 [-613%, 525%]
+     DRIFT after +30m: +0.0525 bp = 108.3% of +240 (t=+0.53)  CI95 [-324%, 666%]
+  REVERSION +240 -> +300 (paired, n=2116): +0.0187 bp (t=+0.63); +0.0796 -> +0.0983 bp (123% retained)
+  COMPOSITE at +240: event-weighted +0.0501 bp   arm-balanced -0.1087 bp (hawk d_rate +0.1864, dove d_rate +0.4039)
+
+==============================================================================
+SENSITIVITY / ROBUSTNESS (headline book)
+  +240 gap EXCLUDING Barkin 2025-04-09 (tariff-pause day): +0.375 bp (t=+0.56); signed mean +0.2022 bp (t=+0.61)
+  |bucket|>=1 cut (n=151, 120H/31D): signed +30m +0.1818 bp (t=+0.89), +240m +0.5040 bp (t=+1.28)
+  balanced-vs-unbalanced fan: largest per-offset gap -0.1939 bp at offset 180 (unbal +0.2011 vs bal +0.3949)
+  at offset 0:   unbal +0.0339 vs bal +0.1268 bp

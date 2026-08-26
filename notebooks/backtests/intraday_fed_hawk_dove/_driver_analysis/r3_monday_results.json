@@ -1,0 +1,42 @@
+{
+ "monday_nonspeech_msq": 126.45023977022157,
+ "monday_nonspeech_msq_ex3": 19.035539579958012,
+ "top3_monday_nonspeech": [
+  {
+   "date": "2023-03-13",
+   "d_bp": -114.72712383576189
+  },
+  {
+   "date": "2019-07-08",
+   "d_bp": -74.05304012939793
+  },
+  {
+   "date": "2019-07-01",
+   "d_bp": 73.24219456799601
+  }
+ ],
+ "conc_after_none removed": 0.724922058306606,
+ "conc_after_-2023-03-13": 0.8594152448690718,
+ "conc_after_-2019-07-08": 0.9311513621092989,
+ "conc_after_-2019-07-01": 1.0140363822911267,
+ "median_ratio_placebo": [
+  {
+   "series": "imm3x4 (target)",
+   "med_ratio": 1.272212,
+   "null_med": 1.027302,
+   "rotation_p": 0.080706
+  },
+  {
+   "series": "2y",
+   "med_ratio": 1.167457,
+   "null_med": 1.006197,
+   "rotation_p": 0.363976
+  },
+  {
+   "series": "5y",
+   "med_ratio": 1.149837,
+   "null_med": 1.00411,
+   "rotation_p": 0.050775
+  }
+ ]
+}

@@ -1,0 +1,104 @@
+==============================================================================
+STAGE 1  event book
+==============================================================================
+sample      : 2022-01-01 -> 2026-08-25  (SR3 era)
+calendar    : 2021-11-01 -> 2026-09-30  (wider, for overlap detection)
+offsets     : [-120, -90, -60, -45, -30, -20, -15, -10, -5, 0, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300]
+baseline    : offset -60 min
+ranks       : [1, 2, 3, 4, 5]
+
+--- ForexFactory FED_SPEAKERS calendar ---
+fetch_events returned 1327 rows in 27.2s
+columns: ['EventId', 'WeekAnchor', 'Date', 'TimeLabel', 'Timestamp', 'TimestampNYC', 'CalendarTimeZone', 'Currency', 'Impact', 'ImpactRank', 'Title', 'DetailLevel', 'Actual', 'Forecast', 'Previous', 'ActualOutcome', 'PreviousRevised', 'PreviousRevisionDirection', 'SourceURL']
+cross-check _driver_analysis/fed_calendar_raw.parquet over the same range: 1326 rows (this fetch: 1327)
+  EventId overlap 1326   only-here 1   only-there 0
+
+--- timestamp hygiene ---
+TimeLabel value counts (top 12):
+          '3:00pm' : 79
+          '2:00pm' : 68
+          '4:00pm' : 50
+          '6:00pm' : 47
+          '5:00pm' : 45
+          '1:00pm' : 35
+          '6:30pm' : 35
+          '1:30pm' : 32
+          '7:00pm' : 31
+          '8:30pm' : 28
+          '7:30pm' : 28
+          '5:30pm' : 25
+'All Day'/'Tentative'-style rows: 0
+NaT TimestampNYC: 0 -> dropped
+calendar rows with a usable timestamp: 1327
+duplicate (speaker, timestamp) rows dropped: 0
+midnight-stamped (00:00) rows: 0
+press conferences in the calendar: 0 (kept for overlap + quiet-day detection, EXCLUDED as events)
+events after press-conf exclusion: 1327; inside the SR3 sample: 1290
+events with an unparseable speaker: 0 -> dropped
+
+--- point-in-time stance labels ---
+load_global_scores('global_hawk_dove_scores.csv', 'trailing_5_avg') -> 1943 rows, FED 731
+FED rows published AFTER the speech they score: 53.4% (median lag 1d)
+cross-check vs fed_hawk_dove_scores.csv: 700 shared (speaker,date) rows, 98.71% identical on trailing_5_avg
+constructor in force: G.ScoreLookup(scores, 'FED', 'trailing_5_avg', point_in_time=True)
+  ._pit == True   (the NOPIT control is built only to measure the difference)
+PIT is BINDING on 313 / 1290 events (24.3%): the non-PIT label differs or exists where PIT does not
+  PIT NaN but non-PIT has a score : 132
+  both present, different value   : 181
+  PIT score present               : 1034 / 1290
+stance_sign: hawk(+1) 785  dove(-1) 226  unsigned(0) 279
+bucket: {-2: 89, -1: 24, 0: 660, 1: 340, 2: 177}
+
+is_fomc_day 1   is_cpi_day 54   is_nfp_day 65
+role: {'President': 627, 'Governor': 473, 'President (NY)': 115, 'Chair': 75}
+is_voter: {True: 1001, False: 289}
+
+--- overlap ---
+definition: another FED_SPEAKERS calendar entry (PRESS CONFERENCES INCLUDED, and speeches with no ex-ante score included) whose timestamp falls within
+  (a) WINDOW-INTERSECTION reading: |dt| < 420 min, i.e. the two [-120, +300] windows share at least one minute
+  (b) IN-WINDOW reading: the other speech sits inside this one's [-120, +300] window
+is_overlapping in the panel = (a), the strict window-intersection reading.
+(a) |dt| < 420 min  -> overlapping 926 / 1290   clean 364
+(b) other speech inside [-120,+300] -> overlapping 768   clean 522
+    |dt| <  60 min -> overlapping 280
+    |dt| < 120 min -> overlapping 501
+    |dt| < 240 min -> overlapping 759
+    |dt| < 300 min -> overlapping 835
+    |dt| < 420 min -> overlapping 926
+non-SR3 root inside the sample: 0 (must be 0)
+
+WROTE events.parquet  1290 events  2022-01-11 -> 2026-08-25
+
+--- placebo draw ---
+business days in sample 1161; days carrying ANY Fed calendar entry 606; FOMC decision days excluded too
+quiet-day pool: 556 days  2022-01-03 -> 2026-08-24
+quiet days by weekday: {0: 127, 1: 119, 2: 90, 3: 104, 4: 116}
+
+MATCHED ON THREE THINGS, not two. The brief asks for weekday and clock time.
+A uniform draw over the whole sample also has to be checked on CALENDAR time,
+and it failed: measured on the first (uniform) draw the real hawk book had 0%
+of its events in 2022 against 28% for its placebos, a 28pp year-share gap, and
+the median placebo sat 525 days from its parent. 2022 was the fastest
+tightening in forty years and 2024-25 was the cutting cycle, so a placebo drawn
+from the wrong year carries a different drift AND a different intraday vol from
+the event it is meant to null out - an error that runs in the direction that
+flatters the hypothesis. So the pool is restricted to the narrowest window
+around the parent date that still holds 3 same-weekday quiet days.
+events with no same-weekday quiet day: 28
+placebo events drawn: 3786  (2.93x the real book)
+distinct placebo days used: 545 of 556 quiet days (days are REUSED across placebos - unavoidable with this pool size)
+weekday match: real {0: 172, 1: 277, 2: 254, 3: 309, 4: 250, 5: 13, 6: 15}
+              placebo {0: 516, 1: 831, 2: 762, 3: 927, 4: 750}
+clock-time match, top 6 real   : {'10:00': 0.071, '09:00': 0.056, '13:00': 0.048, '12:00': 0.047, '11:00': 0.039, '08:30': 0.029}
+clock-time match, top 6 placebo: {'10:00': 0.072, '09:00': 0.057, '13:00': 0.048, '12:00': 0.047, '11:00': 0.04, '08:30': 0.029}
+placebo stance_sign: hawk 2304  dove 666  unsigned 816
+RNG: np.random.default_rng(20260825); consumed once per real event in (speech_ts, event_id) order, over a SORTED candidate list
+proximity window actually used: {'+-60d': 1248, '+-120d': 14}
+distance from parent: median 28d  mean 32d  p90 56d   (uniform draw was median 525d, p90 1169d)
+year-share gap between real and placebo, by stance (pp):
+        hawk: max |gap| 1.1 pp   {2023: 0.8, 2024: 1.1, 2025: -0.9, 2026: -1.0}
+        dove: max |gap| 1.3 pp   {2025: -0.2, 2026: -1.2, 2024: 1.3, 2023: 0.0}
+    unsigned: max |gap| 1.7 pp   {2022: 1.7, 2023: -0.9, 2025: 0.1, 2024: -0.2, 2026: -0.7}
+    (the uniform draw scored 27.7 pp for hawks and 33.2 pp for doves)
+WROTE placebo_events.parquet  3786 rows
+WROTE quiet_days.parquet      556 rows

@@ -1,0 +1,120 @@
+================================================================================================
+B1  INDEPENDENT METRIC AUDIT -- Analysis B chair regime split
+================================================================================================
+panel rows 1912  cols 24  span 2019-01-02 .. 2026-08-24
+
+------------------------------------------------------------------------------------------------
+[CONTROL] reproduce the author's four cell means from scratch
+------------------------------------------------------------------------------------------------
+clean sample (ex-FOMC/CPI/NFP, |d| present) = 1672   author said 1672   match=True
+  Powell  n= 1616 sp= 753 nsp= 863  num(mean|d| speech)=3.8469 (author 3.847)  den(non-speech)=3.8240 (author 3.824)  ratio=1.0060 (author 1.006)   MATCH=True
+  Warsh   n=   56 sp=  22 nsp=  34  num(mean|d| speech)=3.7224 (author 3.722)  den(non-speech)=3.1526 (author 3.153)  ratio=1.1807 (author 1.181)   MATCH=True
+  ratio-of-ratios rho = 1.1737   (author 1.174)   CONTROL_PASS=True
+
+------------------------------------------------------------------------------------------------
+[1] NORMALIZATION -- did the ratio actually lead, and what drives rho?
+------------------------------------------------------------------------------------------------
+  rho = (Warsh num / Powell num) / (Warsh den / Powell den)
+      = 0.9676 / 0.8244 = 1.1737   (identity check vs rho: True)
+  NUMERATOR   moves -3.2%  across the handover (speech-day |d| 3.85 -> 3.72 bp)
+  DENOMINATOR moves -17.6%  across the handover (non-speech |d| 3.82 -> 3.15 bp)
+  log decomposition: share of log(rho) from the numerator = -20.5%, from the denominator = 120.5%
+  -> the entire directional signal is a FALL IN THE DENOMINATOR, not a rise in the numerator.
+  report labels the raw cross-regime diff 'SECONDARY (subordinate)': True
+  report contains an explicit V3 mutation removing the normalization      : True
+  verdict string in report                                                : ['VERDICT: undetermined_sample']
+
+------------------------------------------------------------------------------------------------
+[5] UNITS -- is d_rate_bp really basis points, in BOTH regimes?
+------------------------------------------------------------------------------------------------
+  |d_rate_bp - 100*diff(imm3x4_rate)|  max=0.000e+00  mean=0.000e+00  n=1911
+    Powell  max err 0.000e+00   level imm3x4_rate mean 2.630 (percent-scale rate)  mean|d| 4.236 bp
+    Warsh   max err 0.000e+00   level imm3x4_rate mean 4.045 (percent-scale rate)  mean|d| 3.945 bp
+  100x factor test: is mean|d| in the plausible bp band 0.3-10 in both regimes? True
+  sqrt(252)=15.87 test: Powell/Warsh num ratio 0.968 -- nowhere near 15.87 or 1/15.87. OK
+
+------------------------------------------------------------------------------------------------
+[3] FILTER INTEGRITY -- do the ex-CPI/NFP/FOMC flags actually FIRE in the Warsh window?
+------------------------------------------------------------------------------------------------
+  Warsh regime panel days = 64   clean = 56   excluded = 8 (+ 0 NaN |d|)
+    is_cpi_day  in window: 3   dates [datetime.date(2026, 6, 10), datetime.date(2026, 7, 14), datetime.date(2026, 8, 12)]
+    is_nfp_day  in window: 3   dates [datetime.date(2026, 6, 5), datetime.date(2026, 7, 2), datetime.date(2026, 8, 7)]
+    is_fomc_day in window: 2  dates [datetime.date(2026, 6, 17), datetime.date(2026, 7, 29)]
+    is_blackout in window: 20
+  per-year flag counts (a dead flag in the last year would be a vacuous filter):
+    2019  cpi= 12  nfp= 12  fomc=  8
+    2020  cpi= 11  nfp= 12  fomc=  8
+    2021  cpi= 12  nfp= 12  fomc=  8
+    2022  cpi= 12  nfp= 12  fomc=  8
+    2023  cpi= 12  nfp= 12  fomc=  8
+    2024  cpi= 12  nfp= 12  fomc=  8
+    2025  cpi= 11  nfp= 11  fomc=  8
+    2026  cpi=  8  nfp=  8  fomc=  5
+
+------------------------------------------------------------------------------------------------
+[2] DENOMINATOR INSTABILITY -- levels, sampling error, fragility, and mix
+------------------------------------------------------------------------------------------------
+  Powell  DENOMINATOR mean|d| non-speech = 3.824 bp   sd=7.029  n=863  SE=0.239  boot95=[3.382,4.346]  median=1.993
+  Powell  NUMERATOR   mean|d| speech     = 3.847 bp   sd=4.701  n=753  SE=0.171  median=2.491
+  Warsh   DENOMINATOR mean|d| non-speech = 3.153 bp   sd=1.937  n=34  SE=0.332  boot95=[2.536,3.813]  median=2.523
+  Warsh   NUMERATOR   mean|d| speech     = 3.722 bp   sd=2.204  n=22  SE=0.470  median=3.375
+  -> the Warsh denominator's own 95% CI is roughly +-0.65 bp on a 3.15 bp mean: a 21% band.
+  leave-one-out on the 34 Warsh non-speech days: denominator range [3.014,3.239], rho range [1.143,1.228]
+  5 largest Warsh non-speech |d| (bp): [7.73, 7.34, 6.51, 6.23, 5.49]   drop the single largest -> den 3.014, rho 1.228
+  leave-one-out on the 22 Warsh speech days:     numerator   range [3.541,3.872], rho range [1.116,1.221]
+
+  is the Warsh denominator anomalously LOW, or ordinary? season-matched (22 May .. 24 Aug) non-speech mean|d|:
+ year  n  nsp  den_summer  num_summer  ratio  den_restofyear  den_summer_over_rest
+ 2019 58   37       7.983       5.178  0.649           2.814                 2.837
+ 2020 58   43       0.410       0.432  1.053           1.433                 0.286
+ 2021 57   35       0.345       0.398  1.153           1.152                 0.300
+ 2022 57   32       6.271       7.559  1.205           6.098                 1.029
+ 2023 58   38       4.517       6.183  1.369           8.490                 0.532
+ 2024 58   26       4.005       4.781  1.194           4.154                 0.964
+ 2025 56   26       3.188       4.111  1.289           3.794                 0.840
+ 2026 56   34       3.153       3.722  1.181           3.060                 1.030
+  Warsh 2026 summer denominator 3.153 vs 2025 summer 3.188 and 2024 summer 4.005
+
+  MIX of the denominator -- are Warsh non-speech days disproportionately BLACKOUT (mechanically quiet)?
+    Powell  non-speech days  863: blackout  392 ( 45.4%)  mean|d| blackout 4.160  non-blackout 3.544
+    Powell  speech     days  753: blackout  146 ( 19.4%)
+    Warsh   non-speech days   34: blackout   14 ( 41.2%)  mean|d| blackout 3.563  non-blackout 2.865
+    Warsh   speech     days   22: blackout    4 ( 18.2%)
+  ratio recomputed on NON-BLACKOUT days only (removes the blackout-mix confound):
+    Powell  n=1078 sp= 607 num=3.683 den=3.544 ratio=1.039
+    Warsh   n=  38 sp=  18 num=3.863 den=2.865 ratio=1.348
+    rho(non-blackout) = 1.298   (primary rho 1.174)
+
+------------------------------------------------------------------------------------------------
+[4] SELECTION / COMPOSITION -- who is speaking in each regime?
+------------------------------------------------------------------------------------------------
+  Powell  speech days  753: containing the sitting CHAIR (Powell)  135 ( 17.9%)
+    top speakers: Williams:160, Powell:135, Bowman:107, Bostic:99, Waller:85, Barr:77, Barkin:71, Goolsbee:65
+    distinct speakers 30, mean n_speakers/day 2.06, n_press_conf total 0
+  Warsh   speech days   22: containing the sitting CHAIR (Powell)    0 (  0.0%)
+    top speakers: Williams:5, Bowman:5, Waller:4, Goolsbee:4, Schmid:4, Musalem:4, Cook:3, Kashkari:3
+    distinct speakers 15, mean n_speakers/day 2.27, n_press_conf total 0
+  Powell regime: mean|d| on CHAIR speech days 3.945 (n=135)  vs NON-chair speech days 3.825 (n=618)
+  APPLES-TO-APPLES: Powell regime with CHAIR speech days DROPPED -> num=3.825 den=3.824 ratio=1.000 (n_sp=618)
+     rho vs that reference = 1.180   (primary rho 1.174)
+
+------------------------------------------------------------------------------------------------
+[3b] IS |close-to-close d| THE RIGHT INFORMATION PROXY? day-level daily-vs-intraday check
+------------------------------------------------------------------------------------------------
+  nav_closed.csv: 440 FED event trades, 2023-01-06 .. 2026-03-27, bpv values [np.float64(-100000.0)]
+  intraday 3h event |move| bp: mean 2.030 median 1.295 max 18.121  -- same bp order as the daily panel (units cross-check)
+  post-2026-05-22 intraday trades: 0  (author claimed 0)
+  day-level join: 345 days with intraday events matched to the panel; clean 311
+    corr(daily |d|, intr_mean)  pearson 0.296   spearman 0.343   n=311
+    corr(daily |d|, intr_max)  pearson 0.323   spearman 0.344   n=311
+    -> daily |close-to-close| explains only R^2=0.104 of the day-level variation in the intraday EVENT-WINDOW move.
+    days in the TOP quartile of intraday event |move| that are ALSO in the BOTTOM quartile of daily |d|: 6 of 78 (7.7%) -- offsetting/absorbed intraday information invisible to the daily metric
+    post-transition intraday observations = 0 -> the intraday instrument CANNOT arbitrate the regime split.
+
+------------------------------------------------------------------------------------------------
+SUMMARY OF RECOMPUTED NUMBERS
+------------------------------------------------------------------------------------------------
+  Powell  num 3.847  den 3.824  ratio 1.006  (n 753/863)
+  Warsh   num 3.722  den 3.153  ratio 1.181  (n 22/34)
+  rho 1.174 = num_ratio 0.968 / den_ratio 0.824
+  CONTROL_PASS True

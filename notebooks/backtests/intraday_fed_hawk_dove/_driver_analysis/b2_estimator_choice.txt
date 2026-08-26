@@ -1,0 +1,31 @@
+================================================================================================
+B2  METRIC-CHOICE ROBUSTNESS -- is rho an artifact of using the MEAN of a heavy-tailed |d|?
+================================================================================================
+aggregator                               PowNum   PowDen   PowR   WarNum   WarDen   WarR     rho
+mean|d|            (author primary)       3.847    3.824  1.006    3.722    3.153  1.181   1.174
+median|d|          (author V4)            2.491    1.993  1.250    3.375    2.523  1.337   1.070
+RMS  sqrt(mean d^2)                       6.072    7.998  0.759    4.300    3.685  1.167   1.537
+trimmed mean 10%                          3.015    2.608  1.156    3.608    2.980  1.211   1.047
+geometric mean exp(mean log|d|)           1.664    1.486  1.120    3.054    2.574  1.186   1.059
+mean of winsorized@95pct                  3.472    3.209  1.082    3.720    3.110  1.196   1.106
+80th pctile |d|                           6.228    5.563  1.120    5.800    4.754  1.220   1.089
+  rho across aggregators: min 1.047  max 1.537  -- all below the author's MDE 1.69: True
+
+------------------------------------------------------------------------------------------------
+DENOMINATOR COMPOSITION -- are the 34 Warsh non-speech days a peculiar set?
+------------------------------------------------------------------------------------------------
+  Powell  non-speech dow share Mon..Fri: [np.float64(0.248), np.float64(0.214), np.float64(0.146), np.float64(0.204), np.float64(0.188)]   mean days_to_fomc 19.9  median 19
+  Powell  speech     dow share Mon..Fri: [np.float64(0.165), np.float64(0.228), np.float64(0.219), np.float64(0.227), np.float64(0.161)]   mean days_to_fomc 26.2
+  Warsh   non-speech dow share Mon..Fri: [np.float64(0.265), np.float64(0.265), np.float64(0.147), np.float64(0.118), np.float64(0.206)]   mean days_to_fomc 20.6  median 22
+  Warsh   speech     dow share Mon..Fri: [np.float64(0.182), np.float64(0.136), np.float64(0.182), np.float64(0.364), np.float64(0.136)]   mean days_to_fomc 25.6
+
+  dow-REWEIGHTED excess ratio (non-speech days reweighted to the speech-day day-of-week mix):
+    Powell  num 3.847  dow-matched den 3.778  ratio 1.018
+    Warsh   num 3.722  dow-matched den 3.067  ratio 1.214
+    rho(dow-matched) = 1.192
+
+  WITHIN-2026 only (ambient vol identical by construction, no normalization needed):
+    2026 pre  (Powell)  n= 85 sp= 49  num 4.060  den 3.060  ratio 1.327  excess +1.001 bp
+    2026 post (Warsh)   n= 56 sp= 22  num 3.722  den 3.153  ratio 1.181  excess +0.570 bp
+
+  Warsh within-regime excess = +0.570 bp, SE 0.575 -> t = +0.99 (Welch, n=22/34)  -- consistent with the author's p 0.38

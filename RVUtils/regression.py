@@ -8,6 +8,7 @@ import pandas as pd
 import statsmodels.api as sm
 from scipy import stats
 from scipy.odr import ODR, Model, RealData
+from scipy.optimize import curve_fit
 
 from RVUtils.mean_reversion import simulate_mean_reversion_ou, calibrate_ou
 
@@ -25,14 +26,23 @@ def make_linear_regression_builder(
     window: Optional[int] = None,
 ):
     """
-    Multi-linear regression builder with TLS/OLS/WLS/GLS, rich preprocessing, and rolling regression utilities.
+    Regression builder with linear and nonlinear models, rich preprocessing, and rolling utilities.
     Dates are taken from the index; index MUST be datetime/date-like.
+
+    Models (via fit(model=...)):
+      "OLS", "WLS", "GLS", "TLS", "PCR"  — linear
+      "POLY"      — polynomial basis expansion + OLS (poly_degree=2)
+      "SIGMOID"   — 4-parameter logistic NLS: y = floor + (ceil-floor)/(1+exp(-k(x-x0)))
+                    single predictor only; optional sigmoid_p0, sigmoid_bounds
+      "PIECEWISE" — piecewise linear with hinge features (n_breaks=1)
+                    single predictor only; breakpoints found by profile RSS
 
     Returns:
       add_indep_var(obj, *, name=None, transform=None)
-      fit(*, model="OLS"|"WLS"|"GLS"|"TLS", weights=None, tls_x_errs=None, tls_y_errs=None, verbose=False)
+      fit(*, model="OLS", poly_degree=2, sigmoid_p0=None, n_breaks=1, verbose=False, ...)
       plot_actual_vs_predicted(title=None, date_color_bar=None, cmap="viridis", diff_verb=None)
       plot_residuals_vs_predicted(title=None, date_color_bar=None, cmap="viridis", diff_verb=None)
+      plot_residuals_timeseries(...)
       get_data() -> (X_design_df, y_series, results)
 
       if window is not None,
@@ -138,6 +148,9 @@ def make_linear_regression_builder(
         "dropped_columns": {"missing": [], "zero_var": [], "high_corr": [], "high_vif": []},
         "preprocess": pp,
         "window_default": (int(window) if window is not None else None),
+        "predict_curve": None,
+        "original_x_col": None,
+        "original_x_data": None,
     }
 
     # --------------------- add_indep_var ---------------------
@@ -401,6 +414,257 @@ def make_linear_regression_builder(
                 scaled=scale,
             ),
         )
+
+    # --------------------- Sigmoid (4-PL) NLS fit ---------------------
+    def _sigmoid_fit(X, y_vec, p0=None, bounds=None, verbose=False):
+        cols = list(X.columns)
+        if len(cols) != 1:
+            raise ValueError("SIGMOID requires exactly one independent variable.")
+        x_col = cols[0]
+        x_data = X[x_col].values.astype(np.float64)
+        y_data = y_vec.values.astype(np.float64)
+        n = len(y_data)
+
+        def _logistic(x, floor, ceiling, k, x0):
+            return floor + (ceiling - floor) / (1.0 + np.exp(np.clip(-k * (x - x0), -500, 500)))
+
+        if p0 is None:
+            y_lo = float(np.percentile(y_data, 5))
+            y_hi = float(np.percentile(y_data, 95))
+            x_mid = float(np.median(x_data))
+            x_range = float(np.ptp(x_data)) or 1.0
+            p0 = [y_lo, y_hi, 4.0 / x_range, x_mid]
+        if bounds is None:
+            bounds = ([-np.inf, -np.inf, -np.inf, -np.inf],
+                      [np.inf, np.inf, np.inf, np.inf])
+
+        popt, pcov = curve_fit(_logistic, x_data, y_data, p0=p0, bounds=bounds, maxfev=20000)
+        se = np.sqrt(np.maximum(np.diag(pcov), 0.0))
+
+        y_hat = _logistic(x_data, *popt)
+        resid = y_data - y_hat
+        ss_res = float(np.sum(resid ** 2))
+        ss_tot = float(np.sum((y_data - y_data.mean()) ** 2))
+        rsq = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+        pnames = ["floor", "ceiling", "k", "x0"]
+        params = pd.Series(popt, index=pnames)
+        bse_s = pd.Series(se, index=pnames)
+        k_p = len(pnames)
+        df_r = max(n - k_p, 1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            tvals = params / bse_s
+        pvals = pd.Series(2 * (1 - stats.t.cdf(np.abs(tvals), df=df_r)), index=pnames)
+
+        llf = -0.5 * n * (np.log(2 * np.pi) + np.log(ss_res / n) + 1.0) if n > 0 else np.nan
+        aic = -2.0 * llf + 2 * k_p if n > 0 else np.nan
+        bic = -2.0 * llf + k_p * np.log(n) if n > 0 else np.nan
+
+        fl, cl, kk, x0v = popt
+        eqn = (f"y = {fl:.3f} + ({cl:.3f}−{fl:.3f})"
+               f" / (1+exp(−{kk:.3f}·(x−{x0v:.3f})))")
+
+        if verbose:
+            print("Sigmoid (4-PL) NLS:")
+            for nm, val, s in zip(pnames, popt, se):
+                print(f"  {nm:10s} = {val:.4f}  (SE {s:.4f})")
+            print(f"  R²         = {rsq:.4f}")
+            print(f"  AIC        = {aic:.2f}")
+            print(f"  BIC        = {bic:.2f}")
+            print(f"  n          = {n}")
+
+        def predict(x_new):
+            return _logistic(np.asarray(x_new, dtype=np.float64), *popt)
+
+        return SimpleNamespace(
+            params=params, bse=bse_s, pvalues=pvals, rsquared=rsq,
+            resid=pd.Series(resid, index=y_vec.index),
+            fittedvalues=pd.Series(y_hat, index=y_vec.index),
+            model=SimpleNamespace(endog_names=y_vec.name, exog_names=pnames),
+            nobs=n, df_resid=df_r, aic=aic, bic=bic,
+            eqn_text=eqn, predict_curve=predict,
+            sigmoid_info=SimpleNamespace(
+                floor=fl, ceiling=cl, k=kk, x0=x0v,
+                popt=popt, pcov=pcov, x_col=x_col,
+            ),
+        )
+
+    # --------------------- Polynomial basis expansion + OLS -----------
+    def _poly_fit(X, y_vec, degree=2, verbose=False):
+        cols = list(X.columns)
+        if len(cols) == 0:
+            raise ValueError("POLY requires at least one independent variable.")
+        n = len(y_vec)
+
+        poly_parts, poly_names = [], []
+        for col in cols:
+            vals = X[col].values.astype(np.float64)
+            for d in range(1, degree + 1):
+                poly_parts.append(vals ** d)
+                poly_names.append(f"{col}^{d}" if d > 1 else col)
+        X_poly = pd.DataFrame(
+            np.column_stack(poly_parts), index=X.index, columns=poly_names,
+        )
+        if add_constant:
+            X_poly = sm.add_constant(X_poly)
+
+        res = sm.OLS(y_vec, X_poly).fit()
+        if verbose:
+            print(res.summary())
+
+        predict_fn = None
+        if len(cols) == 1:
+            coefs = res.params.values
+            has_c = "const" in res.params.index
+
+            def predict(x_new):
+                x_new = np.asarray(x_new, dtype=np.float64)
+                out = np.zeros_like(x_new)
+                idx = 0
+                if has_c:
+                    out += coefs[0]
+                    idx = 1
+                for d in range(1, degree + 1):
+                    out += coefs[idx] * x_new ** d
+                    idx += 1
+                return out
+
+            predict_fn = predict
+
+        parts = []
+        for nm, v in res.params.items():
+            if nm == "const":
+                parts.append(f"{v:.4f}")
+            else:
+                parts.append(f"{v:+.4f}·{nm}")
+        eqn = f"y = {' '.join(parts)}"
+
+        ns = SimpleNamespace(
+            params=res.params, bse=res.bse, pvalues=res.pvalues,
+            rsquared=res.rsquared,
+            resid=res.resid, fittedvalues=res.fittedvalues,
+            model=res.model, nobs=int(res.nobs), df_resid=int(res.df_resid),
+            aic=float(getattr(res, "aic", np.nan)),
+            bic=float(getattr(res, "bic", np.nan)),
+            eqn_text=eqn, predict_curve=predict_fn,
+            poly_info=SimpleNamespace(degree=degree, x_cols=cols),
+        )
+        return ns, X_poly
+
+    # --------------------- Piecewise linear with breakpoints ----------
+    def _piecewise_fit(X, y_vec, n_breaks=1, verbose=False):
+        cols = list(X.columns)
+        if len(cols) != 1:
+            raise ValueError("PIECEWISE requires exactly one independent variable.")
+        x_col = cols[0]
+        x_data = X[x_col].values.astype(np.float64)
+        y_data = y_vec.values.astype(np.float64)
+        n = len(y_data)
+
+        x_sorted = np.sort(x_data)
+        margin = max(int(0.10 * n), 5)
+
+        def _rss(bps):
+            feats = [x_data]
+            for bp in bps:
+                feats.append(np.maximum(0.0, x_data - bp))
+            Xm = np.column_stack(feats)
+            if add_constant:
+                Xm = np.column_stack([np.ones(n), Xm])
+            try:
+                b = np.linalg.lstsq(Xm, y_data, rcond=None)[0]
+                return float(np.sum((y_data - Xm @ b) ** 2))
+            except Exception:
+                return np.inf
+
+        if n_breaks == 1:
+            cands = x_sorted[margin:-margin]
+            if len(cands) == 0:
+                cands = x_sorted[1:-1]
+            best_rss, best_bp = np.inf, float(np.median(x_data))
+            for bp in cands:
+                r = _rss([float(bp)])
+                if r < best_rss:
+                    best_rss, best_bp = r, float(bp)
+            breakpoints = [best_bp]
+        elif n_breaks == 2:
+            cands = np.linspace(
+                x_sorted[margin], x_sorted[-margin],
+                min(50, max(n - 2 * margin, 3)),
+            )
+            best_rss = np.inf
+            breakpoints = [float(np.percentile(x_data, 33)),
+                           float(np.percentile(x_data, 67))]
+            for i, b1 in enumerate(cands):
+                for b2 in cands[i + 1:]:
+                    r = _rss([float(b1), float(b2)])
+                    if r < best_rss:
+                        best_rss = r
+                        breakpoints = [float(b1), float(b2)]
+        else:
+            qs = np.linspace(0, 1, n_breaks + 2)[1:-1]
+            breakpoints = [float(np.quantile(x_data, q)) for q in qs]
+            for _it in range(10):
+                for idx in range(len(breakpoints)):
+                    lo = breakpoints[idx - 1] if idx > 0 else x_sorted[margin]
+                    hi = (breakpoints[idx + 1]
+                          if idx < len(breakpoints) - 1 else x_sorted[-margin])
+                    grid = np.linspace(lo, hi, 30)
+                    best_here, best_val = np.inf, breakpoints[idx]
+                    for g in grid:
+                        trial = list(breakpoints)
+                        trial[idx] = float(g)
+                        r = _rss(trial)
+                        if r < best_here:
+                            best_here, best_val = r, float(g)
+                    breakpoints[idx] = best_val
+
+        bp_names = [f"hinge({x_col}>{bp:.2f})" for bp in breakpoints]
+        col_map = {x_col: x_data}
+        for nm, bp in zip(bp_names, breakpoints):
+            col_map[nm] = np.maximum(0.0, x_data - bp)
+        X_pw = pd.DataFrame(col_map, index=X.index)
+        if add_constant:
+            X_pw = sm.add_constant(X_pw)
+        res = sm.OLS(y_vec, X_pw).fit()
+
+        def predict(x_new):
+            x_new = np.asarray(x_new, dtype=np.float64)
+            feats = [x_new]
+            for bp in breakpoints:
+                feats.append(np.maximum(0.0, x_new - bp))
+            Xm = np.column_stack(feats)
+            if add_constant:
+                Xm = np.column_stack([np.ones(len(x_new)), Xm])
+            return Xm @ res.params.values
+
+        parts = []
+        for nm, v in res.params.items():
+            if nm == "const":
+                parts.append(f"{v:.4f}")
+            else:
+                parts.append(f"{v:+.4f}·{nm}")
+        eqn = f"y = {' '.join(parts)}"
+
+        if verbose:
+            bps_str = ", ".join(f"{bp:.3f}" for bp in breakpoints)
+            print(f"Piecewise linear ({n_breaks} break"
+                  f"{'s' if n_breaks > 1 else ''}):")
+            print(f"  breakpoints = [{bps_str}]")
+            print(res.summary())
+
+        return SimpleNamespace(
+            params=res.params, bse=res.bse, pvalues=res.pvalues,
+            rsquared=res.rsquared,
+            resid=res.resid, fittedvalues=res.fittedvalues,
+            model=res.model, nobs=int(res.nobs), df_resid=int(res.df_resid),
+            aic=float(getattr(res, "aic", np.nan)),
+            bic=float(getattr(res, "bic", np.nan)),
+            eqn_text=eqn, predict_curve=predict,
+            piecewise_info=SimpleNamespace(
+                breakpoints=breakpoints, n_breaks=n_breaks, x_col=x_col,
+            ),
+        ), X_pw
 
     # --------------------- preprocessing helpers ---------------------
     def _winsorize(s: pd.Series, lo=0.01, hi=0.99):
@@ -692,25 +956,34 @@ def make_linear_regression_builder(
         tls_y_errs: Optional[np.ndarray] = None,
         tls_lambda: Optional[Union[float, Sequence[float]]] = None,
         verbose: bool = False,
-        pcr_n_components: Optional[Union[int, float]] = None,  # int k or float variance threshold
+        pcr_n_components: Optional[Union[int, float]] = None,
         pcr_scale: bool = True,
+        poly_degree: int = 2,
+        sigmoid_p0: Optional[Sequence[float]] = None,
+        sigmoid_bounds: Optional[tuple] = None,
+        n_breaks: int = 1,
     ):
         if len(state["xs"]) == 0:
             raise ValueError("No independent variables added. Call add_indep_var(...) first.")
 
         model = model.upper()
-        if model not in {"OLS", "WLS", "GLS", "TLS", "PCR"}:
-            raise ValueError("model must be one of {'OLS','WLS','GLS','TLS', 'PCR'}")
+        _valid = {"OLS", "WLS", "GLS", "TLS", "PCR", "POLY", "SIGMOID", "PIECEWISE"}
+        if model not in _valid:
+            raise ValueError(f"model must be one of {sorted(_valid)}")
+
+        state["predict_curve"] = None
+        state["original_x_col"] = None
+        state["original_x_data"] = None
 
         X_used, y_used, date_used, w_used = _assemble_clean_data(weights=weights)
 
-        if X_used.shape[0] <= (X_used.shape[1]):
+        if model not in ("SIGMOID",) and X_used.shape[0] <= X_used.shape[1]:
             raise ValueError(f"Not enough observations after preprocessing: n={X_used.shape[0]}, p={X_used.shape[1]}.")
 
-        if model == "TLS":
-            X_tls = X_used.drop(columns=["const"]) if "const" in X_used.columns else X_used.copy()
+        X_raw = X_used.drop(columns=["const"], errors="ignore")
 
-            # If the user passed a lambda but not explicit sx/sy, build them.
+        if model == "TLS":
+            X_tls = X_raw.copy()
             if tls_x_errs is None and tls_y_errs is None and tls_lambda is not None:
                 lam = np.asarray(tls_lambda, dtype=float)
                 n, k = X_tls.shape
@@ -725,26 +998,42 @@ def make_linear_regression_builder(
             else:
                 res = _tls_fit(X_tls, y_used, x_errs=tls_x_errs, y_errs=tls_y_errs, verbose=verbose)
 
+        elif model == "PCR":
+            if X_raw.shape[1] == 0:
+                raise ValueError("PCR requires at least one non-constant regressor.")
+            res = _pcr_fit(X_raw, y_used, n_components=pcr_n_components, scale=pcr_scale, verbose=verbose)
+
+        elif model == "SIGMOID":
+            res = _sigmoid_fit(X_raw, y_used, p0=sigmoid_p0, bounds=sigmoid_bounds, verbose=verbose)
+            if X_raw.shape[1] == 1:
+                state["original_x_col"] = X_raw.columns[0]
+                state["original_x_data"] = X_raw.iloc[:, 0]
+            state["predict_curve"] = res.predict_curve
+            X_used = X_raw
+
+        elif model == "POLY":
+            res, X_poly = _poly_fit(X_raw, y_used, degree=poly_degree, verbose=verbose)
+            if X_raw.shape[1] == 1:
+                state["original_x_col"] = X_raw.columns[0]
+                state["original_x_data"] = X_raw.iloc[:, 0]
+            state["predict_curve"] = res.predict_curve
+            X_used = X_poly
+
+        elif model == "PIECEWISE":
+            res, X_pw = _piecewise_fit(X_raw, y_used, n_breaks=n_breaks, verbose=verbose)
+            if X_raw.shape[1] == 1:
+                state["original_x_col"] = X_raw.columns[0]
+                state["original_x_data"] = X_raw.iloc[:, 0]
+            state["predict_curve"] = res.predict_curve
+            X_used = X_pw
+
         else:
             if model == "OLS":
                 sm_model = sm.OLS(y_used, X_used)
             elif model == "WLS":
                 if w_used is None and weights is None:
-                    raise ValueError("WLS requires 'weights'. Provide weights aligned to data.")
+                    raise ValueError("WLS requires 'weights'.")
                 sm_model = sm.WLS(y_used, X_used, weights=(w_used if w_used is not None else weights))
-
-            elif model == "PCR":
-                X_pcr = X_used.drop(columns=["const"], errors="ignore")
-                if X_pcr.shape[1] == 0:
-                    raise ValueError("PCR requires at least one non-constant regressor.")
-                res = _pcr_fit(
-                    X_pcr,
-                    y_used,
-                    n_components=pcr_n_components,  # None->95% variance; float->threshold; int->k comps
-                    scale=pcr_scale,
-                    verbose=verbose,
-                )
-
             else:
                 sm_model = sm.GLS(y_used, X_used)
             res = sm_model.fit()
@@ -756,15 +1045,13 @@ def make_linear_regression_builder(
         state["X_used"] = X_used
         state["y_used"] = y_used
         state["date_used"] = date_used
-
-        if model == "PCR":
-            state["pcr_info"] = res.pcr_info
-        else:
-            state["pcr_info"] = None
+        state["pcr_info"] = getattr(res, "pcr_info", None)
 
         return res
 
     def _eqn_text(res):
+        if hasattr(res, "eqn_text") and res.eqn_text:
+            return f"{res.eqn_text}\nR² = {res.rsquared:.3f}"
         params = res.params
         rsq = res.rsquared
         parts = []
@@ -807,8 +1094,13 @@ def make_linear_regression_builder(
         y_hat = res.fittedvalues
         use_bar = state["date_color_bar_default"] if date_color_bar is None else bool(date_color_bar)
 
-        xcols = [c for c in state["X_used"].columns if c != "const"]
-        x_name = ", ".join(xcols) if xcols else "x"
+        orig_col = state.get("original_x_col")
+        if orig_col is not None:
+            xcols = [orig_col]
+            x_name = orig_col
+        else:
+            xcols = [c for c in state["X_used"].columns if c != "const"]
+            x_name = ", ".join(xcols) if xcols else "x"
         if on_returns:
             suffix = f" ({diff_verb or 'returns'})"
         elif on_diff:
@@ -818,7 +1110,10 @@ def make_linear_regression_builder(
 
         single_x = len(xcols) == 1
         if single_x:
-            x_data = state["X_used"][xcols[0]]
+            if state.get("original_x_data") is not None:
+                x_data = state["original_x_data"]
+            else:
+                x_data = state["X_used"][xcols[0]]
         else:
             x_data = y_hat
 
@@ -844,10 +1139,16 @@ def make_linear_regression_builder(
             x0, x1 = xlo - pad_x, xhi + pad_x
             ax.set_xlim(x0, x1)
 
-            xs = np.array([x0, x1])
-            intercept = float(res.params.get("const", 0.0))
-            slope = float(res.params[xcols[0]])
-            ax.plot(xs, intercept + slope * xs, "--", linewidth=1.2, color="gray")
+            predict_fn = state.get("predict_curve")
+            if predict_fn is not None:
+                xs = np.linspace(x0, x1, 200)
+                ys = predict_fn(xs)
+                ax.plot(xs, ys, "--", linewidth=1.5, color="gray")
+            else:
+                xs = np.array([x0, x1])
+                intercept = float(res.params.get("const", 0.0))
+                slope = float(res.params[xcols[0]])
+                ax.plot(xs, intercept + slope * xs, "--", linewidth=1.2, color="gray")
 
             ax.set_xlabel(f"{x_name}{suffix}")
         else:
@@ -1071,6 +1372,7 @@ def make_linear_regression_builder(
         tls_lambda: Optional[Union[float, Sequence[float]]] = None,
         pcr_n_components: Optional[Union[int, float]] = None,
         pcr_scale: bool = True,
+        poly_degree: int = 2,
         step: int = 1,
         min_obs: Optional[int] = None,
         verbose: bool = False,
@@ -1084,15 +1386,23 @@ def make_linear_regression_builder(
 
         # Resolve model and window
         mdl = (model.upper() if isinstance(model, str) else (state["model"] or "OLS")).upper()
-        if mdl not in {"OLS", "WLS", "GLS", "TLS", "PCR"}:
-            raise ValueError("model must be one of {'OLS','WLS','GLS','TLS','PCR'}")
+        if mdl not in {"OLS", "WLS", "GLS", "TLS", "PCR", "POLY"}:
+            raise ValueError("model must be one of {'OLS','WLS','GLS','TLS','PCR','POLY'}")
 
         W = int(window or state["window_default"] or 60)  # sane default = 60
         if W < 3:
             raise ValueError("window must be >= 3.")
 
         # Columns for parameter matrix (respect constant the same way as fit())
-        beta_cols = list(X_used.columns) if len(X_used.columns) else (["const"] if add_constant else [])
+        if mdl == "POLY":
+            raw_cols = [c for c in X_used.columns if c != "const"]
+            poly_cols = []
+            for c in raw_cols:
+                for d in range(1, poly_degree + 1):
+                    poly_cols.append(f"{c}^{d}" if d > 1 else c)
+            beta_cols = (["const"] + poly_cols) if add_constant else poly_cols
+        else:
+            beta_cols = list(X_used.columns) if len(X_used.columns) else (["const"] if add_constant else [])
         beta_df = pd.DataFrame(index=y_used.index[max(W - 1, 0) :], columns=beta_cols, dtype=float)
         r2 = pd.Series(index=beta_df.index, dtype=float, name="R2")
 
@@ -1126,6 +1436,12 @@ def make_linear_regression_builder(
                         scale=pcr_scale,
                         verbose=False,
                     )
+
+                elif mdl == "POLY":
+                    Xp = Xw.drop(columns=["const"], errors="ignore")
+                    if Xp.shape[1] == 0:
+                        continue
+                    res_w, _ = _poly_fit(Xp, yw, degree=poly_degree, verbose=False)
 
                 elif mdl == "TLS":
                     X_tls = Xw.drop(columns=["const"], errors="ignore")
@@ -1183,6 +1499,7 @@ def make_linear_regression_builder(
         tls_lambda: Optional[Union[float, Sequence[float]]] = None,
         pcr_n_components: Optional[Union[int, float]] = None,
         pcr_scale: bool = True,
+        poly_degree: int = 2,
         verbose: bool = False,
     ) -> Union[pd.DataFrame, pd.Series]:
         """
@@ -1199,6 +1516,7 @@ def make_linear_regression_builder(
             tls_lambda=tls_lambda,
             pcr_n_components=pcr_n_components,
             pcr_scale=pcr_scale,
+            poly_degree=poly_degree,
             step=step,
             min_obs=min_obs,
             verbose=verbose,
@@ -1223,6 +1541,7 @@ def make_linear_regression_builder(
         tls_lambda: Optional[Union[float, Sequence[float]]] = None,
         pcr_n_components: Optional[Union[int, float]] = None,
         pcr_scale: bool = True,
+        poly_degree: int = 2,
         verbose: bool = False,
     ) -> pd.Series:
         """Rolling R² over time (index = window end date)."""
@@ -1235,6 +1554,7 @@ def make_linear_regression_builder(
             tls_lambda=tls_lambda,
             pcr_n_components=pcr_n_components,
             pcr_scale=pcr_scale,
+            poly_degree=poly_degree,
             step=step,
             min_obs=min_obs,
             verbose=verbose,

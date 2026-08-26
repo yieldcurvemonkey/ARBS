@@ -1,0 +1,172 @@
+rates: (1912, 4)  2019-01-02 .. 2026-08-24
+fed calendar: (2412, 22)  2015-01-05 .. 2026-08-25
+cpi/nfp calendar: (921, 20)
+
+========================================================================
+CHAIR REGIME DISCOVERY
+========================================================================
+role prefixes present in the calendar:
+0
+FOMC Member     2251
+Fed Chair        128
+Fed Chairman      33
+
+events whose title carries a non-Vice Chair role: 161
+Chair-role events by speaker, first .. last:
+         count        min        max
+Speaker                             
+Yellen      53 2015-02-24 2017-11-29
+Powell     108 2017-11-28 2026-03-30
+
+Warsh events anywhere in the calendar: 0
+
+last 'Fed Chair/Chairman Powell' event : 2026-03-30
+Powell events AFTER that date: 1
+           Date                      Title
+2365 2026-05-31  FOMC Member Powell Speaks
+
+DATA-DERIVED INTERVAL for the handover: (2026-03-30, 2026-05-31]
+
+cross-check A  fomc_extras.CHAIRS -> Warsh from 2026-05-22
+cross-check B  FED_SPEAKER_QUARTERLY_LABELS.md -> ...l (+0) | medium | Confirmed 13 May 2026 by 54-45 (the narrowest chair vote on record) and sworn in 22 May 2026, so his FOMC tenure inside this window...
+
+is the repo date inside the data-derived interval? True
+
+ESTABLISHED: chair transition 2026-05-22, confident=True
+
+calendar days that are NOT on the rate spine: 444 days / 638 events (weekends, holidays, and any date outside the rate span)
+  of those, 52 fall INSIDE the rate span (weekend/holiday Fedspeak, kept in the raw parquet, absent from the panel)
+FOMC registry: 56 dates 2021-01-27..2027-12-08
+FOMC 2019-2020 supplement: 17 dates 2019-01-30..2020-12-16
+overlap between the two: 0
+
+wrote panel_daily.parquet / .csv  (1912, 23)
+
+========================================================================
+VERIFICATION
+========================================================================
+
+[1] rows 1912   span 2019-01-02 .. 2026-08-24
+    speech days 862   non-speech days 1050   (45.1% of the panel)
+    rows per year:
+year
+2019    250
+2020    251
+2021    251
+2022    249
+2023    250
+2024    250
+2025    249
+2026    162
+
+[2] FOMC days on the panel: 61   (decision dates in range: 62)
+    median |d_rate_bp|, whole sample : 2.437 bp
+    median |d_rate_bp|, FOMC days    : 5.392 bp
+    mean   |d_rate_bp|, whole sample : 4.226 bp
+    mean   |d_rate_bp|, FOMC days    : 6.610 bp
+    ratio of medians : 2.21x   PASS
+    same, IMM-roll days removed: sample 2.405 vs FOMC 4.715 bp  (1.96x, n=41)
+    NOTE: 22 of 33 SR3 IMM rolls ARE decision dates, so a constant-rank
+    slot books the roll jump on some FOMC days -- hence the second line.
+
+[3] BLACKOUT CHECK -- the Fed does not speak in the ten business days before a decision, so this MUST separate.
+    [all events]
+      blackout days     n=  619  speeches/day 0.536  speech-day rate 27.6%
+      non-blackout days n= 1293  speeches/day 1.115  speech-day rate 53.4%
+      ratio 0.481   PASS
+    [ex press conferences]
+      blackout days     n=  619  speeches/day 0.536  speech-day rate 27.6%
+      non-blackout days n= 1293  speeches/day 1.115  speech-day rate 53.4%
+      ratio 0.481   PASS
+
+[4] calendar coverage -- years with < 50 Fed-speaker events:
+Date
+2015    148
+2016    119
+2017    163
+2018    140
+2019    181
+2020    151
+2021    220
+2022    163
+2023    204
+2024    317
+2025    409
+2026    197
+    thin years: none
+
+[5] d_rate_bp: n=1911  mean 0.0881  std 7.6295  mean|.| 4.2263  median|.| 2.4367 bp
+    by year:
+      count   mean     std
+year                      
+2019    249 -0.367   7.985
+2020    251 -0.566   3.789
+2021    251  0.242   1.895
+2022    249  1.665   9.417
+2023    250 -0.282  12.727
+2024    250 -0.050   7.597
+2025    249 -0.327   6.110
+2026    162  0.564   5.000
+
+    d_on_sofr_bp: mean 0.0662  std 9.0858
+
+[6] JPM scores: 308 panel days carry a score, of 862 speech days (35.7%)
+    VINTAGE HAZARD: ~60% of JPM score rows were PUBLISHED AFTER the speech they score. Descriptive coverage only -- not a predictive feature.
+
+[7] chair_regime value counts:
+chair_regime
+Powell    1848
+Warsh       64
+
+[8] release days: CPI 90  NFP 91  blackout 619
+    NaNs per column:
+d_rate_bp             1
+abs_d_rate_bp         1
+d_on_sofr_bp          1
+days_since_fomc      19
+jpm_mean_score     1604
+
+    n_press_conf total: 0. The FED_SPEAKERS theme serves NO press-conference rows -- 0 of 2,412 titles match 'press|conference|statement'. The column and the raw flag exist as specified, but they are identically zero; the post-FOMC press conference is not in this theme. Downstream must not read 0 as 'no press conference happened'.
+
+[9] DATA QUALITY -- verified against the published SOFR fixing history (MDP/IRSwaps/fixings_cache/USD-SOFR-1D_fixings/2025-10-02/fixings.csv, 1,875 rows, independent of the Citi curve build).
+    Control 2024-2025 (ON leg never frozen): median |curve_ON - SOFR| = 1.15 bp -- the comparison is sound.
+    median |curve_ON - published SOFR|, by year:
+      2019 29.76 bp  <-- BROKEN     2020 1.00   2021 0.20   2022 0.80
+      2023  0.52 bp                 2024 0.93   2025 1.72
+    In 2019-07-01..2019-12-01 the ON leg takes FOUR distinct values to 4dp over 105 days: 2.5000 on 97 of them, exactly -0.0000 on 4 (2019-07-01..05), 1.5800 on 3, 2.5033 on 1. That window spans the FOMC cuts of 2019-07-31, 2019-09-18 and 2019-10-30, and published SOFR ranged 1.56-5.25% over it.
+    => on_sofr_rate / d_on_sofr_bp ARE NOT USABLE IN 2019. They are sound from 2020 on.
+    Separately, the whole curve is FLAT (|IMM_3xIMM_4 - ON| < 2bp and |2y - ON| < 5bp) on 124 consecutive days, 2019-01-02..2019-06-28. Over that stretch the curve carries no independent short end. The IMM leg itself keeps moving through 2019 (spread std 63.6 bp, beta of d_IMM on d_ON = -0.29, 97 distinct values in Jul-Nov alone), so d_rate_bp is not the ON leg re-labelled -- but 2019 is the one year where the target series should be treated as provisional.
+    2020-2021 flat-curve days (49 and 27) sit at ZIRP, where a flat curve is the true shape rather than a build failure.
+
+========================================================================
+[10] MUTATION TEST OF THE CHECKS THEMSELVES (p7_mutation_test.py)
+========================================================================
+REAL DATA   blackout ratio 0.481   FOMC |move| ratio 2.21x
+            (a ratio near 1.0 means the flag carries no information)
+
+--- M1: blackout flag randomly permuted, count preserved ---
+  permuted ratio: mean 1.002  2.5-97.5pct [0.887, 1.136]
+  real 0.481 sits BELOW the permuted 2.5th pct? True  -> the check has teeth
+
+--- M2: FOMC dates shifted +180 days ---
+  blackout ratio 0.829 (real 0.481)   FOMC |move| ratio 0.60x (real 2.21x), n_fomc=57
+  both collapse toward no-signal? True  -> the checks track the real calendar
+
+--- M3: events shifted +3 business days (a broken date join) ---
+  blackout ratio with a +3bd-misaligned join: 0.893 (real 0.481)
+  misalignment degrades the separation? True  -> the check is sensitive to date alignment
+
+--- M4: extract_speaker known answers ---
+  OK   'FOMC Member Cook Speaks' -> 'Cook' (want 'Cook')
+  OK   'Fed Chair Powell Speaks' -> 'Powell' (want 'Powell')
+  OK   'Fed Chairman Powell Testifies' -> 'Powell' (want 'Powell')
+  OK   'Fed Chair Yellen Testimony' -> 'Yellen' (want 'Yellen')
+  OK   'FOMC Member Williams Speaks' -> 'Williams' (want 'Williams')
+
+--- M5: the Chair regex must catch 'Chairman', not just 'Chair' ---
+  naive r'\bChair\b' matches 128;  fixed r'\bChair(?:man)?\b' matches 161
+  the fixed regex catches 33 more (the 'Fed Chairman' form) -> the fix was necessary
+
+============================================================
+MUTATION SUITE: ALL CHECKS HAVE TEETH
+  M1 permuted-blackout True   M2 shifted-FOMC True   M3 misaligned-join True   M4 speaker-extract True

@@ -1,0 +1,386 @@
+{
+ "r1_confound_corr_month": 0.2719813600381625,
+ "r1_confound_corr_event": 0.11589437510126842,
+ "r1_o240_ALL SIGNED": {
+  "none": {
+   "label": "no controls (= arm-balanced composite)",
+   "coef": 0.1990868925561958,
+   "se": 0.071715491649085,
+   "t": 2.7760653657700454,
+   "n": 781,
+   "n_clusters": 386
+  },
+  "month": {
+   "label": "+ MONTH fixed effects",
+   "coef": 0.14512811255231153,
+   "se": 0.06623534356487579,
+   "t": 2.191097754481523,
+   "n": 781,
+   "n_clusters": 386
+  },
+  "day": {
+   "label": "+ DAY fixed effects",
+   "coef": 0.049298949750651584,
+   "se": 0.08243509666010017,
+   "t": 0.5980335045147466,
+   "n": 781,
+   "n_clusters": 386
+  },
+  "year": {
+   "label": "+ YEAR fixed effects",
+   "coef": 0.16400596384936492,
+   "se": 0.06758418562002831,
+   "t": 2.4266914270660735,
+   "n": 781,
+   "n_clusters": 386
+  },
+  "id_months": 38,
+  "id_days": 121
+ },
+ "r1_o240_NON-OVERLAPPING SIGNED (headline)": {
+  "none": {
+   "label": "no controls (= arm-balanced composite)",
+   "coef": 0.39416041275794184,
+   "se": 0.165291401962,
+   "t": 2.384639540104803,
+   "n": 171,
+   "n_clusters": 152
+  },
+  "month": {
+   "label": "+ MONTH fixed effects",
+   "coef": 0.49058073654389656,
+   "se": 0.3094412703404505,
+   "t": 1.5853759131875156,
+   "n": 171,
+   "n_clusters": 152
+  },
+  "day": {
+   "label": "+ DAY fixed effects",
+   "coef": 0.22500000000011672,
+   "se": 0.8854209161048062,
+   "t": 0.25411642746135865,
+   "n": 171,
+   "n_clusters": 152
+  },
+  "year": {
+   "label": "+ YEAR fixed effects",
+   "coef": 0.34591615992888003,
+   "se": 0.1791141197175234,
+   "t": 1.9312612566469698,
+   "n": 171,
+   "n_clusters": 152
+  },
+  "id_months": 24,
+  "id_days": 4
+ },
+ "r1_o30_ALL SIGNED": {
+  "none": {
+   "label": "no controls (= arm-balanced composite)",
+   "coef": 0.13199111030476757,
+   "se": 0.045834630118875126,
+   "t": 2.8797245655182544,
+   "n": 889,
+   "n_clusters": 409
+  },
+  "month": {
+   "label": "+ MONTH fixed effects",
+   "coef": 0.11210310927286263,
+   "se": 0.040365711338051585,
+   "t": 2.7771865168937646,
+   "n": 889,
+   "n_clusters": 409
+  },
+  "day": {
+   "label": "+ DAY fixed effects",
+   "coef": 0.1344832532995108,
+   "se": 0.06944944965739858,
+   "t": 1.9364192799645037,
+   "n": 889,
+   "n_clusters": 409
+  },
+  "year": {
+   "label": "+ YEAR fixed effects",
+   "coef": 0.11088539653992836,
+   "se": 0.04161122250872444,
+   "t": 2.664795453117954,
+   "n": 889,
+   "n_clusters": 409
+  },
+  "id_months": 38,
+  "id_days": 121
+ },
+ "r1_o30_NON-OVERLAPPING SIGNED (headline)": {
+  "none": {
+   "label": "no controls (= arm-balanced composite)",
+   "coef": 0.0821917808218389,
+   "se": 0.07024954022505071,
+   "t": 1.1699974200333574,
+   "n": 190,
+   "n_clusters": 170
+  },
+  "month": {
+   "label": "+ MONTH fixed effects",
+   "coef": 0.14246957545845285,
+   "se": 0.12851709136137285,
+   "t": 1.1085652028791055,
+   "n": 190,
+   "n_clusters": 170
+  },
+  "day": {
+   "label": "+ DAY fixed effects",
+   "coef": 0.6428571428572095,
+   "se": 1.6433369974602126,
+   "t": 0.3911900869089841,
+   "n": 190,
+   "n_clusters": 170
+  },
+  "year": {
+   "label": "+ YEAR fixed effects",
+   "coef": 0.08067724004278067,
+   "se": 0.07952506777553435,
+   "t": 1.014488164543266,
+   "n": 190,
+   "n_clusters": 170
+  },
+  "id_months": 24,
+  "id_days": 4
+ },
+ "r1_outside_ALL SIGNED": {
+  "inside": {
+   "mean": 0.2040078843626512,
+   "se": 0.0819254333193336,
+   "t": 2.4901654601869203,
+   "n": 761,
+   "n_clusters": 381
+  },
+  "outside": {
+   "mean": 0.1580157687253716,
+   "se": 0.08747379586217187,
+   "t": 1.8064354835401133,
+   "n": 761,
+   "n_clusters": 381
+  },
+  "whole_day": {
+   "mean": 0.36202365308802276,
+   "se": 0.1390055843740972,
+   "t": 2.60438208089346,
+   "n": 761,
+   "n_clusters": 381
+  }
+ },
+ "r1_outside_NON-OVERLAPPING SIGNED (headline)": {
+  "inside": {
+   "mean": 0.41871165644175373,
+   "se": 0.19784488981428505,
+   "t": 2.11636326232532,
+   "n": 163,
+   "n_clusters": 147
+  },
+  "outside": {
+   "mean": 0.21472392638033147,
+   "se": 0.15855980980439152,
+   "t": 1.3542140763490271,
+   "n": 163,
+   "n_clusters": 147
+  },
+  "whole_day": {
+   "mean": 0.6334355828220852,
+   "se": 0.25474691726752047,
+   "t": 2.4865289425932007,
+   "n": 163,
+   "n_clusters": 147
+  }
+ },
+ "r3_confound_corr_month": 0.18777070020437853,
+ "r3_confound_corr_event": 0.09511743318787189,
+ "r3_o240_ALL SIGNED": {
+  "none": {
+   "label": "no controls (= arm-balanced composite)",
+   "coef": 0.24252973038143497,
+   "se": 0.1568941532198633,
+   "t": 1.5458175171229385,
+   "n": 808,
+   "n_clusters": 399
+  },
+  "month": {
+   "label": "+ MONTH fixed effects",
+   "coef": 0.15806198258860957,
+   "se": 0.152343629810343,
+   "t": 1.037535883747719,
+   "n": 808,
+   "n_clusters": 399
+  },
+  "day": {
+   "label": "+ DAY fixed effects",
+   "coef": -0.05599161812757722,
+   "se": 0.21529484993483763,
+   "t": -0.2600694728393362,
+   "n": 808,
+   "n_clusters": 399
+  },
+  "year": {
+   "label": "+ YEAR fixed effects",
+   "coef": 0.2208251055105346,
+   "se": 0.1571442977554768,
+   "t": 1.4052377888642695,
+   "n": 808,
+   "n_clusters": 399
+  },
+  "id_months": 38,
+  "id_days": 121
+ },
+ "r3_o240_NON-OVERLAPPING SIGNED (headline)": {
+  "none": {
+   "label": "no controls (= arm-balanced composite)",
+   "coef": 0.29204545454550623,
+   "se": 0.3526578155799049,
+   "t": 0.8281269878147216,
+   "n": 184,
+   "n_clusters": 165
+  },
+  "month": {
+   "label": "+ MONTH fixed effects",
+   "coef": 0.3024449528167519,
+   "se": 0.5614525146708111,
+   "t": 0.5386830496147663,
+   "n": 184,
+   "n_clusters": 165
+  },
+  "day": {
+   "label": "+ DAY fixed effects",
+   "coef": 0.22499999999993578,
+   "se": 1.8987413092494734,
+   "t": 0.11849955489137846,
+   "n": 184,
+   "n_clusters": 165
+  },
+  "year": {
+   "label": "+ YEAR fixed effects",
+   "coef": 0.1856829223733519,
+   "se": 0.3786851992969205,
+   "t": 0.49033583229050665,
+   "n": 184,
+   "n_clusters": 165
+  },
+  "id_months": 24,
+  "id_days": 4
+ },
+ "r3_o30_ALL SIGNED": {
+  "none": {
+   "label": "no controls (= arm-balanced composite)",
+   "coef": 0.07900432900436576,
+   "se": 0.08276221373140057,
+   "t": 0.9545941975497323,
+   "n": 884,
+   "n_clusters": 411
+  },
+  "month": {
+   "label": "+ MONTH fixed effects",
+   "coef": 0.05424394674195433,
+   "se": 0.0798867961218488,
+   "t": 0.679010166576436,
+   "n": 884,
+   "n_clusters": 411
+  },
+  "day": {
+   "label": "+ DAY fixed effects",
+   "coef": 0.08891449534383833,
+   "se": 0.1335408248785283,
+   "t": 0.6658225709232882,
+   "n": 884,
+   "n_clusters": 411
+  },
+  "year": {
+   "label": "+ YEAR fixed effects",
+   "coef": 0.06283188758026333,
+   "se": 0.07795946892396742,
+   "t": 0.8059558184207518,
+   "n": 884,
+   "n_clusters": 411
+  },
+  "id_months": 38,
+  "id_days": 121
+ },
+ "r3_o30_NON-OVERLAPPING SIGNED (headline)": {
+  "none": {
+   "label": "no controls (= arm-balanced composite)",
+   "coef": -0.011241810601493218,
+   "se": 0.1691198636273968,
+   "t": -0.06647244362886351,
+   "n": 192,
+   "n_clusters": 173
+  },
+  "month": {
+   "label": "+ MONTH fixed effects",
+   "coef": 0.04197152742336578,
+   "se": 0.2807376230197256,
+   "t": 0.14950446246535584,
+   "n": 192,
+   "n_clusters": 173
+  },
+  "day": {
+   "label": "+ DAY fixed effects",
+   "coef": 0.7500000000002045,
+   "se": 1.9800559934176813,
+   "t": 0.378777167157614,
+   "n": 192,
+   "n_clusters": 173
+  },
+  "year": {
+   "label": "+ YEAR fixed effects",
+   "coef": -0.027770569144831732,
+   "se": 0.1861427275218143,
+   "t": -0.1491896541678066,
+   "n": 192,
+   "n_clusters": 173
+  },
+  "id_months": 24,
+  "id_days": 4
+ },
+ "r3_outside_ALL SIGNED": {
+  "inside": {
+   "mean": 0.22988505747129478,
+   "se": 0.1728355161231384,
+   "t": 1.3300799663624163,
+   "n": 783,
+   "n_clusters": 391
+  },
+  "outside": {
+   "mean": 0.3876117496806876,
+   "se": 0.18243003356634774,
+   "t": 2.1247145664736045,
+   "n": 783,
+   "n_clusters": 391
+  },
+  "whole_day": {
+   "mean": 0.6174968071519824,
+   "se": 0.272669349780886,
+   "t": 2.2646359323048078,
+   "n": 783,
+   "n_clusters": 391
+  }
+ },
+ "r3_outside_NON-OVERLAPPING SIGNED (headline)": {
+  "inside": {
+   "mean": 0.40988372093025666,
+   "se": 0.38948662930229094,
+   "t": 1.0523691703217237,
+   "n": 172,
+   "n_clusters": 156
+  },
+  "outside": {
+   "mean": 0.36627906976738106,
+   "se": 0.34536402680939576,
+   "t": 1.060559413645962,
+   "n": 172,
+   "n_clusters": 156
+  },
+  "whole_day": {
+   "mean": 0.7761627906976377,
+   "se": 0.48816239502141817,
+   "t": 1.5899684175049646,
+   "n": 172,
+   "n_clusters": 156
+  }
+ }
+}

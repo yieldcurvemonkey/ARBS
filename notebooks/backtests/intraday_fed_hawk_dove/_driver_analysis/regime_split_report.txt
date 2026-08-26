@@ -1,0 +1,261 @@
+================================================================================================
+ANALYSIS B -- CHAIR REGIME SPLIT (Powell vs Warsh)
+================================================================================================
+panel rows 1912   span 2019-01-02 .. 2026-08-24
+clean sample (ex-FOMC / ex-CPI / ex-NFP, |d| present): 1672 days
+chair transition used: 2026-05-22  (build reported confident=True)
+
+------------------------------------------------------------------------------------------------
+PRIMARY -- excess |move| ratio within each chair regime (ex-FOMC/CPI/NFP)
+------------------------------------------------------------------------------------------------
+regime   span                       days   sp  nsp  mean|d|sp  mean|d|nsp   ratio             95% CI  diff bp
+Powell   2019-01-03..2026-05-21  1616  753  863      3.847       3.824   1.006 [ 0.865, 1.174]    0.023
+Warsh    2026-05-22..2026-08-24    56   22   34      3.722       3.153   1.181 [ 0.856, 1.612]    0.570
+   Powell   block-5 bootstrap CI (vol clustering preserved): [0.835, 1.209]   median-based ratio 1.250
+   Warsh    block-5 bootstrap CI (vol clustering preserved): [0.834, 1.673]   median-based ratio 1.337
+
+COMPARISON STATISTIC  ratio-of-ratios (Warsh / Powell) = 1.174
+   bootstrap 95% CI [0.818, 1.659]   spans 1.0: True
+   studentized z = +0.883   bootstrap two-sided p = 0.383
+
+================================================================================================
+POWER ANALYSIS  (read this before the point estimates)
+================================================================================================
+[self-check] simulated size at rho=1.0 (should be ~0.05): 0.0590
+simulated power vs ratio-of-ratios rho (alpha=0.05 two-sided):
+   rho= 1.05   power=0.060
+   rho= 1.10   power=0.095
+   rho= 1.17   power=0.132   <-- observed
+   rho= 1.25   power=0.238
+   rho= 1.40   power=0.458
+   rho= 1.60   power=0.729
+   rho= 1.80   power=0.880
+   rho= 2.00   power=0.958
+   rho= 2.25   power=0.993
+   rho= 2.50   power=0.998
+   rho= 3.00   power=1.000
+
+MINIMUM DETECTABLE EFFECT at 80% power, alpha=0.05 two-sided
+   simulated  : ratio-of-ratios rho >= 1.69
+   analytic   : ratio-of-ratios rho >= 1.66   (SE of log rho = 0.1815)
+   in absolute terms the Warsh excess_ratio would have to reach 1.70 (vs Powell 1.006) before this sample could call it.
+OBSERVED effect rho = 1.174   ACHIEVED POWER = 0.145
+
+*** THE COMPARISON IS UNDERPOWERED. ***
+    An underpowered null is NOT evidence of no effect, and an underpowered
+    positive is NOT evidence of one. Every point estimate below is reported
+    subject to this. The Warsh arm is 1 quarter of data: 56 clean days,
+    22 of them speech days.
+
+================================================================================================
+VERIFICATION OF THIS SCRIPT'S OWN MACHINERY
+================================================================================================
+[V1] injected a known 2.00x speech effect on 8,000 synthetic speech days -> estimator returns 1.994   PASS=True
+[V1b] at a true rho=2.00 the test rejects 0.963 of the time -> the machinery is not
+      simply blind; it fails to reject at rho=1.17 because that effect is small,
+      not because the test never fires.
+[V2] speech-label permutation inside each regime (5,000 draws): null rho centred at 0.994, 2.5-97.5pct [0.696, 1.430]
+     observed rho 1.174 -> permutation two-sided p = 0.368  (bootstrap p was 0.383; two independent routes agree)
+[V3] MUTATION -- delete the normalization and compare raw speech-day |d| across regimes: 0.968x
+     the un-normalized read says Warsh speech days move LESS (3.72 vs 3.85 bp), the OPPOSITE sign to the
+     normalized read. The normalization is load-bearing, not decorative.
+[V4] median-based rho = 1.070 (Warsh 1.337 / Powell 1.250) -- same conclusion, smaller effect.
+     NOTE the Powell median ratio is 1.25 while its MEAN ratio is 1.01: Powell non-speech
+     days carry the fatter right tail (supply, geopolitics), so the mean ratio is dragged to 1.
+
+================================================================================================
+ROBUSTNESS ARMS -- is the conclusion arm-invariant?
+================================================================================================
+PRIMARY full-Powell                Powell  1.006 (n=1616)   Warsh  1.181 (n= 56)   rho= 1.174   as specified
+ex-IMM-roll                        Powell  1.034 (n=1581)   Warsh  1.220 (n= 55)   rho= 1.180   roll days book a mechanical jump
+ex curve-build defect              Powell  1.050 (n=1612)   Warsh  1.181 (n= 56)   rho= 1.124   same 6 dates Analysis A cuts from V1 on
+2020+ (2019 target provisional)    Powell  1.041 (n=1398)   Warsh  1.181 (n= 56)   rho= 1.135   build caveat (2)
+2022+ (post-ZIRP)                  Powell  0.930 (n= 958)   Warsh  1.181 (n= 56)   rho= 1.269   
+Powell last 12m as reference       Powell  1.161 (n= 220)   Warsh  1.181 (n= 56)   rho= 1.017   adjacent-period reference
+Powell last 6m as reference        Powell  1.387 (n= 109)   Warsh  1.181 (n= 56)   rho= 0.851   adjacent-period reference
+
+rho across arms: min 0.851  max 1.269  -- every one of them sits below the MDE of 1.69: True
+
+------------------------------------------------------------------------------------------------
+EX CURVE-BUILD DEFECT -- the same 6 dates Analysis A isolates
+------------------------------------------------------------------------------------------------
+  6 defect dates; 4 survive the ex-FOMC/CPI/NFP filter:
+    2019-07-01  |d|=  73.24bp  regime=Powell  speech=False
+    2019-07-02  |d|=   4.09bp  regime=Powell  speech=True
+    2019-07-03  |d|=   2.69bp  regime=Powell  speech=False
+    2019-07-08  |d|=  74.05bp  regime=Powell  speech=False
+  all under Powell: True   all in the NON-speech arm: False
+  the 2 LARGE ones (|d|>20bp) are all non-speech: True -- that is what moves the denominator; the 2 small interior days are immaterial either way.
+  Powell excess ratio 1.0060 -> 1.0501   rho 1.1737 -> 1.1244
+  DIRECTION: leaving the defect in INFLATES Powell's non-speech denominator, which depresses Powell's ratio and RAISES rho -- i.e. the untreated version favours the
+  Warsh thesis. The conclusion does not move (both sit far below the MDE), but the two analyses now handle the same known-bad dates identically.
+
+================================================================================================
+BOUNDARY-SHIFT SENSITIVITY -- is the verdict a property of the DATE we chose?
+================================================================================================
+ shift date          post_n  post_sp  post_r  pre_r    rho         rho CI95    MDE  verdict
+   -3m 2026-02-22       112       53   1.288  0.994  1.296 [ 0.955, 1.735]  1.551  undetermined_sample
+   -2m 2026-03-22        95       48   1.488  0.990  1.503 [ 1.098, 2.039]  1.551  undetermined_sample   <-- CI EXCLUDES 1
+   -1m 2026-04-22        75       32   1.193  1.004  1.188 [ 0.863, 1.614]  1.566  undetermined_sample
+   +0m 2026-05-22        56       22   1.181  1.006  1.174 [ 0.819, 1.658]  1.663  undetermined_sample
+   +1m 2026-06-22        40       15   1.438  1.003  1.434 [ 0.999, 2.016]  1.675  undetermined_sample
+   +2m 2026-07-22        21        6   1.701  1.005  1.693 [ 0.972, 2.707]  2.100  undetermined_sample
+   +3m 2026-08-22         1        0      --     --     --               --     --  DEGENERATE (no ratio formable)
+
+  verdicts across non-degenerate placements: ['undetermined_sample']  -- none flips to DETECTED
+  direction is stable: rho > 1 at 6 of 6 placements
+  BUT THE POINT ESTIMATE IS NOT: post-arm ratio spans [1.181, 1.701] and rho spans [1.174, 1.693] over +/-2 months.
+  The ACTUAL transition date yields the MINIMUM of the grid (post ratio 1.181).
+  *** BOUNDARY PLACEBO FIRES: a split at 2026-03-22 -- 2 month(s) BEFORE the handover, entirely inside Powell's tenure -- gives rho 1.503 with CI [1.098, 2.039] EXCLUDING 1.0.
+      An arbitrary Powell-era date manufactures a nominally significant 'regime' difference.
+      That is the strongest available evidence that the 2026 lift is a WINDOW property,
+      not a CHAIR property.
+
+================================================================================================
+POWER CEILING -- can MORE DATA ever settle this?  No.
+================================================================================================
+  SE(log ratio | Powell) = 0.07680  -- FROZEN: Powell's tenure ended 2026-05-22
+  SE(log ratio | Warsh)  = 0.16442  -- shrinks as ~1/sqrt(n) with more post-transition days
+  => SE(log rho) can never fall below 0.07680
+  => MDE FLOOR = exp(2.802 x 0.07680) = 1.240  vs OBSERVED rho 1.174
+  => the MDE NEVER reaches the observed effect: True
+  => MAX ACHIEVABLE POWER at rho=1.174, even with an infinite Warsh arm = 0.550
+     (80% power is UNREACHABLE by this design at this effect size.)
+
+   quarters added     SE_W   SE_rho     MDE  power@obs
+                0   0.1644   0.1815   1.663      0.143
+                2   0.0949   0.1221   1.408      0.259
+                4   0.0735   0.1063   1.347      0.325
+                6   0.0621   0.0988   1.319      0.368
+               12   0.0456   0.0893   1.284      0.434
+               30   0.0295   0.0823   1.259      0.495
+
+  CONSEQUENCE FOR THE REMEDIATION: 'wait 4-6 more quarters' is arithmetically wrong.
+  After 6 more quarters the MDE is still ~1.32 with power ~0.37. Settling this needs a
+  DIFFERENT DESIGN -- a post-2026-05-22 intraday per-trade log (higher-frequency, more
+  observations per speech), or benchmarking the Warsh window against the SEASONAL
+  PLACEBO distribution rather than the whole Powell sample.
+
+================================================================================================
+FALSIFICATION -- 2026 split at the transition, and the by-year grid
+================================================================================================
+2026 PRE-transition  (Powell, 2026-01-02..2026-05-21): n= 85 sp= 49  ratio=1.327
+2026 POST-transition (Warsh,  2026-05-22..2026-08-24): n= 56 sp= 22  ratio=1.181
+
+  -> the 2026 lift PREDATES the chair change. The excess ratio was ALREADY
+     1.33 under Powell in 2026 and moved to 1.18 after the handover,
+     i.e. DOWN, not up. Under the regime story it should have stepped UP at
+     2026-05-22. It did not. (Both sides are tiny; this is attribution
+     evidence inside an underpowered window, not a rejection.)
+
+excess_ratio by calendar year (2026 split at the transition), with 95% day-bootstrap CIs:
+      label  n_days  n_speech  excess_ratio  ci_lo  ci_hi  ci_width  ci_excludes_one
+       2019     218        89         0.815  0.546  1.223     0.676            False
+       2020     221        75         1.312  0.790  2.150     1.359            False
+       2021     219        99         0.742  0.452  1.257     0.805            False
+       2022     217        88         1.035  0.804  1.330     0.526            False
+       2023     218       100         0.838  0.573  1.235     0.662            False
+       2024     219       121         1.065  0.813  1.403     0.590            False
+       2025     219       132         1.078  0.811  1.443     0.632            False
+ 2026 (pre)      85        49         1.327  0.928  1.939     1.011            False
+2026 (post)      56        22         1.181  0.858  1.611     0.754            False
+  -> years whose CI EXCLUDES 1.0: 0 of 9   (CI widths 0.53-1.36)
+  the by-year excursion 0.74 -> 1.33 is ONE noise band wide; it is not a series with a break.
+
+  Powell-year ratios 2019-2025: mean 0.983  sd 0.197  range [0.742, 1.312]
+  the by-year series oscillates around 1 with no step at the transition; 2020 (1.312) already exceeded the Warsh value.
+
+================================================================================================
+SEASONAL PLACEBO -- the Warsh window is only 22 May .. 24 Aug (summer lull)
+================================================================================================
+same calendar window (22 May .. 24 Aug) in each Powell year:
+ year  n_days  n_speech  excess_ratio  mean_abs_speech  mean_abs_nonspeech
+ 2019      58        21         0.649            5.178               7.983
+ 2020      58        15         1.053            0.432               0.410
+ 2021      57        22         1.153            0.398               0.345
+ 2022      57        25         1.205            7.559               6.271
+ 2023      58        20         1.369            6.183               4.517
+ 2024      58        32         1.194            4.781               4.005
+ 2025      56        30         1.289            4.111               3.188
+
+  Warsh 2026 value 1.181 vs 7 season-matched Powell placebos: 4 of 7 placebo summers were AT LEAST as high.
+  placebo mean 1.130, sd 0.235, range [0.649, 1.369]
+  one-sided placebo p (rank of the Warsh value among the 8 summers) = 0.625
+
+================================================================================================
+CLAIM 2 -- 'Warsh wants FEWER, higher-signal events'
+================================================================================================
+regime  calendar_days  speech_days  events  events_per_calendar_day  events_per_speech_day  speech_day_share  excess_bp_per_speech_day  excess_bp_per_event
+Powell           1616          753    1550                    0.959                  2.058             0.466                     0.023                0.011
+ Warsh             56           22      50                    0.893                  2.273             0.393                     0.570                0.251
+
+  event COUNT is not falling: events/calendar-day 0.959 -> 0.893 and events per speech day 2.058 -> 2.273 (UP).
+  (the frequency agent owns the count; this line is descriptive corroboration.)
+  excess bp per EVENT: +0.0111 -> +0.2507 bp -- higher under Warsh, but on 22 speech days / 50 events.
+
+marginal |move| per additional speaker on the day (OLS |d| ~ n_speakers, within regime):
+   Powell   slope +0.0160 bp/event  t=+0.15  n=1616
+   Warsh    slope -0.0995 bp/event  t=-0.50  n=56
+
+================================================================================================
+CROSS-CHECK vs THE INTRADAY EVIDENCE ON DISK
+================================================================================================
+nav_closed.csv: 440 FED event trades, 2023-01-06 .. 2026-03-27
+POST-TRANSITION intraday observations: 0
+
+*** THE INTRADAY CROSS-CHECK CANNOT BE COMPUTED. ***
+    The only per-trade logs on disk (nav_closed.csv, sig_closed.csv, both written
+    2026-03-31) end at 2026-03-27 -- BEFORE the 2026-05-22 handover. There are ZERO
+    post-transition intraday observations. _final_report.txt is from a later run whose
+    FED trades reach 2026-07-16, but that run left no per-trade log on disk, only
+    year-level aggregates that STRADDLE the transition. A regime comparison must not
+    be manufactured from straddling year aggregates, so none is reported.
+
+what the intraday log CAN confirm -- the ambient decline that forces the normalization:
+   intraday 3h event-window |move| (bp), by year:
+      count   mean  median
+y                         
+2023     99  2.444   1.754
+2024    146  2.199   1.352
+2025    163  1.772   1.153
+2026     32  1.288   1.088
+   daily panel mean |d| on NON-speech days (bp), by year:
+year
+2019    4.297
+2020    1.132
+2021    0.917
+2022    6.141
+2023    7.210
+2024    4.114
+2025    3.613
+2026    3.105
+   _final_report.txt pooled per-trade std (bp), PARSED: 2022 4.85, 2023 4.05, 2024 3.78, 2025 3.23, 2026 2.69
+   two INDEPENDENT measurements of ambient level, 4 overlapping years, corr = 0.827
+   -> they AGREE that ambient vol fell hard; that is why the raw cross-regime |d|
+      difference is reported as strictly subordinate to the within-regime ratio.
+
+================================================================================================
+DIRECTIONAL STATISTICS -- A DIFFERENT QUESTION, reported separately
+================================================================================================
+These measure whether the SIGN of the move is predictable, not how much
+information the event carries. More information per event means bigger moves
+in BOTH directions: |move| can rise while directional hit rate FALLS.
+
+  parsed from _final_report.txt (intraday FED book) -- parsed OK (FED half-samples equal-sized, known-answer check passed):
+     1st half 2022-04-05->2024-10-21      246 trades  Sharpe  1.25  hit 0.508   +137.0 bp
+     2nd half 2024-10-21->2026-07-16      246 trades  Sharpe  0.55  hit 0.431    +40.5 bp
+     pooled by year (all banks): 2022 SR -0.02 (hit 0.556, std 4.85bp), 2023 SR 1.43 (hit 0.486, std 4.05bp), 2024 SR 1.33 (hit 0.500, std 3.78bp), 2025 SR 0.99 (hit 0.427, std 3.23bp), 2026 SR -1.68 (hit 0.362, std 2.69bp)
+  the decaying Sharpe is a DIRECTIONAL result. It is NOT evidence about
+  information content, and the two can move in opposite directions.
+
+  daily panel, mean SIGNED d_rate_bp  Powell : speech +0.054  non-speech +0.024 bp  (descriptive; no signal direction in this panel)
+  daily panel, mean SIGNED d_rate_bp  Warsh  : speech +0.129  non-speech +0.469 bp  (descriptive; no signal direction in this panel)
+
+SECONDARY (subordinate) -- raw cross-regime numbers, contaminated by the vol regime:
+  mean|d| on speech days      Powell 3.847  -> Warsh 3.722 bp
+  mean|d| on non-speech days  Powell 3.824  -> Warsh 3.153 bp
+  excess (speech - non-speech) Powell +0.023 -> Warsh +0.570 bp
+
+================================================================================================
+VERDICT: undetermined_sample
+================================================================================================

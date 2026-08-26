@@ -1,0 +1,24 @@
+observed rho = 1.1737   |log rho| = 0.16017
+SE_powell (FROZEN, Powell arm is closed) = 0.07680
+SE_warsh  (shrinks as sqrt(n))           = 0.16442   n_clean=56
+
+CEILING: with an INFINITELY long post-transition arm, SE(log rho) -> 0.07680
+         |z|_max = 2.086   MAX ACHIEVABLE POWER = 0.550
+         80% power at rho=1.174 is UNREACHABLE: True
+         (equivalently: MDE can never fall below exp(2.802*0.0768) = 1.240, vs observed 1.174)
+
+for the bootstrap CI merely to EXCLUDE 1.0 need SE(log rho) <= 0.08172
+   -> SE_warsh must fall to 0.02793; scales 1/sqrt(n)
+   -> post-transition CLEAN days needed ~ 1940  (~30.8 quarters, ~7.7 years)
+   claim's remediation says '4-6 more quarters' (~315 clean days). Understates by ~6.2x.
+
+MDE after k more quarters of post-transition data (Powell arm frozen):
+   + 0q  n_post=   56  SE=0.1815  MDE=1.663  power@rho=1.174: 0.143
+   + 2q  n_post=  182  SE=0.1192  MDE=1.397  power@rho=1.174: 0.269
+   + 4q  n_post=  308  SE=0.1040  MDE=1.338  power@rho=1.174: 0.338
+   + 6q  n_post=  434  SE=0.0969  MDE=1.312  power@rho=1.174: 0.380
+   + 8q  n_post=  560  SE=0.0927  MDE=1.297  power@rho=1.174: 0.408
+   +12q  n_post=  812  SE=0.0881  MDE=1.280  power@rho=1.174: 0.444
+   +20q  n_post= 1316  SE=0.0840  MDE=1.265  power@rho=1.174: 0.479
+   +30q  n_post= 1946  SE=0.0817  MDE=1.257  power@rho=1.174: 0.500
+   +40q  n_post= 2576  SE=0.0805  MDE=1.253  power@rho=1.174: 0.512

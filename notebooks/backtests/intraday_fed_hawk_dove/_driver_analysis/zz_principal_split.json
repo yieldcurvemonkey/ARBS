@@ -1,0 +1,126 @@
+{
+ "design": "pre-registered 4 tiers x 2 stats; rotation null 5000 draws; seed 20260825",
+ "rung_c": {
+  "n_days": 1672,
+  "n_nospeech": 897,
+  "nospeech_mean_bp": 3.799,
+  "tiers": {
+   "T1_chair_only": {
+    "n": 135,
+    "mean_ratio": 1.0385,
+    "median_ratio": 1.0776,
+    "mean_bp": 3.9449,
+    "baseline_bp": 3.7986,
+    "rotation_p_mean": 0.785,
+    "rotation_p_median": 0.9074,
+    "null_median_mean_ratio": 0.9968,
+    "null_median_median_ratio": 1.1032,
+    "null_p97.5_mean": 1.3413,
+    "null_p97.5_median": 1.5341
+   },
+   "T2_chair_plus_ny": {
+    "n": 274,
+    "mean_ratio": 0.9855,
+    "median_ratio": 1.1706,
+    "mean_bp": 3.7435,
+    "baseline_bp": 3.7986,
+    "rotation_p_mean": 0.8776,
+    "rotation_p_median": 0.5478,
+    "null_median_mean_ratio": 0.9999,
+    "null_median_median_ratio": 1.1079,
+    "null_p97.5_mean": 1.1969,
+    "null_p97.5_median": 1.3262
+   },
+   "T3_board_perm_voters": {
+    "n": 573,
+    "mean_ratio": 1.0379,
+    "median_ratio": 1.2507,
+    "mean_bp": 3.9424,
+    "baseline_bp": 3.7986,
+    "rotation_p_mean": 0.6462,
+    "rotation_p_median": 0.1068,
+    "null_median_mean_ratio": 1.0029,
+    "null_median_median_ratio": 1.1058,
+    "null_p97.5_mean": 1.1372,
+    "null_p97.5_median": 1.2691
+   },
+   "T4_regional_only": {
+    "n": 202,
+    "mean_ratio": 0.9378,
+    "median_ratio": 1.1167,
+    "mean_bp": 3.5623,
+    "baseline_bp": 3.7986,
+    "rotation_p_mean": 0.6384,
+    "rotation_p_median": 0.9944,
+    "null_median_mean_ratio": 0.9963,
+    "null_median_median_ratio": 1.1184,
+    "null_p97.5_mean": 1.2578,
+    "null_p97.5_median": 1.3911
+   }
+  }
+ },
+ "rung_c_clean": {
+  "n_days": 1636,
+  "n_nospeech": 872,
+  "nospeech_mean_bp": 3.548,
+  "tiers": {
+   "T1_chair_only": {
+    "n": 132,
+    "mean_ratio": 1.1287,
+    "median_ratio": 1.1543,
+    "mean_bp": 4.005,
+    "baseline_bp": 3.5482,
+    "rotation_p_mean": 0.3776,
+    "rotation_p_median": 0.9328,
+    "null_median_mean_ratio": 1.007,
+    "null_median_median_ratio": 1.1353,
+    "null_p97.5_mean": 1.348,
+    "null_p97.5_median": 1.5641
+   },
+   "T2_chair_plus_ny": {
+    "n": 269,
+    "mean_ratio": 1.0356,
+    "median_ratio": 1.2135,
+    "mean_bp": 3.6745,
+    "baseline_bp": 3.5482,
+    "rotation_p_mean": 0.795,
+    "rotation_p_median": 0.4094,
+    "null_median_mean_ratio": 1.0134,
+    "null_median_median_ratio": 1.1288,
+    "null_p97.5_mean": 1.2207,
+    "null_p97.5_median": 1.3527
+   },
+   "T3_board_perm_voters": {
+    "n": 566,
+    "mean_ratio": 1.0887,
+    "median_ratio": 1.3036,
+    "mean_bp": 3.8629,
+    "baseline_bp": 3.5482,
+    "rotation_p_mean": 0.3252,
+    "rotation_p_median": 0.027,
+    "null_median_mean_ratio": 1.0163,
+    "null_median_median_ratio": 1.1253,
+    "null_p97.5_mean": 1.1539,
+    "null_p97.5_median": 1.2817
+   },
+   "T4_regional_only": {
+    "n": 198,
+    "mean_ratio": 0.902,
+    "median_ratio": 1.1098,
+    "mean_bp": 3.2003,
+    "baseline_bp": 3.5482,
+    "rotation_p_mean": 0.3592,
+    "rotation_p_median": 0.8962,
+    "null_median_mean_ratio": 1.0099,
+    "null_median_median_ratio": 1.1323,
+    "null_p97.5_mean": 1.2648,
+    "null_p97.5_median": 1.4096
+   }
+  }
+ },
+ "cells_below_0.05": [
+  "rung_c_clean/T3_board_perm_voters/rotation_p_median=0.027"
+ ],
+ "cells_total": 16,
+ "expected_by_chance_at_5pct": 0.8
+}

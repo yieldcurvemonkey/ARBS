@@ -1,0 +1,86 @@
+C:\Users\chris\clee\ARBS\notebooks\backtests\intraday_fed_hawk_dove\_event_study\c_common.py:90: RuntimeWarning: invalid value encountered in sqrt
+  se = np.sqrt(np.diag(cov))
+  OK   gap_did recovers a real-arm-only +0.80 bp gap  (got +0.8284 +/- 0.0625)
+  OK   mutation: injected into BOTH arms the DiD is +0.0599 (~0) while the raw gap is +0.8659 - the DiD differences
+  OK   gap DiD +0.8284 and composite excess +0.4141 are DIFFERENT quantities (ratio 2.00x) - the fig1 box conflated them
+  OK   day FE kills a trend-assigns-stance confound  (naive t +15.41 -> FE t +0.21)
+  OK   mutation: day FE RETAINS a genuine within-day +0.90 bp effect (coef +0.9037, t +51.31) - it does not eat real signal
+  OK   trim KEEPS a broad +1.0 bp effect (t +14.99)
+  OK   mutation: trim REMOVES a 3-outlier pseudo-effect (+0.905 -> +0.016 bp) - the trim discriminates
+SELFTEST: PASS
+
+================================================================================================
+CALENDAR + FLAGGER SELF-TESTS (reused from k1)
+================================================================================================
+  OK   CPI minutes found: 92
+  OK   CPI lands 08:30 ET on 97.8% of minutes
+  OK   ISM lands 10:00 ET on 100.0% of minutes
+  OK   hand case [-60,+240] -> [np.True_, np.True_, np.False_] (want [T,T,F])
+  OK   hand case counts -> [np.int64(2), np.int64(1), np.int64(0)] (want [2,1,0])
+  OK   inclusive boundary: a release exactly at the baseline minute is flagged
+  OK   mutation: shifting the window off the release minute clears the flag
+
+calendar covers -> 2026-08-07 08:30:00-04:00;  high+medium release minutes: 2040
+
+real: 985 signed, 7 outside calendar coverage (EXCLUDED from both arms), 28.1% of covered [-60,+240] windows contain a high/med US release
+
+placebo: 2931 signed, 13 outside calendar coverage (EXCLUDED from both arms), 28.1% of covered [-60,+240] windows contain a high/med US release
+
+================================================================================================
+BOOK: fig1_nonoverlap
+================================================================================================
+  n = 224 signed (173h/51d) on 200 days
+  priced at +240: hawk 140 / dove 44
+  hawk-dove GAP  +240        = +0.5841 bp  t=+0.828  n=184
+  gap DiD (full placebo)     = +0.8015 bp  t=+1.102
+  gap DiD (parent-matched)   = +0.7098 bp  t=+0.875
+  composite excess (the box) = +0.3113 bp  t=+0.825   <- 1.88x smaller than the gap
+  >>> RELEASE-CLEAN gap      = +0.3888 bp t=+0.906 (n=123)   contaminated = +1.0455 t=+0.498
+  >>> RELEASE-CLEAN gap DiD  = +0.4707 bp t=+1.025
+  composite  full +0.3778 (t +1.02, n 180) | clean +0.1789 (t +0.71, n 123) | contam +0.8070 (t +0.83, n 57)
+  day-FE stance slope +240   = +nan bp t=+nan (0 identifying days)
+  pre-leg [-60->0] signed    = +0.0339 bp (9% of the +240 composite)
+  post-only [0->+240]        = +0.2571 bp t=+0.74
+  trim top 1% of days        = +0.0083 bp t=+0.031  (dropped ['2025-04-09', '2024-08-05'])
+  top 3 events = 103% of the summed move
+
+================================================================================================
+BOOK: fig1b_all
+================================================================================================
+  n = 985 signed (767h/218d) on 438 days
+  priced at +240: hawk 621 / dove 187
+  hawk-dove GAP  +240        = +0.4851 bp  t=+1.546  n=808
+  gap DiD (full placebo)     = +0.7025 bp  t=+1.918
+  gap DiD (parent-matched)   = +0.7056 bp  t=+1.920
+  composite excess (the box) = +0.1820 bp  t=+0.921   <- 2.67x smaller than the gap
+  >>> RELEASE-CLEAN gap      = +0.2523 bp t=+1.014 (n=540)   contaminated = +1.0024 t=+1.180
+  >>> RELEASE-CLEAN gap DiD  = +0.3342 bp t=+1.107
+  composite  full +0.2450 (t +1.44, n 802) | clean +0.0713 (t +0.53, n 540) | contam +0.6031 (t +1.41, n 262)
+  day-FE stance slope +240   = -0.0560 bp t=-0.305 (93 identifying days)
+  pre-leg [-60->0] signed    = +0.0709 bp (31% of the +240 composite)
+  post-only [0->+240]        = +0.1718 bp t=+1.24
+  trim top 1% of days        = +0.1004 bp t=+0.645  (dropped ['2025-04-09', '2024-08-05', '2024-04-10', '2023-11-03'])
+  top 3 events = 43% of the summed move
+
+================================================================================================
+FIG-2 RESTATEMENT: the strip response, release-clean, by contract rank
+================================================================================================
+  rank 1: full +0.202 (t +2.51, n 775) | clean +0.037 (t +0.64, n 508) | contam +0.514 (t +2.67, n 267) | clean excess vs placebo -0.020 (t -0.28) | dayFE +0.049 (t +0.70)
+  rank 2: full +0.227 (t +1.76, n 816) | clean +0.069 (t +0.70, n 546) | contam +0.546 (t +1.69, n 270) | clean excess vs placebo -0.016 (t -0.14) | dayFE -0.055 (t -0.45)
+  rank 3: full +0.245 (t +1.44, n 802) | clean +0.071 (t +0.53, n 540) | contam +0.603 (t +1.41, n 262) | clean excess vs placebo -0.040 (t -0.25) | dayFE -0.056 (t -0.30)
+  rank 4: full +0.189 (t +1.02, n 822) | clean +0.054 (t +0.35, n 552) | contam +0.463 (t +1.00, n 270) | clean excess vs placebo -0.105 (t -0.58) | dayFE -0.116 (t -0.55)
+  rank 5: full +0.147 (t +0.77, n 816) | clean +0.025 (t +0.15, n 547) | contam +0.396 (t +0.83, n 269) | clean excess vs placebo -0.175 (t -0.92) | dayFE -0.167 (t -0.76)
+
+================================================================================================
+ARE THE RELEASE CUT AND THE TAIL TRIM THE SAME CUT?
+================================================================================================
+  2025-04-09: 1 events, release-contaminated [-60,+240] = [np.True_], signed = [np.int64(1)]
+  2024-08-05: 2 events, release-contaminated [-60,+240] = [np.True_, np.False_], signed = [np.int64(1)]
+  fig1_nonoverlap: release-clean THEN trim top 1% of days = +0.1942 bp t=+0.908 (n=121, dropped ['2025-04-02', '2025-04-07'])
+  fig1b_all: release-clean THEN trim top 1% of days = +0.0784 bp t=+0.602 (n=536, dropped ['2025-04-02', '2024-09-06', '2025-04-07', '2024-08-05'])
+
+overlap double-count: {'n_multi_groups': 271, 'n_identical_groups': 20, 'max_events_in_group': 10}
+placebo blackout mismatch: real 1.9% vs placebo 48.4% within 10d of FOMC
+SVB week 2023-03-06..17: {'n_calendar_events': 4, 'n_signed': 0}
+
+wrote C:\Users\chris\clee\ARBS\notebooks\backtests\intraday_fed_hawk_dove\_event_study\c5_fixes.json

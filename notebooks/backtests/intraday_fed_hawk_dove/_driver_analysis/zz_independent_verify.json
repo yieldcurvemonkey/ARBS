@@ -1,0 +1,82 @@
+{
+ "rung_c": {
+  "n_speech": 775,
+  "n_nonspeech": 897,
+  "mean_abs_ratio": 1.0118,
+  "var_ratio": 0.4531,
+  "median_abs_ratio": 1.2294
+ },
+ "concentration": {
+  "share_days": 0.4635,
+  "share_sumsq": 0.336,
+  "concentration": 0.7249,
+  "trim_trajectory": {
+   "ex_top0": 0.7249,
+   "ex_top1": 0.8594,
+   "ex_top5": 1.0156,
+   "ex_top10": 1.0476,
+   "ex_top16": 1.0866
+  },
+  "largest_day": "2023-03-13",
+  "largest_day_bp": -114.73,
+  "largest_day_pct_of_sumsq": 15.7,
+  "largest_day_is_blackout": true,
+  "top20_n_blackout": 13
+ },
+ "dose_clean": {
+  "means": [
+   3.548,
+   3.724,
+   3.737,
+   3.778,
+   3.404
+  ],
+  "n": [
+   872,
+   346,
+   214,
+   100,
+   104
+  ],
+  "monotone_0_to_3": true,
+  "spread_bp": 0.374
+ },
+ "curve_placebo": {
+  "USD-SOFR-1D 2y OUTRIGHT RATE": {
+   "n": 1672,
+   "mean_ratio": 1.0863,
+   "median_ratio": 1.1666
+  },
+  "USD-SOFR-1D 5y OUTRIGHT RATE": {
+   "n": 1672,
+   "mean_ratio": 1.0659,
+   "median_ratio": 1.1442
+  },
+  "USD-SOFR-1D IMM_3xIMM_4 OUTRIGHT RATE": {
+   "n": 1672,
+   "mean_ratio": 1.0118,
+   "median_ratio": 1.2294
+  },
+  "imm_minus_on_bp": {
+   "n": 1672,
+   "mean_ratio": 0.8044,
+   "median_ratio": 1.3208
+  },
+  "d_imm_bp": {
+   "n": 1671,
+   "mean_ratio": 1.0748,
+   "median_ratio": 1.1666
+  }
+ },
+ "warsh_arm": {
+  "n_days_clean": 56,
+  "n_speech_days": 22,
+  "regimes_present": [
+   "Powell",
+   "Warsh"
+  ],
+  "warsh_events_in_calendar": 0,
+  "last_powell_event": "2026-05-31",
+  "n_events_after_2026_05_22": 61
+ }
+}

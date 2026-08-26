@@ -1,0 +1,854 @@
+{
+  "meta": {
+    "seed": 20260825,
+    "n_boot": 10000,
+    "n_sim": 4000,
+    "transition_date": "2026-05-22",
+    "transition_confident": true,
+    "panel_rows": 1912,
+    "clean_rows": 1672,
+    "panel_span": [
+      "2019-01-02",
+      "2026-08-24"
+    ],
+    "primary_metric": "excess_ratio = mean|d_rate_bp| on speech days / mean|d_rate_bp| on non-speech days, within regime",
+    "exclusions": "is_fomc_day, is_cpi_day, is_nfp_day"
+  },
+  "primary": {
+    "Powell": {
+      "n_days": 1616,
+      "n_speech": 753,
+      "n_nonspeech": 863,
+      "mean_abs_speech": 3.8468883892596226,
+      "mean_abs_nonspeech": 3.8240125035809225,
+      "median_abs_speech": 2.490849005744078,
+      "median_abs_nonspeech": 1.9925993370032202,
+      "excess_ratio": 1.0059821681172012,
+      "excess_diff_bp": 0.022875885678700136,
+      "median_ratio": 1.2500501026414086,
+      "sd_speech": 4.7012205026040546,
+      "sd_nonspeech": 7.02872692053857,
+      "date_min": "2019-01-03",
+      "date_max": "2026-05-21",
+      "ratio_ci95": [
+        0.8653002254549672,
+        1.173708108862532
+      ],
+      "ratio_boot_sd": 0.07851292522731,
+      "ratio_ci95_block5": [
+        0.8345153068367465,
+        1.2094940909998142
+      ],
+      "se_log_ratio": 0.07679931291871889
+    },
+    "Warsh": {
+      "n_days": 56,
+      "n_speech": 22,
+      "n_nonspeech": 34,
+      "mean_abs_speech": 3.722441102818412,
+      "mean_abs_nonspeech": 3.1526490979427386,
+      "median_abs_speech": 3.374707500906471,
+      "median_abs_nonspeech": 2.523447808702217,
+      "excess_ratio": 1.1807343561474986,
+      "excess_diff_bp": 0.5697920048756733,
+      "median_ratio": 1.337339924078734,
+      "sd_speech": 2.2038795494927914,
+      "sd_nonspeech": 1.9368203114372615,
+      "date_min": "2026-05-22",
+      "date_max": "2026-08-24",
+      "ratio_ci95": [
+        0.8562227564500767,
+        1.6124772769806097
+      ],
+      "ratio_boot_sd": 0.19304595145117628,
+      "ratio_ci95_block5": [
+        0.8336794530156038,
+        1.673032277428029
+      ],
+      "se_log_ratio": 0.16441911216934438
+    }
+  },
+  "comparison": {
+    "ratio_of_ratios": 1.173713007614602,
+    "ratio_of_ratios_ci95": [
+      0.8179394696397951,
+      1.659432844215225
+    ],
+    "ratio_of_ratios_spans_one": true,
+    "z_studentized": 0.8826319395931368,
+    "p_bootstrap_two_sided": 0.3828
+  },
+  "power": {
+    "calibration_size_at_rho1": 0.059,
+    "calibration_ok": true,
+    "power_curve": {
+      "1.05": 0.0605,
+      "1.1": 0.09475,
+      "1.17": 0.13225,
+      "1.25": 0.2385,
+      "1.4": 0.45775,
+      "1.6": 0.7285,
+      "1.8": 0.88,
+      "2.0": 0.9575,
+      "2.25": 0.9925,
+      "2.5": 0.99825,
+      "3.0": 1.0
+    },
+    "mde_ratio_of_ratios_80pct_sim": 1.6943894389438945,
+    "mde_ratio_of_ratios_80pct_analytic": 1.6626405612586204,
+    "se_log_ratio_of_ratios": 0.18147115173311362,
+    "warsh_excess_ratio_needed_to_detect": 1.7045255614236672,
+    "observed_effect_rho": 1.173713007614602,
+    "achieved_power_at_observed": 0.145,
+    "underpowered": true,
+    "n_warsh_speech_days": 22,
+    "n_warsh_nonspeech_days": 34
+  },
+  "verification": {
+    "V1_known_2x_recovered": 1.9938382106356265,
+    "V1b_power_at_rho2": 0.9626666666666667,
+    "V2_permutation_null_median_rho": 0.9940424947803854,
+    "V2_permutation_p_two_sided": 0.3684,
+    "V3_unnormalized_cross_regime_ratio": 0.9676498837895419,
+    "V4_median_based_rho": 1.0698290582536478
+  },
+  "robustness_arms": {
+    "PRIMARY full-Powell": {
+      "note": "as specified",
+      "powell_ratio": 1.0059821681172012,
+      "warsh_ratio": 1.1807343561474986,
+      "ratio_of_ratios": 1.173713007614602,
+      "n_powell_days": 1616,
+      "n_powell_speech": 753,
+      "n_warsh_days": 56,
+      "n_warsh_speech": 22,
+      "powell_mean_abs_speech": 3.8468883892596226,
+      "powell_mean_abs_nonspeech": 3.8240125035809225,
+      "warsh_mean_abs_speech": 3.722441102818412,
+      "warsh_mean_abs_nonspeech": 3.1526490979427386
+    },
+    "ex-IMM-roll": {
+      "note": "roll days book a mechanical jump",
+      "powell_ratio": 1.0343413572041007,
+      "warsh_ratio": 1.220140806137868,
+      "ratio_of_ratios": 1.179630687335172,
+      "n_powell_days": 1581,
+      "n_powell_speech": 742,
+      "n_warsh_days": 55,
+      "n_warsh_speech": 22,
+      "powell_mean_abs_speech": 3.6902648390000534,
+      "powell_mean_abs_nonspeech": 3.567743678909935,
+      "warsh_mean_abs_speech": 3.722441102818412,
+      "warsh_mean_abs_nonspeech": 3.050829120780836
+    },
+    "ex curve-build defect": {
+      "note": "same 6 dates Analysis A cuts from V1 on",
+      "powell_ratio": 1.050126921401818,
+      "warsh_ratio": 1.1807343561474986,
+      "ratio_of_ratios": 1.124372999190738,
+      "n_powell_days": 1612,
+      "n_powell_speech": 752,
+      "n_warsh_days": 56,
+      "n_warsh_speech": 22,
+      "powell_mean_abs_speech": 3.846565753748807,
+      "powell_mean_abs_nonspeech": 3.662953187233799,
+      "warsh_mean_abs_speech": 3.722441102818412,
+      "warsh_mean_abs_nonspeech": 3.1526490979427386
+    },
+    "2020+ (2019 target provisional)": {
+      "note": "build caveat (2)",
+      "powell_ratio": 1.040720502650475,
+      "warsh_ratio": 1.1807343561474986,
+      "ratio_of_ratios": 1.1345355003004558,
+      "n_powell_days": 1398,
+      "n_powell_speech": 664,
+      "n_warsh_days": 56,
+      "n_warsh_speech": 22,
+      "powell_mean_abs_speech": 3.893291924471396,
+      "powell_mean_abs_nonspeech": 3.740958225148903,
+      "warsh_mean_abs_speech": 3.722441102818412,
+      "warsh_mean_abs_nonspeech": 3.1526490979427386
+    },
+    "2022+ (post-ZIRP)": {
+      "note": "",
+      "powell_ratio": 0.9302931123024872,
+      "warsh_ratio": 1.1807343561474986,
+      "ratio_of_ratios": 1.2692068129206784,
+      "n_powell_days": 958,
+      "n_powell_speech": 490,
+      "n_warsh_days": 56,
+      "n_warsh_speech": 22,
+      "powell_mean_abs_speech": 4.911162385371072,
+      "powell_mean_abs_nonspeech": 5.279155913791389,
+      "warsh_mean_abs_speech": 3.722441102818412,
+      "warsh_mean_abs_nonspeech": 3.1526490979427386
+    },
+    "Powell last 12m as reference": {
+      "note": "adjacent-period reference",
+      "powell_ratio": 1.160714850648949,
+      "warsh_ratio": 1.1807343561474986,
+      "ratio_of_ratios": 1.0172475655733677,
+      "n_powell_days": 220,
+      "n_powell_speech": 128,
+      "n_warsh_days": 56,
+      "n_warsh_speech": 22,
+      "powell_mean_abs_speech": 3.595683610007759,
+      "powell_mean_abs_nonspeech": 3.097818217796932,
+      "warsh_mean_abs_speech": 3.722441102818412,
+      "warsh_mean_abs_nonspeech": 3.1526490979427386
+    },
+    "Powell last 6m as reference": {
+      "note": "adjacent-period reference",
+      "powell_ratio": 1.387080968787751,
+      "warsh_ratio": 1.1807343561474986,
+      "ratio_of_ratios": 0.8512367934652074,
+      "n_powell_days": 109,
+      "n_powell_speech": 56,
+      "n_warsh_days": 56,
+      "n_warsh_speech": 22,
+      "powell_mean_abs_speech": 3.780753253954504,
+      "powell_mean_abs_nonspeech": 2.7256903807560127,
+      "warsh_mean_abs_speech": 3.722441102818412,
+      "warsh_mean_abs_nonspeech": 3.1526490979427386
+    }
+  },
+  "robustness_arms_rho_range": [
+    0.8512367934652074,
+    1.2692068129206784
+  ],
+  "conclusion_arm_invariant": true,
+  "ex_defect_arm": {
+    "defect_dates": [
+      "2019-07-01",
+      "2019-07-02",
+      "2019-07-03",
+      "2019-07-05",
+      "2019-07-08",
+      "2020-03-06"
+    ],
+    "n_surviving_clean_filter": 4,
+    "surviving": [
+      {
+        "date": "2019-07-01",
+        "abs_d_bp": 73.24219456799601,
+        "regime": "Powell",
+        "is_speech_day": false
+      },
+      {
+        "date": "2019-07-02",
+        "abs_d_bp": 4.089510293392573,
+        "regime": "Powell",
+        "is_speech_day": true
+      },
+      {
+        "date": "2019-07-03",
+        "abs_d_bp": 2.687814871875549,
+        "regime": "Powell",
+        "is_speech_day": false
+      },
+      {
+        "date": "2019-07-08",
+        "abs_d_bp": 74.05304012939793,
+        "regime": "Powell",
+        "is_speech_day": false
+      }
+    ],
+    "all_in_nonspeech_arm": false,
+    "large_defect_days_all_nonspeech": true,
+    "all_under_powell": true,
+    "powell_ratio_as_spec": 1.0059821681172012,
+    "powell_ratio_ex_defect": 1.050126921401818,
+    "rho_as_spec": 1.173713007614602,
+    "rho_ex_defect": 1.124372999190738,
+    "direction": "the untreated version FAVOURS the Warsh thesis (rho falls when the defect is cut)",
+    "conclusion_unchanged": true
+  },
+  "boundary_shift_sensitivity": {
+    "design": "re-label the regimes at TRANSITION +/- k months, k in {-3,-2,-1,0,1,2,3}; everything else (masks, statistic, bootstrap) held fixed",
+    "rows": [
+      {
+        "shift_months": -3,
+        "cut_date": "2026-02-22",
+        "degenerate": false,
+        "post_n_days": 112,
+        "post_n_speech": 53,
+        "post_ratio": 1.2880810805147374,
+        "pre_ratio": 0.9942294786567225,
+        "ratio_of_ratios": 1.295557120530192,
+        "rho_ci95": [
+          0.9547015328672196,
+          1.7346984134721182
+        ],
+        "spans_one": true,
+        "analytic_mde_80pct": 1.551080393154668,
+        "verdict": "undetermined_sample",
+        "is_placebo_inside_powell": true
+      },
+      {
+        "shift_months": -2,
+        "cut_date": "2026-03-22",
+        "degenerate": false,
+        "post_n_days": 95,
+        "post_n_speech": 48,
+        "post_ratio": 1.4877739300464232,
+        "pre_ratio": 0.9895724321988629,
+        "ratio_of_ratios": 1.5034512701011082,
+        "rho_ci95": [
+          1.098455573210951,
+          2.038609584953768
+        ],
+        "spans_one": false,
+        "analytic_mde_80pct": 1.550631370182038,
+        "verdict": "undetermined_sample",
+        "is_placebo_inside_powell": true
+      },
+      {
+        "shift_months": -1,
+        "cut_date": "2026-04-22",
+        "degenerate": false,
+        "post_n_days": 75,
+        "post_n_speech": 32,
+        "post_ratio": 1.1931204190289075,
+        "pre_ratio": 1.0041215008255815,
+        "ratio_of_ratios": 1.188223156309204,
+        "rho_ci95": [
+          0.8633793525246937,
+          1.6139945887347045
+        ],
+        "spans_one": true,
+        "analytic_mde_80pct": 1.5656688419070746,
+        "verdict": "undetermined_sample",
+        "is_placebo_inside_powell": true
+      },
+      {
+        "shift_months": 0,
+        "cut_date": "2026-05-22",
+        "degenerate": false,
+        "post_n_days": 56,
+        "post_n_speech": 22,
+        "post_ratio": 1.1807343561474986,
+        "pre_ratio": 1.0059821681172012,
+        "ratio_of_ratios": 1.173713007614602,
+        "rho_ci95": [
+          0.8185885567899515,
+          1.6584079681629724
+        ],
+        "spans_one": true,
+        "analytic_mde_80pct": 1.6626403254936153,
+        "verdict": "undetermined_sample",
+        "is_placebo_inside_powell": false
+      },
+      {
+        "shift_months": 1,
+        "cut_date": "2026-06-22",
+        "degenerate": false,
+        "post_n_days": 40,
+        "post_n_speech": 15,
+        "post_ratio": 1.438280737747736,
+        "pre_ratio": 1.0032867489714739,
+        "ratio_of_ratios": 1.4335689564545722,
+        "rho_ci95": [
+          0.9993545118391174,
+          2.0160229796399656
+        ],
+        "spans_one": true,
+        "analytic_mde_80pct": 1.6753412034927404,
+        "verdict": "undetermined_sample",
+        "is_placebo_inside_powell": false
+      },
+      {
+        "shift_months": 2,
+        "cut_date": "2026-07-22",
+        "degenerate": false,
+        "post_n_days": 21,
+        "post_n_speech": 6,
+        "post_ratio": 1.7013927712115084,
+        "pre_ratio": 1.0051222752900946,
+        "ratio_of_ratios": 1.6927221822046068,
+        "rho_ci95": [
+          0.971537052038785,
+          2.7074190345563274
+        ],
+        "spans_one": true,
+        "analytic_mde_80pct": 2.099822245700562,
+        "verdict": "undetermined_sample",
+        "is_placebo_inside_powell": false
+      },
+      {
+        "shift_months": 3,
+        "cut_date": "2026-08-22",
+        "post_n_days": 1,
+        "post_n_speech": 0,
+        "degenerate": true
+      }
+    ],
+    "verdict_set": [
+      "undetermined_sample"
+    ],
+    "any_placement_flips_to_detected": false,
+    "post_ratio_range": [
+      1.1807343561474986,
+      1.7013927712115084
+    ],
+    "rho_range": [
+      1.173713007614602,
+      1.6927221822046068
+    ],
+    "placebo_fires_inside_powell": [
+      "2026-03-22"
+    ],
+    "interpretation": "the VERDICT is boundary-invariant; the POINT ESTIMATE emphatically is not. A split two months before the handover, on a date where no regime change occurred, produces a CI excluding 1 -- a textbook boundary-signal placebo."
+  },
+  "power_ceiling": {
+    "se_log_ratio_powell_FROZEN": 0.07679931291871889,
+    "se_log_ratio_warsh_current": 0.16441911216934438,
+    "mde_floor": 1.2400600673707465,
+    "observed_rho": 1.173713007614602,
+    "mde_floor_exceeds_observed_effect": true,
+    "max_achievable_power_at_observed_effect": 0.5500139474044949,
+    "projection_by_quarters_added": [
+      {
+        "quarters_added": 0,
+        "se_log_ratio_warsh": 0.16441911216934438,
+        "se_log_rho": 0.18147115173311362,
+        "analytic_mde_80pct": 1.6626403254936153,
+        "power_at_observed_effect": 0.14290336360060296
+      },
+      {
+        "quarters_added": 2,
+        "se_log_ratio_warsh": 0.09492741867089026,
+        "se_log_rho": 0.12210384629611709,
+        "analytic_mde_80pct": 1.4078790202374103,
+        "power_at_observed_effect": 0.25896438642805175
+      },
+      {
+        "quarters_added": 4,
+        "se_log_ratio_warsh": 0.07353046232216338,
+        "se_log_rho": 0.10632433096003187,
+        "analytic_mde_80pct": 1.3469956580426563,
+        "power_at_observed_effect": 0.3253528814809365
+      },
+      {
+        "quarters_added": 6,
+        "se_log_ratio_warsh": 0.06214458308373126,
+        "se_log_rho": 0.0987931357506081,
+        "analytic_mde_80pct": 1.3188727425336164,
+        "power_at_observed_effect": 0.3675983082351952
+      },
+      {
+        "quarters_added": 12,
+        "se_log_ratio_warsh": 0.045601656891756645,
+        "se_log_rho": 0.08931766665145703,
+        "analytic_mde_80pct": 1.2843221310090016,
+        "power_at_observed_effect": 0.4338994920337329
+      },
+      {
+        "quarters_added": 30,
+        "se_log_ratio_warsh": 0.02953054430014928,
+        "se_log_rho": 0.08228114918649582,
+        "analytic_mde_80pct": 1.2592516945570986,
+        "power_at_observed_effect": 0.49473367869878215
+      }
+    ],
+    "why": "Powell's tenure is over, so SE(log excess ratio | Powell) is fixed at 0.07680 and floors SE(log rho). More calendar time shrinks only the Warsh SE.",
+    "remediation_CORRECTED": "Re-running this script on a longer panel CANNOT settle a 1.17x effect. The resolution requires a different design: (a) re-run the intraday event book so a post-2026-05-22 per-trade log exists, giving an independent higher-frequency measurement, or (b) benchmark the post-transition window against the season-matched placebo distribution, which is the comparator with the right null."
+  },
+  "falsification_2026_split": {
+    "pre_transition": {
+      "n_days": 85,
+      "n_speech": 49,
+      "n_nonspeech": 36,
+      "mean_abs_speech": 4.060244907719996,
+      "mean_abs_nonspeech": 3.0596934882958444,
+      "median_abs_speech": 2.95619883274183,
+      "median_abs_nonspeech": 2.127846006559131,
+      "excess_ratio": 1.3270103437653253,
+      "excess_diff_bp": 1.0005514194241516,
+      "median_ratio": 1.3892917173654877,
+      "sd_speech": 3.2663791740221604,
+      "sd_nonspeech": 2.7848890106530577
+    },
+    "post_transition": {
+      "n_days": 56,
+      "n_speech": 22,
+      "n_nonspeech": 34,
+      "mean_abs_speech": 3.722441102818412,
+      "mean_abs_nonspeech": 3.1526490979427386,
+      "median_abs_speech": 3.374707500906471,
+      "median_abs_nonspeech": 2.523447808702217,
+      "excess_ratio": 1.1807343561474986,
+      "excess_diff_bp": 0.5697920048756733,
+      "median_ratio": 1.337339924078734,
+      "sd_speech": 2.2038795494927914,
+      "sd_nonspeech": 1.9368203114372615
+    },
+    "lift_predates_transition": true,
+    "interpretation": "the 2026 excess ratio was already elevated under Powell and fell after the handover; the break does not line up with the chair change"
+  },
+  "by_year": [
+    {
+      "label": "2019",
+      "year": 2019,
+      "n_days": 218,
+      "n_speech": 89,
+      "mean_abs_speech": 3.500686733297628,
+      "mean_abs_nonspeech": 4.296584909542953,
+      "excess_ratio": 0.8147602821772261,
+      "ci_lo": 0.5463057851759276,
+      "ci_hi": 1.2225231934078225,
+      "ci_width": 0.6762174082318948,
+      "ci_excludes_one": false,
+      "regime": "Powell"
+    },
+    {
+      "label": "2020",
+      "year": 2020,
+      "n_days": 221,
+      "n_speech": 75,
+      "mean_abs_speech": 1.4841477462977217,
+      "mean_abs_nonspeech": 1.1315864805142142,
+      "excess_ratio": 1.3115636956207688,
+      "ci_lo": 0.7904793420403956,
+      "ci_hi": 2.149969585939705,
+      "ci_width": 1.3594902438993097,
+      "ci_excludes_one": false,
+      "regime": "Powell"
+    },
+    {
+      "label": "2021",
+      "year": 2021,
+      "n_days": 219,
+      "n_speech": 99,
+      "mean_abs_speech": 0.6804564448975,
+      "mean_abs_nonspeech": 0.916722862082086,
+      "excess_ratio": 0.7422706174819604,
+      "ci_lo": 0.4518589407858622,
+      "ci_hi": 1.2565975207466775,
+      "ci_width": 0.8047385799608153,
+      "ci_excludes_one": false,
+      "regime": "Powell"
+    },
+    {
+      "label": "2022",
+      "year": 2022,
+      "n_days": 217,
+      "n_speech": 88,
+      "mean_abs_speech": 6.355344780750905,
+      "mean_abs_nonspeech": 6.140673268493992,
+      "excess_ratio": 1.034958953663653,
+      "ci_lo": 0.8037540776572807,
+      "ci_hi": 1.330182928465509,
+      "ci_width": 0.5264288508082282,
+      "ci_excludes_one": false,
+      "regime": "Powell"
+    },
+    {
+      "label": "2023",
+      "year": 2023,
+      "n_days": 218,
+      "n_speech": 100,
+      "mean_abs_speech": 6.039530732713263,
+      "mean_abs_nonspeech": 7.210337801207827,
+      "excess_ratio": 0.8376210517767366,
+      "ci_lo": 0.5731699574384141,
+      "ci_hi": 1.2349894494697111,
+      "ci_width": 0.661819492031297,
+      "ci_excludes_one": false,
+      "regime": "Powell"
+    },
+    {
+      "label": "2024",
+      "year": 2024,
+      "n_days": 219,
+      "n_speech": 121,
+      "mean_abs_speech": 4.380734690526912,
+      "mean_abs_nonspeech": 4.114277934980545,
+      "excess_ratio": 1.0647639172066838,
+      "ci_lo": 0.813355544115816,
+      "ci_hi": 1.4033745699773656,
+      "ci_width": 0.5900190258615496,
+      "ci_excludes_one": false,
+      "regime": "Powell"
+    },
+    {
+      "label": "2025",
+      "year": 2025,
+      "n_days": 219,
+      "n_speech": 132,
+      "mean_abs_speech": 3.895645885018053,
+      "mean_abs_nonspeech": 3.6129891065445654,
+      "excess_ratio": 1.0782334986732962,
+      "ci_lo": 0.8114347102863034,
+      "ci_hi": 1.443277322709404,
+      "ci_width": 0.6318426124231006,
+      "ci_excludes_one": false,
+      "regime": "Powell"
+    },
+    {
+      "label": "2026 (pre)",
+      "year": 2026,
+      "n_days": 85,
+      "n_speech": 49,
+      "mean_abs_speech": 4.060244907719996,
+      "mean_abs_nonspeech": 3.0596934882958444,
+      "excess_ratio": 1.3270103437653253,
+      "ci_lo": 0.9275472416163716,
+      "ci_hi": 1.9385930862946872,
+      "ci_width": 1.0110458446783155,
+      "ci_excludes_one": false,
+      "regime": "Powell"
+    },
+    {
+      "label": "2026 (post)",
+      "year": 2026,
+      "n_days": 56,
+      "n_speech": 22,
+      "mean_abs_speech": 3.722441102818412,
+      "mean_abs_nonspeech": 3.1526490979427386,
+      "excess_ratio": 1.1807343561474986,
+      "ci_lo": 0.8575266707742134,
+      "ci_hi": 1.6112002641868617,
+      "ci_width": 0.7536735934126483,
+      "ci_excludes_one": false,
+      "regime": "Warsh"
+    }
+  ],
+  "seasonal_placebo": {
+    "window": "22 May .. 24 Aug",
+    "placebos": [
+      {
+        "year": 2019,
+        "n_days": 58,
+        "n_speech": 21,
+        "excess_ratio": 0.648710130541536,
+        "mean_abs_speech": 5.178407068717592,
+        "mean_abs_nonspeech": 7.982620934861483
+      },
+      {
+        "year": 2020,
+        "n_days": 58,
+        "n_speech": 15,
+        "excess_ratio": 1.0532565450597369,
+        "mean_abs_speech": 0.43182475610366045,
+        "mean_abs_nonspeech": 0.40999009987559004
+      },
+      {
+        "year": 2021,
+        "n_days": 57,
+        "n_speech": 22,
+        "excess_ratio": 1.1532075387388891,
+        "mean_abs_speech": 0.39794726028766847,
+        "mean_abs_nonspeech": 0.3450786150104871
+      },
+      {
+        "year": 2022,
+        "n_days": 57,
+        "n_speech": 25,
+        "excess_ratio": 1.2053526692685885,
+        "mean_abs_speech": 7.5591893811194515,
+        "mean_abs_nonspeech": 6.271350762185136
+      },
+      {
+        "year": 2023,
+        "n_days": 58,
+        "n_speech": 20,
+        "excess_ratio": 1.3687184958993783,
+        "mean_abs_speech": 6.182639934179361,
+        "mean_abs_nonspeech": 4.517101180923824
+      },
+      {
+        "year": 2024,
+        "n_days": 58,
+        "n_speech": 32,
+        "excess_ratio": 1.1938138206268691,
+        "mean_abs_speech": 4.781293192687464,
+        "mean_abs_nonspeech": 4.0050576648348875
+      },
+      {
+        "year": 2025,
+        "n_days": 56,
+        "n_speech": 30,
+        "excess_ratio": 1.2894183653701496,
+        "mean_abs_speech": 4.110755051982813,
+        "mean_abs_nonspeech": 3.1880692585007115
+      }
+    ],
+    "warsh_value": 1.1807343561474986,
+    "n_placebos_at_least_as_high": 4,
+    "placebo_p_one_sided": 0.625,
+    "placebo_mean": 1.1303539379293066,
+    "placebo_sd": 0.23459829966706827
+  },
+  "claim2_event_intensity": [
+    {
+      "regime": "Powell",
+      "calendar_days": 1616,
+      "speech_days": 753,
+      "events": 1550,
+      "events_per_calendar_day": 0.9591584158415841,
+      "events_per_speech_day": 2.058432934926959,
+      "speech_day_share": 0.4659653465346535,
+      "excess_bp_per_speech_day": 0.022875885678700136,
+      "excess_bp_per_event": 0.011113252849071744
+    },
+    {
+      "regime": "Warsh",
+      "calendar_days": 56,
+      "speech_days": 22,
+      "events": 50,
+      "events_per_calendar_day": 0.8928571428571429,
+      "events_per_speech_day": 2.272727272727273,
+      "speech_day_share": 0.39285714285714285,
+      "excess_bp_per_speech_day": 0.5697920048756733,
+      "excess_bp_per_event": 0.25070848214529623
+    }
+  ],
+  "claim2_marginal_slope": {
+    "Powell": {
+      "slope_bp_per_event": 0.01598324389405431,
+      "intercept_bp": 3.8193414106850496,
+      "se_slope": 0.1092509145852871,
+      "t_stat": 0.14629849054102825,
+      "n": 1616
+    },
+    "Warsh": {
+      "slope_bp_per_event": -0.09950552258783041,
+      "intercept_bp": 3.4653401735973155,
+      "se_slope": 0.2006636377116924,
+      "t_stat": -0.49588218235531545,
+      "n": 56
+    }
+  },
+  "intraday_cross_check": {
+    "status": "BLOCKED -- no post-transition intraday observations",
+    "nav_closed_rows": 440,
+    "nav_closed_first": "2023-01-06",
+    "nav_closed_last": "2026-03-27",
+    "post_transition_trades": 0,
+    "intraday_abs_move_bp_by_year": {
+      "2023": 2.444,
+      "2024": 2.199,
+      "2025": 1.772,
+      "2026": 1.288
+    },
+    "daily_nonspeech_abs_bp_by_year": {
+      "2019": 4.297,
+      "2020": 1.132,
+      "2021": 0.917,
+      "2022": 6.141,
+      "2023": 7.21,
+      "2024": 4.114,
+      "2025": 3.613,
+      "2026": 3.105
+    },
+    "ambient_agreement_corr": 0.8266540229131745,
+    "note": "_final_report.txt (later run, FED trades to 2026-07-16) exposes only year-level aggregates that straddle 2026-05-22; no regime comparison was constructed from them."
+  },
+  "directional_separate_question": {
+    "source_file": "C:\\Users\\chris\\clee\\ARBS\\notebooks\\backtests\\intraday_fed_hawk_dove\\_final_report.txt",
+    "source_parse_status": "parsed OK (FED half-samples equal-sized, known-answer check passed)",
+    "intraday_fed_halves": {
+      "1st half": {
+        "bank": "FED",
+        "trades": 246,
+        "total_bp": 137.0,
+        "avg_bp": 0.5569,
+        "hit": 0.508,
+        "sharpe": 1.25,
+        "range": "2022-04-05->2024-10-21"
+      },
+      "2nd half": {
+        "bank": "FED",
+        "trades": 246,
+        "total_bp": 40.5,
+        "avg_bp": 0.1646,
+        "hit": 0.431,
+        "sharpe": 0.55,
+        "range": "2024-10-21->2026-07-16"
+      }
+    },
+    "intraday_pooled_by_year": {
+      "2022": {
+        "trades": 45,
+        "total_bp": -0.5,
+        "avg_bp": -0.0111,
+        "std": 4.8506,
+        "hit": 0.5556,
+        "sharpe": -0.0154
+      },
+      "2023": {
+        "trades": 140,
+        "total_bp": 68.5,
+        "avg_bp": 0.4893,
+        "std": 4.0454,
+        "hit": 0.4857,
+        "sharpe": 1.4311
+      },
+      "2024": {
+        "trades": 220,
+        "total_bp": 74.5,
+        "avg_bp": 0.3386,
+        "std": 3.7787,
+        "hit": 0.5,
+        "sharpe": 1.3292
+      },
+      "2025": {
+        "trades": 260,
+        "total_bp": 51.5,
+        "avg_bp": 0.1981,
+        "std": 3.2304,
+        "hit": 0.4269,
+        "sharpe": 0.9887
+      },
+      "2026": {
+        "trades": 138,
+        "total_bp": -53.0,
+        "avg_bp": -0.3841,
+        "std": 2.685,
+        "hit": 0.3623,
+        "sharpe": -1.6803
+      }
+    },
+    "daily_signed_drift": {
+      "Powell": {
+        "mean_signed_speech_bp": 0.05387636282316557,
+        "mean_signed_nonspeech_bp": 0.02368807322587821,
+        "n_speech": 753,
+        "n_nonspeech": 863
+      },
+      "Warsh": {
+        "mean_signed_speech_bp": 0.12945082240351866,
+        "mean_signed_nonspeech_bp": 0.46855944156044094,
+        "n_speech": 22,
+        "n_nonspeech": 34
+      }
+    },
+    "provenance": "PARSED programmatically from _final_report.txt at run time, not transcribed",
+    "note": "directional decay is a different question from information content; a rising |move| is fully compatible with a falling hit rate"
+  },
+  "secondary_raw": {
+    "powell_mean_abs_speech": 3.8468883892596226,
+    "warsh_mean_abs_speech": 3.722441102818412,
+    "powell_mean_abs_nonspeech": 3.8240125035809225,
+    "warsh_mean_abs_nonspeech": 3.1526490979427386,
+    "powell_excess_diff_bp": 0.022875885678700136,
+    "warsh_excess_diff_bp": 0.5697920048756733,
+    "caveat": "raw levels reflect the ambient vol regime, not the speech effect; the ratio is primary"
+  },
+  "verdict": "undetermined_sample",
+  "caveats": [
+    "UNDERPOWERED: the Warsh arm is 56 clean days (22 speech, 34 non-speech). Simulated MDE at 80% power is a ratio-of-ratios of 1.69; the observed effect is 1.17 with achieved power 0.14. An underpowered null is not evidence of no effect.",
+    "ZERO WARSH SPEECHES IN THE WARSH REGIME: the build reports no Chair-titled Fed event of any name after 2026-03-30 and Warsh has zero events in this calendar. 'Warsh regime' therefore measures committee-member Fedspeak under a silent chair, not Warsh's own communication.",
+    "The chair transition date 2026-05-22 is repo-derived (fomc_extras.CHAIRS, FED_SPEAKER_QUARTERLY_LABELS.md), corroborated by a data-derived interval (2026-03-30, 2026-05-31] whose right edge rests on a single Powell row.",
+    "SEASONAL CONFOUND: the Warsh window is 22 May .. 24 Aug only. The season-matched placebo is reported; the raw Powell arm spans all seasons.",
+    "2019 target is provisional (the build reports 124 consecutive flat-curve days and a broken ON leg); the 2020+ arm is reported and does not change the conclusion.",
+    "IMM-roll days book a mechanical jump on a constant-relative-rank slot; the ex-IMM-roll arm is reported and does not change the conclusion.",
+    "The intraday cross-check could NOT be computed: the only per-trade logs on disk end 2026-03-27, before the handover, so there are zero post-transition intraday observations.",
+    "The 2026 excess ratio was already elevated under Powell before the handover and fell after it, so the break in the by-year series does not line up with the chair change.",
+    "NO YEAR SEPARATES FROM 1.0: every per-year excess ratio, 2019-2026, has a 95% day-bootstrap CI that spans 1.0 (widths 0.53-1.36). The by-year excursion is one noise band wide and must not be read as a series with a break.",
+    "EX CURVE-BUILD DEFECT: Analysis A cuts 6 defect dates from V1 onward; 4 survive this analysis' clean filter, all four under Powell, and the two LARGE ones (+73.24bp, -74.05bp) are both in his NON-speech arm (a third, 2019-07-02, is a 4.09bp speech day and is immaterial). Cutting them moves Powell 1.006 -> 1.050 and rho 1.174 -> 1.124. The untreated version FAVOURS the Warsh thesis; the conclusion is unchanged either way.",
+    "BOUNDARY PLACEBO: a split at 2026-03-22 -- two months BEFORE the handover and entirely inside Powell's tenure -- produces a bootstrap CI that EXCLUDES 1.0. The verdict is invariant to the boundary date, but the point estimate is not: the post-arm ratio spans 1.18-1.70 over +/-2 months, and the actual date yields the minimum of that grid.",
+    "MORE DATA CANNOT SETTLE THIS. Powell's tenure is over, so SE(log excess ratio | Powell) is frozen at 0.0768 and floors SE(log rho). The MDE floor is 1.240, permanently ABOVE the observed 1.174, and maximum achievable power at the observed effect is 0.55. Re-running this script on a longer panel is NOT the resolution; a different design is."
+  ],
+  "what_would_settle_this_CORRECTED": "NOT 'wait 4-6 more quarters' -- that is arithmetically impossible with the Powell arm closed (MDE floor 1.240 > observed 1.174; max power 0.55). Two designs can: (a) re-run the intraday event book so a post-2026-05-22 per-trade log exists, replacing the close-to-close proxy with a 30-minute event window (many more observations per speech, and a far less attenuated instrument); (b) benchmark the post-transition window against the season-matched placebo distribution (7 Powell summers, mean 1.13) rather than the whole Powell sample, which is the comparator with the right null."
+}

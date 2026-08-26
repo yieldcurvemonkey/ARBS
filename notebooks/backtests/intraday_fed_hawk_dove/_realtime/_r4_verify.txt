@@ -1,0 +1,88 @@
+
+============================================================================================
+V1.  INDEPENDENT RECOMPUTE vs pit_labels.parquet
+============================================================================================
+rows compared: 961
+  stance_l1            mismatches 0
+  stance_l1_strict     mismatches 0
+  stance_l1_strict_c   mismatches 0
+  stance_stable_2      mismatches 0
+  stance_stable_4      mismatches 0
+  stance_stable_8      mismatches 0
+  stance_mech_q3       mismatches 0
+  stance_mech_q5       mismatches 0
+  stance_mech_q10      mismatches 0
+  stance_role          mismatches 0
+  stance_asof          mismatches 0
+  stance_lag1          mismatches 0
+  stance_highconf      mismatches 0
+ALL COLUMNS MATCH - the build is reproducible from a second code path.
+
+cutoff T = 2024-01-01.  Corrupted on/after T: every label value, every confidence tier,
+every evidence date, every price move.  rows before T 620 | at T 31 | after T 310
+
+arm                     before T   at T  after T   verdict
+--------------------------------------------------------------------------------------------
+stance_l1                      0      8      114   value is indexed AT its own quarter (see note)
+stance_l1_strict               0      1       18   value is indexed AT its own quarter (see note)
+stance_l1_strict_c             0      1       13   value is indexed AT its own quarter (see note)
+stance_stable_2                0      0      164   index-causal: value comes from strictly before its own quarter
+stance_stable_4                0      0      135   index-causal: value comes from strictly before its own quarter
+stance_stable_8                0      0       74   index-causal: value comes from strictly before its own quarter
+stance_mech_q3                 0      0      176   index-causal: value comes from strictly before its own quarter
+stance_mech_q5                 0      0      177   index-causal: value comes from strictly before its own quarter
+stance_mech_q10                0      0      154   index-causal: value comes from strictly before its own quarter
+stance_role                    0      0        0   index-causal: value comes from strictly before its own quarter
+stance_asof                    0     17      180   value is indexed AT its own quarter (see note)
+stance_lag1                    0      0      184   index-causal: value comes from strictly before its own quarter
+stance_highconf                0     17      180   value is indexed AT its own quarter (see note)
+--------------------------------------------------------------------------------------------
+No column changes for any quarter starting before the cutoff.  No construction reads the future.
+
+The 'at T' column is the informative one.  It separates:
+  INDEX-CAUSAL  (0 at T) - L2, L3, L4 and C2.  Corrupting quarter T's own label
+     leaves them untouched, because the value they carry is literally a pre-T cell
+     (L2/C2), a pre-T price (L3) or a public roster fact (L4).
+  INDEXED AT Q  (>0 at T) - L1, L1s, L1c, C1, C3.  These carry quarter Q's OWN
+     assigned value.  L1's claim is not that the value is indexed earlier; it is
+     that the EVIDENCE the assigner cited for it is.  That is an argument about
+     provenance and this test cannot adjudicate it - only the prose can, and only
+     as far as the assigner's citations are complete.
+
+perturbation bites after T (non-zero changes required): {'stance_l1': 114, 'stance_l1_strict': 18, 'stance_l1_strict_c': 13, 'stance_stable_2': 164, 'stance_stable_4': 135, 'stance_stable_8': 74, 'stance_mech_q3': 176, 'stance_mech_q5': 177, 'stance_mech_q10': 154, 'stance_asof': 180, 'stance_lag1': 184, 'stance_highconf': 180}
+stance_role changes: before T 0, at T 0, after T 0 - ZERO everywhere.
+That is L4's defining property, not a dead column: it is a pure function of the
+role string and the calendar, so no stance and no price can move it.  Its own
+vacuity check (perturb the ROLE strings) follows.
+  swapping every role string moves stance_role on 476 rows - the column is live.
+
+============================================================================================
+V2.  MUTATION CHECKS - can the leakage test actually catch a leak?
+============================================================================================
+M1  make L2 read quarter Q's own label as well (the literal 'label as of Q' reading)
+    stance_stable_2 changes at T under the mutation: 12  (clean build: 0)
+    DETECTED.  The shipped L2 reads Q-1..Q-K only; the leaky variant does not.
+
+M2  give L3 a 180-day FORWARD window instead of a backward one
+    stance_mech_q5 changes BEFORE T under the mutation: 7  (clean build: 0)
+    DETECTED.  A forward-looking window shows up as a pre-cutoff change.
+
+builder restored to the shipped definition after both mutations.
+
+============================================================================================
+V3.  PER-ARM PROPERTY ASSERTIONS
+============================================================================================
+L1   : 245 available rows, every one has earliest cited evidence STRICTLY before its quarter start, and carries the period's own stance.
+L1s  : 71 rows, LATEST cited evidence strictly before quarter start.
+       L1-strict is a strict SUBSET of L1 (71 of 245) - as it must be.
+L2 K=2: 348 rows, each equal to a value held unchanged across Q-1..Q-2; Q's own label never read.
+L2 K=4: 205 rows, each equal to a value held unchanged across Q-1..Q-4; Q's own label never read.
+L2 K=8: 70 rows, each equal to a value held unchanged across Q-1..Q-8; Q's own label never read.
+       nesting stable_8 subset stable_4 subset stable_2 holds.
+L3   : 302 rows for N=5; every input move's +240 bar closed strictly before the quarter start.
+L3e  : 904 events; every input move's +240 bar closed strictly before THIS event's -60 entry bar (no same-day self-reference).
+L4   : stance_role is a function of role alone (one value per role, no exceptions).
+C3   : every stance_highconf row has confidence == 'high'.
+C2   : 463 rows, each exactly the previous quarter's label.
+
+ALL PROPERTY ASSERTIONS PASS.

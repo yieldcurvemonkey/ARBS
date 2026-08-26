@@ -1,0 +1,306 @@
+==============================================================================
+CHART 3  --  speaker ex-ante stance  vs  RAW rate move at +240 min
+headline rank 3 (pre-registered), offset +240min, y = d_rate_bp_from_baseline (RAW)
+==============================================================================
+
+HEADLINE SAMPLE: 827 events (signed AND valid y at rank 3), 22 speakers
+  date span 2023-05-05 -> 2026-08-25
+  year counts: {2023: np.int64(125), 2024: np.int64(251), 2025: np.int64(297), 2026: np.int64(154)}
+
+SPEAKERS KEPT (n>=8 valid-y events): 21
+            n  mean_stance  mean_move   se_move  voter_share            role
+speaker                                                                     
+Barr       70   -24.942857   0.135714  0.461558     1.000000        Governor
+Miran      14   -11.428571   0.392857  0.382224     1.000000        Governor
+Waller     55    -1.036364  -0.354545  0.524593     1.000000        Governor
+Jefferson  26     0.538462  -1.057692  0.983841     1.000000        Governor
+Bowman     82     5.560976   0.463415  0.490790     1.000000        Governor
+Kugler     23     5.913043   0.869565  1.011406     1.000000        Governor
+Goolsbee   74     5.932432  -0.155405  0.526854     0.594595       President
+Cook       35     6.628571   0.200000  0.497135     1.000000        Governor
+Williams   68     8.397059   0.382353  0.496046     1.000000  President (NY)
+Collins    19     8.421053   0.500000  1.015955     0.315789       President
+Bostic     59    10.423729  -0.211864  0.400395     0.508475       President
+Daly       30    11.533333   0.266667  0.523984     0.400000       President
+Harker     27    12.629630   0.055556  0.642917     0.555556       President
+Barkin     69    12.898551   0.275362  0.539325     0.347826       President
+Logan      29    13.689655   0.310345  0.600397     0.379310       President
+Kashkari   34    13.911765   0.147059  0.415030     0.529412       President
+Musalem    25    15.240000   0.660000  0.855239     0.680000       President
+Powell     41    17.097561  -0.243902  0.810210     1.000000           Chair
+Hammack    19    20.684211  -0.868421  0.673042     0.368421       President
+Schmid     17    23.647059   1.117647  0.667702     0.470588       President
+Mester      8    24.875000  -0.437500  0.622764     1.000000       President
+
+SPEAKERS EXCLUDED (n<8): 1
+         n  mean_stance  mean_move       role
+speaker                                      
+Paulson  3     6.333333  -3.666667  President
+  events lost to the n>=8 filter: 3 of 827
+
+X-RANGE STRUCTURE: 3 of 21 kept speakers have a NEGATIVE mean stance
+  Barr -24.9, Miran -11.4, Waller -1.0
+  x range -24.94 .. +24.88
+  y range -1.058 .. +1.118 bp
+  median SE of a speaker mean: 0.539 bp
+
+==============================================================================
+MAIN REGRESSION  (unweighted OLS, one dot per speaker)
+==============================================================================
+  slope    = +0.00051 bp per stance-score point
+  se       = 0.01068
+  t        = +0.048
+  p        = 0.9625
+  R2       = 0.0001
+  n        = 21 speakers, dof 19
+  intercept= +0.1122 bp
+
+  WLS (1/SE^2) check: slope -0.00297  t -0.391  R2 0.0207
+
+==============================================================================
+INFLUENCE  --  who is the lever?
+==============================================================================
+           leverage      cook     resid  mean_stance  mean_move   n
+speaker                                                            
+Schmid     0.135846  0.306483  0.993456    23.647059   1.117647  17
+Hammack    0.104521  0.218562 -0.991105    20.684211  -0.868421  19
+Jefferson  0.072950  0.198392 -1.170123     0.538462  -1.057692  26
+Mester     0.150834  0.112907 -0.562316    24.875000  -0.437500   8
+Kugler     0.050434  0.054340  0.754399     5.913043   0.869565  23
+Miran      0.203958  0.045104  0.286517   -11.428571   0.392857  14
+Waller     0.083812  0.037041 -0.466175    -1.036364  -0.354545  55
+Musalem    0.064798  0.036891  0.540087    15.240000   0.660000  25
+Powell     0.075755  0.020142 -0.364761    17.097561  -0.243902  41
+Collins    0.047632  0.013188  0.383558     8.421053   0.500000  19
+Bowman     0.051220  0.011792  0.348428     5.560976   0.463415  82
+Bostic     0.048914  0.010011 -0.329326    10.423729  -0.211864  59
+Goolsbee   0.050394  0.006984 -0.270581     5.932432  -0.155405  74
+Williams   0.047635  0.006340  0.265923     8.397059   0.382353  68
+Barr       0.486106  0.004129  0.036252   -24.942857   0.135714  70
+Logan      0.057712  0.004057  0.191221    13.689655   0.310345  29
+Barkin     0.054818  0.002570  0.156641    12.898551   0.275362  69
+Daly       0.050971  0.002134  0.148640    11.533333   0.266667  30
+Cook       0.049135  0.000662  0.084470     6.628571   0.200000  35
+Harker     0.053945  0.000409 -0.063029    12.629630   0.055556  27
+Kashkari   0.058612  0.000087  0.027822    13.911765   0.147059  34
+
+BIGGEST LEVER by Cook's D: Schmid  (D=0.306, h=0.136)
+
+FULL LEAVE-ONE-OUT SWEEP (drop each speaker once):
+              slope         t        r2         p
+dropped                                          
+Schmid    -0.006232 -0.606638  0.020035  0.551666
+Jefferson -0.003457 -0.362506  0.007248  0.721196
+Waller    -0.001402 -0.128032  0.000910  0.899543
+Musalem   -0.000985 -0.091552  0.000465  0.928065
+Logan      0.000106  0.009683  0.000005  0.992381
+Goolsbee   0.000213  0.019480  0.000021  0.984673
+Barkin     0.000231  0.021047  0.000025  0.983440
+Daly       0.000330  0.030068  0.000050  0.976344
+Kashkari   0.000448  0.040559  0.000091  0.968094
+Williams   0.000531  0.048709  0.000132  0.961687
+Collins    0.000537  0.049627  0.000137  0.960966
+Cook       0.000577  0.052579  0.000154  0.958647
+Harker     0.000614  0.055730  0.000173  0.956171
+Bostic     0.000755  0.069445  0.000268  0.945401
+Bowman     0.000944  0.086838  0.000419  0.931759
+Kugler     0.001341  0.129144  0.000926  0.898676
+Barr       0.001431  0.095792  0.000510  0.924744
+Powell     0.001816  0.165107  0.001512  0.870700
+Miran      0.003318  0.278981  0.004305  0.783439
+Mester     0.004709  0.419335  0.009674  0.679933
+Hammack    0.005721  0.564002  0.017365  0.579713
+
+  slope range across LOO: -0.00623 .. +0.00572
+  t     range across LOO: -0.607 .. +0.564
+  LOO fits with p<0.05: 0 of 21
+
+HEADLINE LOO -- drop Schmid:
+  slope -0.00623  se 0.01027  t -0.607  p 0.5517  R2 0.0200  n 20
+
+==============================================================================
+SIGN AGREEMENT  --  is a speaker's mean move signed like their stance?
+==============================================================================
+  13 of 21 speakers correctly signed = 61.9%
+  binomial p vs 50% (two-sided) = 0.3833
+  95% CI on the rate: 0.384 .. 0.819
+
+  by speaker:
+    Barr        stance  -24.94  move  +0.136bp  NO   n=70
+    Miran       stance  -11.43  move  +0.393bp  NO   n=14
+    Waller      stance   -1.04  move  -0.355bp  OK   n=55
+    Jefferson   stance   +0.54  move  -1.058bp  NO   n=26
+    Bowman      stance   +5.56  move  +0.463bp  OK   n=82
+    Kugler      stance   +5.91  move  +0.870bp  OK   n=23
+    Goolsbee    stance   +5.93  move  -0.155bp  NO   n=74
+    Cook        stance   +6.63  move  +0.200bp  OK   n=35
+    Williams    stance   +8.40  move  +0.382bp  OK   n=68
+    Collins     stance   +8.42  move  +0.500bp  OK   n=19
+    Bostic      stance  +10.42  move  -0.212bp  NO   n=59
+    Daly        stance  +11.53  move  +0.267bp  OK   n=30
+    Harker      stance  +12.63  move  +0.056bp  OK   n=27
+    Barkin      stance  +12.90  move  +0.275bp  OK   n=69
+    Logan       stance  +13.69  move  +0.310bp  OK   n=29
+    Kashkari    stance  +13.91  move  +0.147bp  OK   n=34
+    Musalem     stance  +15.24  move  +0.660bp  OK   n=25
+    Powell      stance  +17.10  move  -0.244bp  NO   n=41
+    Hammack     stance  +20.68  move  -0.868bp  NO   n=19
+    Schmid      stance  +23.65  move  +1.118bp  OK   n=17
+    Mester      stance  +24.88  move  -0.438bp  NO   n=8
+
+  COMPOSITION WARNING: 18 of 21 kept speakers are hawk-mean, so the 50% benchmark is close to a test of 'did rates drift up'.
+
+==============================================================================
+PLACEBO  --  identical pipeline on calendar-matched quiet days
+==============================================================================
+  placebo events: 2508, speakers 22
+  placebo slope = -0.00387  se 0.00560  t -0.692  p 0.4966  R2 0.0234  n 22
+  placebo sign agreement: 15/22 = 68.2%  (binomial p 0.1338)
+  REAL 61.9% vs PLACEBO 68.2%  -> difference -6.3pp
+
+  placebo speaker table:
+             n  mean_stance  mean_move   se_move
+speaker                                         
+Barr       207   -24.927536   0.405797  0.237827
+Miran       36   -11.166667   0.111111  0.317550
+Waller     182    -1.587912  -0.085165  0.236494
+Jefferson   79     0.784810   0.253165  0.360190
+Bowman     247     5.744939   0.305668  0.239838
+Goolsbee   216     5.787037   0.532407  0.230449
+Kugler      70     6.228571   0.485714  0.301132
+Cook       108     6.500000   0.212963  0.361253
+Paulson      8     6.625000  -0.375000  1.511119
+Collins     53     8.452830  -0.216981  0.499185
+Williams   203     8.660099   0.285714  0.279479
+Bostic     174    10.270115   0.393678  0.207916
+Daly       103    11.834951   0.048544  0.254178
+Barkin     211    12.952607   0.331754  0.259649
+Harker      83    12.987952  -0.445783  0.354333
+Logan       94    13.234043  -0.037234  0.445833
+Kashkari    98    14.397959   0.545918  0.529335
+Musalem     75    15.240000   0.393333  0.306137
+Powell     124    16.911290   0.209677  0.345634
+Hammack     64    21.046875  -0.117188  0.575278
+Schmid      50    23.300000   0.210000  0.458278
+Mester      23    24.913043   0.043478  0.613511
+
+  slope difference real-placebo = +0.00438, z = +0.363
+
+==============================================================================
+VOTERS vs NON-VOTERS
+==============================================================================
+  voter events 617, non-voter events 210
+
+  VOTER     speaker-level: slope +0.02102  t +1.569  p 0.1351  R2 0.1265  n 19 speakers
+  NON-VOTER speaker-level: slope -0.04188  t -0.821  p 0.4327  R2 0.0697  n 11 speakers
+
+  voter x-range   -24.94 .. +24.88  (neg-stance speakers: 3)
+  nonvoter x-range +5.41 .. +22.56  (neg-stance speakers: 0)
+
+  voter table:
+            n  mean_stance     mean_move   se_move            role
+speaker                                                           
+Barr       70   -24.942857  1.357143e-01  0.461558        Governor
+Miran      14   -11.428571  3.928571e-01  0.382224        Governor
+Waller     55    -1.036364 -3.545455e-01  0.524593        Governor
+Jefferson  26     0.538462 -1.057692e+00  0.983841        Governor
+Goolsbee   44     1.840909 -7.272727e-01  0.541720       President
+Bowman     82     5.560976  4.634146e-01  0.490790        Governor
+Kugler     23     5.913043  8.695652e-01  1.011406        Governor
+Cook       35     6.628571  2.000000e-01  0.497135        Governor
+Williams   68     8.397059  3.823529e-01  0.496046  President (NY)
+Harker     15    11.266667  3.333333e-01  0.699773       President
+Kashkari   18    13.111111  5.833333e-01  0.381881       President
+Barkin     24    15.125000  7.083333e-01  0.571767       President
+Bostic     30    15.266667  4.736952e-14  0.598849       President
+Logan      11    16.090909  8.181818e-01  1.130713       President
+Daly       12    16.666667  1.166667e+00  0.942139       President
+Powell     41    17.097561 -2.439024e-01  0.810210           Chair
+Musalem    17    17.176471  1.352941e+00  1.125216       President
+Mester      8    24.875000 -4.375000e-01  0.622764       President
+Schmid      8    24.875000  1.812500e+00  1.267511       President
+
+  non-voter table:
+           n  mean_stance  mean_move   se_move       role
+speaker                                                  
+Bostic    29     5.413793  -0.431034  0.536663  President
+Daly      18     8.111111  -0.333333  0.587172  President
+Collins   13     9.230769   1.538462  1.061357  President
+Musalem    8    11.125000  -0.812500  1.109768  President
+Barkin    45    11.711111   0.044444  0.771137  President
+Goolsbee  30    11.933333   0.683333  1.022023  President
+Logan     18    12.222222   0.000000  0.694281  President
+Harker    12    14.333333  -0.291667  1.182989  President
+Kashkari  16    14.812500  -0.343750  0.767462  President
+Hammack   12    22.000000  -1.708333  0.882186  President
+Schmid     9    22.555556   0.500000  0.577350  President
+
+  EVENT-LEVEL  raw ~ stance * is_voter, SE clustered by speaker (n=827, 22 clusters):
+    const                b=+0.06668  se=0.61897  t=+0.108  p=0.9152
+    stance               b=-0.00863  se=0.04420  t=-0.195  p=0.8472
+    is_voter             b=+0.00827  se=0.69339  t=+0.012  p=0.9906
+    stance x is_voter    b=+0.02441  se=0.04398  t=+0.555  p=0.5848
+    -> non-voter slope = -0.00863; voter slope = +0.01578
+
+  WITHIN-ROTATOR (speakers who both voted and did not): 11 speakers, 402 events
+    ['Barkin', 'Bostic', 'Collins', 'Daly', 'Goolsbee', 'Hammack', 'Harker', 'Kashkari', 'Logan', 'Musalem', 'Schmid']
+    with speaker fixed effects, clustered by speaker (11 clusters):
+      const                b=+0.17794  se=0.68485  t=+0.260  p=0.8003
+      stance               b=-0.00787  se=0.05162  t=-0.152  p=0.8818
+      is_voter             b=-0.76208  se=0.86555  t=-0.880  p=0.3993
+      stance x is_voter    b=+0.08820  se=0.05279  t=+1.671  p=0.1257
+      -> within-rotator non-voter slope -0.00787, voter slope +0.08033
+
+==============================================================================
+ROBUSTNESS
+==============================================================================
+
+  ALL 5 CONTRACT RANKS at +240 (headline rank 3 pre-registered):
+      n_ev  n_spk     slope         t         p        r2  sign_agree  placebo_slope  placebo_t
+rank                                                                                           
+1      800     21 -0.001436 -0.339497  0.737959  0.006030    0.666667      -0.003069  -0.766202
+2      842     20  0.000464  0.049023  0.961441  0.000133    0.600000      -0.004673  -0.945036
+3      827     21  0.000509  0.047636  0.962504  0.000119    0.619048      -0.003875  -0.692489
+4      848     21 -0.005927 -0.551587  0.587661  0.015761    0.619048      -0.005178  -0.888386
+5      842     21 -0.007374 -0.632923  0.534328  0.020648    0.523810      -0.005974  -0.994940
+
+  NON-OVERLAPPING events only (rank 3):
+    events 189, speakers kept 11 (excluded 9)
+    slope +0.02114  t +0.921  p 0.3810  R2 0.0861  sign-agree 63.6%
+           n  mean_stance  mean_move   se_move
+speaker                                       
+Barr      18   -28.277778  -0.055556  1.047787
+Bowman    18    -4.055556  -0.444444  0.622152
+Waller    18     0.166667   0.611111  0.988129
+Cook      11     7.545455  -0.181818  1.170223
+Goolsbee  11     8.363636   1.681818  2.592185
+Bostic    13     9.538462  -0.615385  1.100923
+Barkin    17    11.588235   1.705882  1.814494
+Williams  15    11.666667  -0.566667  0.833619
+Daly       8    11.750000   1.250000  1.578313
+Powell    10    16.500000  -0.050000  0.684957
+Logan      8    17.125000   1.437500  0.898598
+
+  BUCKET |b|>=1 events only (rank 3):
+    events 510, speakers kept 19
+    slope -0.00377  t -0.359  p 0.7240  R2 0.0075
+
+  OTHER OFFSETS (rank 3, same pipeline):
+        n_ev  n_spk     slope         t         p        r2
+offset                                                     
+15       916     21 -0.007211 -1.270206  0.219347  0.078270
+30       905     21 -0.003755 -0.502021  0.621421  0.013091
+60       903     21 -0.007791 -0.834082  0.414599  0.035322
+120      876     21 -0.008331 -0.982447  0.338225  0.048344
+180      872     21 -0.004393 -0.575103  0.571970  0.017110
+240      827     21  0.000509  0.047636  0.962504  0.000119
+300      773     21 -0.001273 -0.097318  0.923493  0.000498
+
+  CONTRAST: the same fit run on signed_d_bp instead of the raw move.
+  NOTE -- this is reported NEUTRALLY. I first predicted it would 'slope up hard',
+  and that prediction was WRONG. The circularity that makes signed_d_bp unusable
+  as this chart's y lives in its LEVEL (it is pre-flipped so a correct-direction
+  move is positive by construction), NOT in its slope against the mean score.
+  That y is the RAW move here is established by c3_verify.py V1/V2, not by this line.
+    signed_d_bp slope +0.00684  t +0.559  R2 0.0162  (n 21)
+    mean signed_d_bp across those speakers = +0.2731 bp <- THIS level, not the slope, is the pre-flipped quantity

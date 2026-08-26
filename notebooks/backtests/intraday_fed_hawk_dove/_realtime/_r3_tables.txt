@@ -1,0 +1,205 @@
+
+============================================================================================
+0.  RECONCILIATION against _event_study/zz_manual_label_lag.py
+============================================================================================
+zz_manual_label_lag.py flat dict : 476 speaker-quarters
+this build's flat dict           : 476 speaker-quarters
+IDENTICAL - keys and values match exactly.
+speakers 31   periods 119   quarter grid 2019Q1..2026Q3 (31 quarters)
+speakers with a GAP inside their own span: 0  []
+
+============================================================================================
+1.  PANEL
+============================================================================================
+event_paths.parquet rank-3 events with a valid -60 -> +240 move : 1029
+span 2022-01-11 09:12:00-05:00  ->  2026-08-25 16:00:00-04:00
+speakers in panel 25   quarters 19 (2022Q1..2026Q3)
+panel speakers with NO entry in the labels file: none
+events needing a nominal-timestamp fallback for the window stamps: 11
+
+============================================================================================
+2.  ROLE cross-check  (labels-file role string  vs  fomc_extras.role_of)
+============================================================================================
+disagreements: 0
+role counts on-committee: {'President': 258, 'Governor': 156, 'Chair': 31, 'President (NY)': 31}
+
+panel events joined: 1029   with no (speaker,quarter) row at all: 0   off-committee at their own speech: 1
+   OFF-GRID EVENT: Hammack 2026-08-13 08:15:00-04:00  quarter 2026Q3  (the label grid's roster ends this speaker earlier than the panel does; every stance arm is NaN for it)
+
+============================================================================================
+3.  L1  EVIDENCE-VINTAGE PARSE
+============================================================================================
+periods: 119
+  with >=1 fully-specified date parsed : 102
+  with NO parseable date               : 17   (-> every quarter of those periods is UNAVAILABLE under L1)
+    of those, how many DID contain a bare-year token only: 13   and nothing date-like at all: 4
+      Williams   2020Q1-2020Q4  stance +0  n_q=4  bare_years=0  unresolved_month_tokens=0
+      Williams   2021Q1-2021Q4  stance -1  n_q=4  bare_years=0  unresolved_month_tokens=1
+      Bowman     2019Q1-2021Q3  stance +0  n_q=11  bare_years=1  unresolved_month_tokens=0
+      Brainard   2020Q1-2021Q4  stance -2  n_q=8  bare_years=1  unresolved_month_tokens=3
+      Evans      2019Q3-2021Q3  stance -2  n_q=9  bare_years=4  unresolved_month_tokens=3
+      George     2019Q1-2019Q4  stance +2  n_q=4  bare_years=2  unresolved_month_tokens=4
+      George     2020Q1-2020Q4  stance +1  n_q=4  bare_years=3  unresolved_month_tokens=2
+      George     2021Q1-2021Q4  stance +2  n_q=4  bare_years=1  unresolved_month_tokens=1
+      George     2022Q1-2022Q1  stance +1  n_q=1  bare_years=1  unresolved_month_tokens=1
+      Rosengren  2019Q1-2019Q2  stance +1  n_q=2  bare_years=1  unresolved_month_tokens=4
+      Rosengren  2019Q3-2019Q4  stance +2  n_q=2  bare_years=3  unresolved_month_tokens=4
+      Kaplan     2020Q1-2020Q2  stance +0  n_q=2  bare_years=1  unresolved_month_tokens=1
+      Harker     2020Q1-2021Q2  stance +0  n_q=6  bare_years=0  unresolved_month_tokens=0
+      Daly       2021Q1-2021Q4  stance -2  n_q=4  bare_years=2  unresolved_month_tokens=0
+      Daly       2024Q1-2024Q2  stance +0  n_q=2  bare_years=1  unresolved_month_tokens=0
+      Kashkari   2025Q4-2025Q4  stance +1  n_q=1  bare_years=1  unresolved_month_tokens=0
+      Barkin     2021Q1-2021Q4  stance +0  n_q=4  bare_years=0  unresolved_month_tokens=0
+  total dates parsed: 268   median per period 2   max 11
+  UNRESOLVED month tokens (year only implied, e.g. '27 Jul', 'the September dots'): 131 across 62 periods
+
+(quarter start - earliest cited evidence), in days, over the AVAILABLE speaker-quarters:
+  n=245  min 1  q25 64  median 183  q75 383  max 1078  mean 265
+  {'<1m': 28, '1-3m': 44, '3-6m': 48, '6-12m': 58, '1-2y': 50, '2y+': 17}
+
+SENSITIVITY - if bare years were admitted as 1 Jan (the permissive reading), the 17 unparseable periods covering 72 speaker-quarters would mostly become available; L1 coverage is reported on the CONSERVATIVE reading only.
+
+============================================================================================
+4.  L2  STABILITY divergence
+============================================================================================
+  K=2: of 335 speaker-quarters with a stable 2-quarter history, 63 (18.8%) have a DIFFERENT label at Q itself.
+  K=4: of 200 speaker-quarters with a stable 4-quarter history, 44 (22.0%) have a DIFFERENT label at Q itself.
+  K=8: of 68 speaker-quarters with a stable 8-quarter history, 12 (17.6%) have a DIFFERENT label at Q itself.
+  Those are exactly the quarters the literal 'label as of Q' reading would have
+  selected on the future.  The shipped column carries the CARRIED-FORWARD value.
+
+============================================================================================
+5.  L3  MECHANICAL history depth
+============================================================================================
+speakers with >=3 / >=5 / >=10 prior moves by end of sample: [25, 25, 23]  of 25 speakers in the panel
+moves per speaker: {'Bowman': 95, 'Williams': 94, 'Barr': 80, 'Goolsbee': 76, 'Waller': 73, 'Barkin': 69, 'Powell': 62, 'Bostic': 59, 'Cook': 43, 'Kashkari': 38, 'Harker': 33, 'Jefferson': 32, 'Logan': 32, 'Daly': 30, 'Musalem': 30, 'Mester': 29, 'Kugler': 24, 'Hammack': 24, 'Miran': 23, 'Collins': 22, 'Bullard': 19, 'Schmid': 17, 'Brainard': 11, 'Paulson': 8, 'George': 6}
+
+============================================================================================
+6.  COVERAGE PER CONSTRUCTION
+============================================================================================
+denominator: on-committee speaker-quarters = 476   panel events = 1029
+
+               arm          pit  sq_n  sq_oc sq_pct           span  ev_n ev_pct  ev_nz  hawk  neut  dove
+         stance_l1         PIT*   245    245    51% 2019Q2..2026Q3   591    57%    378    92    88    65
+  stance_l1_strict         PIT*    71     71    15% 2019Q2..2025Q4   128    12%     82    35    14    22
+stance_l1_strict_c          PIT    50     50    11% 2019Q2..2025Q3    90     9%     65    25     7    18
+   stance_stable_2          PIT   348    335    70% 2019Q3..2026Q3   756    73%    479   118   123    94
+   stance_stable_4          PIT   205    200    42% 2020Q1..2026Q3   513    50%    298    65    84    51
+   stance_stable_8          PIT    70     68    14% 2021Q1..2026Q3   195    19%     63    13    43    12
+    stance_mech_q3          PIT   320    250    53% 2022Q2..2026Q3   901    88%    871   137     8   105
+    stance_mech_q5          PIT   302    232    49% 2022Q2..2026Q3   869    84%    868   131     1   100
+   stance_mech_q10          PIT   249    195    41% 2022Q3..2026Q3   738    72%    738   108     0    87
+       stance_role          PIT   476    476   100% 2019Q1..2026Q3  1028   100%    872   258    62   156
+       stance_asof CONTAMINATED   476    476   100% 2019Q1..2026Q3  1028   100%    692   176   166   134
+       stance_lag1 CONTAMINATED   463    445    93% 2019Q2..2026Q3  1000    97%    654   160   157   128
+   stance_highconf CONTAMINATED   189    189    40% 2019Q1..2026Q3   464    45%    322    85    45    59
+    stance_mech_e3          PIT    -1     -1    n/a 2022Q1..2026Q3   952    93%    927   520    25   407
+    stance_mech_e5          PIT    -1     -1    n/a 2022Q1..2026Q3   904    88%    896   500     8   396
+   stance_mech_e10          PIT    -1     -1    n/a 2022Q2..2026Q3   785    76%    782   447     3   335
+
+  sq_n  = speaker-quarters with a usable (non-NaN) value, over the FULL 31x31 grid
+  sq_oc = of those, the ones where the speaker is actually on the committee that
+          quarter.  sq_n > sq_oc only for the two arms that are computable off the
+          roster - L2 (a departed member's last value stays 'stable') and L3 (a
+          departed member still has price history).  Neither can reach an event,
+          because an event only exists where somebody spoke.  sq_pct is sq_oc/476.
+  ev_n  = panel events (of the 1,029 with a valid rank-3 -60->+240 move) that get one
+  ev_nz = of those, how many carry a NON-ZERO stance, i.e. actually generate a trade
+  hawk/neut/dove counted over on-committee speaker-quarters (over events for *_e*)
+
+  stance_l1            L1  evidence-vintage (earliest cited < Q start)
+  stance_l1_strict     L1s LATEST cited < Q start  (parsed tokens only)
+  stance_l1_strict_c   L1c LATEST, unresolved months -> period end
+  stance_stable_2      L2  unchanged the previous 2 quarters
+  stance_stable_4      L2  unchanged the previous 4 quarters
+  stance_stable_8      L2  unchanged the previous 8 quarters
+  stance_mech_q3       L3  own last 3 moves, frozen at Q start
+  stance_mech_q5       L3  own last 5 moves, frozen at Q start
+  stance_mech_q10      L3  own last 10 moves, frozen at Q start
+  stance_role          L4  role prior only (Pres +1 / Gov -1 / Chair,NY 0)
+  stance_asof          C1  quarter's OWN label
+  stance_lag1          C2  previous quarter's label
+  stance_highconf      C3  own label, confidence=='high'
+  stance_mech_e3       L3  own last 3 moves, per SPEECH
+  stance_mech_e5       L3  own last 5 moves, per SPEECH
+  stance_mech_e10      L3  own last 10 moves, per SPEECH
+
+============================================================================================
+7.  COVERAGE under the VOTERS-ONLY cut, and by era
+============================================================================================
+panel events 1029   voters 810   2022-23 302   2024-26 727
+
+               arm  all_ev  all_nz  vot_ev  vot_nz  vot_c2  e2223_nz  e2426_nz
+         stance_l1     591     378     479     283     122       122       256
+  stance_l1_strict     128      82     125      79      63        46        36
+stance_l1_strict_c      90      65      90      65      51        38        27
+   stance_stable_2     756     479     593     350     167       167       312
+   stance_stable_4     513     298     394     198     109        89       209
+   stance_stable_8     195      63     155      31      31        19        44
+    stance_mech_q3     901     871     697     668       0       226       645
+    stance_mech_q5     869     868     667     667       0       207       661
+   stance_mech_q10     738     738     549     549       0       132       606
+       stance_role    1028     872     809     653       0       234       638
+       stance_asof    1028     692     809     509     226       184       508
+       stance_lag1    1000     654     790     484     229       193       461
+   stance_highconf     464     322     427     285     207       148       174
+    stance_mech_e3     952     927     744     723       0       249       678
+    stance_mech_e5     904     896     701     696       0       220       676
+   stance_mech_e10     785     782     593     590       0       151       631
+
+  *_nz = tradeable events (non-zero stance).  vot_c2 = voters AND conviction |2|.
+  NOTE the L3 arms are +/-1 by construction so nz == ev; a zero appears only on an
+  exact tie in the mean of the prior N moves.
+
+============================================================================================
+8.  HAND-CHECKS against the markdown grid
+============================================================================================
+Jefferson is '·' in every quarter he is on the committee -> must survive K=8:
+  on-committee quarters 16  distinct raw stances [np.float64(0.0)]  stable_8 non-NaN 8
+
+Bowman flips 2025Q2 (0) -> 2025Q3 (-2) -> must break the streak at and after the flip:
+quarter  stance_raw  stance_stable_2  stance_stable_4  stance_stable_8  stance_l1  stance_lag1
+ 2025Q1         2.0              2.0              2.0              2.0        2.0          2.0
+ 2025Q2         0.0              2.0              2.0              2.0        NaN          2.0
+ 2025Q3        -2.0              NaN              NaN              NaN       -2.0          0.0
+ 2025Q4        -1.0              NaN              NaN              NaN        NaN         -2.0
+ 2026Q1        -1.0              NaN              NaN              NaN       -1.0         -1.0
+
+Late joiners must be mostly NaN at K=8 (honest cost, not a bug):
+  Hammack    on-committee  7q (2024Q4..2026Q2)  stable_2  4  stable_4  2  stable_8  0  l1  4
+  Musalem    on-committee  9q (2024Q3..2026Q3)  stable_2  7  stable_4  5  stable_8  1  l1  9
+  Schmid     on-committee  8q (2024Q4..2026Q3)  stable_2  5  stable_4  1  stable_8  0  l1  7
+  Miran      on-committee  4q (2025Q3..2026Q2)  stable_2  2  stable_4  0  stable_8  0  l1  3
+  Paulson    on-committee  3q (2025Q4..2026Q2)  stable_2  0  stable_4  0  stable_8  0  l1  2
+  Warsh      on-committee  2q (2026Q2..2026Q3)  stable_2  0  stable_4  0  stable_8  0  l1  1
+  Goolsbee   on-committee 15q (2023Q1..2026Q3)  stable_2  9  stable_4  5  stable_8  0  l1  9
+  Logan      on-committee 15q (2023Q1..2026Q3)  stable_2 10  stable_4  8  stable_8  4  l1 11
+
+Powell's Chair -> Governor handover (labels role string: 'Chair (through May 2026)'):
+quarter quarter_start     role  stance_role  on_committee
+ 2026Q1    2026-01-01    Chair          0.0          True
+ 2026Q2    2026-04-01    Chair          0.0          True
+ 2026Q3    2026-07-01 Governor          NaN         False
+quarter quarter_start     role  stance_role  on_committee
+ 2026Q1    2026-01-01 Governor          NaN         False
+ 2026Q2    2026-04-01 Governor         -1.0          True
+ 2026Q3    2026-07-01    Chair          0.0          True
+
+Worked L1 example - Bowman 2023Q1-2025Q1, stance +2:
+  earliest cited 2024-08-15   latest cited 2024-09-18   dates parsed 2  unresolved month tokens 0
+quarter  stance_raw  stance_l1  stance_l1_strict  l1_lag_days
+ 2023Q1         2.0        NaN               NaN          NaN
+ 2023Q2         2.0        NaN               NaN          NaN
+ 2023Q3         2.0        NaN               NaN          NaN
+ 2023Q4         2.0        NaN               NaN          NaN
+ 2024Q1         2.0        NaN               NaN          NaN
+ 2024Q2         2.0        NaN               NaN          NaN
+ 2024Q3         2.0        NaN               NaN          NaN
+ 2024Q4         2.0        2.0               2.0         47.0
+ 2025Q1         2.0        2.0               2.0        139.0
+
+============================================================================================
+9.  FILES WRITTEN
+============================================================================================
+C:\Users\chris\clee\ARBS\notebooks\backtests\intraday_fed_hawk_dove\_realtime\pit_labels.parquet          961 rows x 28 cols
+C:\Users\chris\clee\ARBS\notebooks\backtests\intraday_fed_hawk_dove\_realtime\pit_labels_events.parquet   1029 rows x 26 cols

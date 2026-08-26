@@ -1,0 +1,210 @@
+{
+  "panel_rows": 1912,
+  "panel_span": [
+    "2019-01-02",
+    "2026-08-24"
+  ],
+  "clean_n": 1672,
+  "chair_regime_counts_full_panel": {
+    "Powell": 1848,
+    "Warsh": 64
+  },
+  "label_boundary_consistent_with_20260522": true,
+  "first_post_regime_day": "2026-05-22",
+  "raw_events_post_transition": 61,
+  "raw_chair_titled_post_transition": 0,
+  "raw_warsh_named_post_transition": 0,
+  "recomputed_arm_sizes": {
+    "powell_clean_days": 1616,
+    "powell_speech_days": 753,
+    "powell_nonspeech_days": 863,
+    "warsh_clean_days": 56,
+    "warsh_speech_days": 22,
+    "warsh_nonspeech_days": 34,
+    "warsh_prepask_panel_days": 64
+  },
+  "later_regime_speech_days": 22,
+  "later_regime_speech_days_below_60": true,
+  "powell_excess_ratio": 1.0059821681172012,
+  "powell_ci95": [
+    0.8621790596053162,
+    1.1694776866902745
+  ],
+  "warsh_excess_ratio": 1.1807343561474986,
+  "warsh_ci95": [
+    0.8493755450648973,
+    1.614569555579189
+  ],
+  "ratio_of_ratios": 1.173713007614602,
+  "ratio_of_ratios_ci95": [
+    0.8161424864187967,
+    1.6636203765151605
+  ],
+  "rr_ci_spans_one": true,
+  "warsh_ci_spans_one": true,
+  "boot_p_two_sided": 0.3807,
+  "perm_p_two_sided": 0.3757248550289942,
+  "se_log_rr": 0.18147115173311362,
+  "mde_analytic_80pct": 1.6626403198816,
+  "observed_rr": 1.173713007614602,
+  "mde_exceeds_observed": true,
+  "achieved_power_analytic": 0.14290336014588806,
+  "sim_size_rho1": 0.06333333333333334,
+  "sim_power_at_analytic_mde": 0.7233333333333334,
+  "sim_power_at_observed": 0.15833333333333333,
+  "later_arm_clean_days_needed_at_observed_effect": null,
+  "boundary_shift": [
+    {
+      "shift_months": -3,
+      "date": "2026-02-22",
+      "post_n": 112,
+      "post_speech": 53,
+      "post_nonspeech": 59,
+      "post_ratio": 1.2880810805147374,
+      "pre_n": 1560,
+      "pre_ratio": 0.9942294786567225,
+      "rho": 1.295557120530192,
+      "rho_ci95": [
+        0.9491498135417425,
+        1.744140617855055
+      ],
+      "spans_one": true,
+      "mde": 1.5510803886344418,
+      "verdict": "undetermined_sample"
+    },
+    {
+      "shift_months": -2,
+      "date": "2026-03-22",
+      "post_n": 95,
+      "post_speech": 48,
+      "post_nonspeech": 47,
+      "post_ratio": 1.4877739300464232,
+      "pre_n": 1577,
+      "pre_ratio": 0.9895724321988629,
+      "rho": 1.5034512701011082,
+      "rho_ci95": [
+        1.0940906867145799,
+        2.0489307879058334
+      ],
+      "spans_one": false,
+      "mde": 1.550631365666101,
+      "verdict": "undetermined_sample"
+    },
+    {
+      "shift_months": -1,
+      "date": "2026-04-22",
+      "post_n": 75,
+      "post_speech": 32,
+      "post_nonspeech": 43,
+      "post_ratio": 1.1931204190289075,
+      "pre_n": 1597,
+      "pre_ratio": 1.0041215008255815,
+      "rho": 1.188223156309204,
+      "rho_ci95": [
+        0.8653228866512415,
+        1.617733590911431
+      ],
+      "spans_one": true,
+      "mde": 1.565668837247026,
+      "verdict": "undetermined_sample"
+    },
+    {
+      "shift_months": 0,
+      "date": "2026-05-22",
+      "post_n": 56,
+      "post_speech": 22,
+      "post_nonspeech": 34,
+      "post_ratio": 1.1807343561474986,
+      "pre_n": 1616,
+      "pre_ratio": 1.0059821681172012,
+      "rho": 1.173713007614602,
+      "rho_ci95": [
+        0.8217644478003914,
+        1.6615945335037876
+      ],
+      "spans_one": true,
+      "mde": 1.6626403198816,
+      "verdict": "undetermined_sample"
+    },
+    {
+      "shift_months": 1,
+      "date": "2026-06-22",
+      "post_n": 40,
+      "post_speech": 15,
+      "post_nonspeech": 25,
+      "post_ratio": 1.438280737747736,
+      "pre_n": 1632,
+      "pre_ratio": 1.0032867489714739,
+      "rho": 1.4335689564545722,
+      "rho_ci95": [
+        0.9934925234883707,
+        2.0410663871280814
+      ],
+      "spans_one": true,
+      "mde": 1.6753411977532116,
+      "verdict": "undetermined_sample"
+    },
+    {
+      "shift_months": 2,
+      "date": "2026-07-22",
+      "post_n": 21,
+      "post_speech": 6,
+      "post_nonspeech": 15,
+      "post_ratio": 1.7013927712115084,
+      "pre_n": 1651,
+      "pre_ratio": 1.0051222752900946,
+      "rho": 1.6927221822046068,
+      "rho_ci95": [
+        0.9937801044202726,
+        2.7422522828723492
+      ],
+      "spans_one": true,
+      "mde": 2.0998222353584484,
+      "verdict": "undetermined_sample"
+    },
+    {
+      "shift_months": 3,
+      "date": "2026-08-22",
+      "post_n": 1,
+      "post_speech": 0,
+      "post_nonspeech": 1,
+      "post_ratio": null,
+      "pre_n": 1671,
+      "pre_ratio": 1.011276113710212,
+      "rho": null,
+      "rho_ci95": [
+        null,
+        null
+      ],
+      "spans_one": null,
+      "mde": null,
+      "verdict": "degenerate"
+    }
+  ],
+  "boundary_any_shift_detected": false,
+  "boundary_verdict_set": [
+    "undetermined_sample"
+  ],
+  "post_arm_ratio_by_shift": {
+    "-3m": 1.2880810805147374,
+    "-2m": 1.4877739300464232,
+    "-1m": 1.1931204190289075,
+    "+0m": 1.1807343561474986,
+    "+1m": 1.438280737747736,
+    "+2m": 1.7013927712115084
+  },
+  "direction_agrees_across_shifts": true,
+  "placebo_summer_ratios": {
+    "2019": 0.6487,
+    "2020": 1.0533,
+    "2021": 1.1532,
+    "2022": 1.2054,
+    "2023": 1.3687,
+    "2024": 1.1938,
+    "2025": 1.2894
+  },
+  "placebo_n_ge": 4,
+  "placebo_rank_p": 0.625,
+  "selftest_injected_2x_recovered_rr": 2.347426015229204,
+  "selftest_2x_detected": true
+}

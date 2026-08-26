@@ -1,0 +1,650 @@
+{
+ "r1_o240_ALL SIGNED_contam_-60_240_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-60,+240])",
+   "n_hawk": 609,
+   "n_dove": 187,
+   "mean": 0.11998327759194302,
+   "se": 0.0637212177743956,
+   "t": 1.8829407500770425,
+   "n": 598,
+   "n_clusters": 329
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-60,+240])",
+   "n_hawk": 151,
+   "n_dove": 31,
+   "mean": 0.47740112994346495,
+   "se": 0.25534308147633994,
+   "t": 1.8696458395631168,
+   "n": 177,
+   "n_clusters": 124
+  }
+ },
+ "r1_o240_ALL SIGNED_contam_-60_240_high_diff": {
+  "coef": 0.35741785235152196,
+  "se": 0.25593270438828153,
+  "t": 1.3965305966105641
+ },
+ "r1_o240_ALL SIGNED_contam_-60_240_high+medium": {
+  "clean": {
+   "tag": "  CLEAN   (high+med in [-60,+240])",
+   "n_hawk": 540,
+   "n_dove": 163,
+   "mean": 0.03740157480311648,
+   "se": 0.05804872475120523,
+   "t": 0.6443134618963345,
+   "n": 508,
+   "n_clusters": 297
+  },
+  "contam": {
+   "tag": "  CONTAM  (high+med in [-60,+240])",
+   "n_hawk": 220,
+   "n_dove": 55,
+   "mean": 0.5140449438201949,
+   "se": 0.192646174901441,
+   "t": 2.668337142344942,
+   "n": 267,
+   "n_clusters": 176
+  }
+ },
+ "r1_o240_ALL SIGNED_contam_-60_240_high+medium_diff": {
+  "coef": 0.47664336901707843,
+  "se": 0.19492254076602,
+  "t": 2.4452963066453606
+ },
+ "r1_o240_ALL SIGNED_contam_-120_300_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-120,+300])",
+   "n_hawk": 561,
+   "n_dove": 170,
+   "mean": 0.11376404494378446,
+   "se": 0.06801582543389253,
+   "t": 1.672611399156753,
+   "n": 534,
+   "n_clusters": 304
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-120,+300])",
+   "n_hawk": 199,
+   "n_dove": 48,
+   "mean": 0.3962655601659515,
+   "se": 0.20172018142772857,
+   "t": 1.964431904439486,
+   "n": 241,
+   "n_clusters": 157
+  }
+ },
+ "r1_o240_ALL SIGNED_contam_-120_300_high_diff": {
+  "coef": 0.28250151522216704,
+  "se": 0.20964929784778702,
+  "t": 1.347495642114067
+ },
+ "r1_o240_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-60,+240])",
+   "n_hawk": 133,
+   "n_dove": 45,
+   "mean": 0.4291338582677264,
+   "se": 0.19865312473314195,
+   "t": 2.1602170056181986,
+   "n": 127,
+   "n_clusters": 113
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-60,+240])",
+   "n_hawk": 35,
+   "n_dove": 6,
+   "mean": 0.3625000000000981,
+   "se": 0.4143215565185327,
+   "t": 0.8749243052814303,
+   "n": 40,
+   "n_clusters": 38
+  }
+ },
+ "r1_o240_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high_diff": {
+  "coef": -0.06663385826762817,
+  "se": 0.4265490449674802,
+  "t": -0.15621617034146282
+ },
+ "r1_o240_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high+medium": {
+  "clean": {
+   "tag": "  CLEAN   (high+med in [-60,+240])",
+   "n_hawk": 121,
+   "n_dove": 38,
+   "mean": 0.1990740740741009,
+   "se": 0.1249029599740873,
+   "t": 1.5938299149627946,
+   "n": 108,
+   "n_clusters": 95
+  },
+  "contam": {
+   "tag": "  CONTAM  (high+med in [-60,+240])",
+   "n_hawk": 47,
+   "n_dove": 13,
+   "mean": 0.8050847457627504,
+   "se": 0.452898376284487,
+   "t": 1.7776278033221262,
+   "n": 59,
+   "n_clusters": 56
+  }
+ },
+ "r1_o240_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high+medium_diff": {
+  "coef": 0.6060106716886495,
+  "se": 0.4451306837969087,
+  "t": 1.3614219233764224
+ },
+ "r1_o240_NON-OVERLAPPING SIGNED (headline)_contam_-120_300_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-120,+300])",
+   "n_hawk": 127,
+   "n_dove": 42,
+   "mean": 0.4766949152542474,
+   "se": 0.2111954919936883,
+   "t": 2.2571263749725,
+   "n": 118,
+   "n_clusters": 104
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-120,+300])",
+   "n_hawk": 41,
+   "n_dove": 9,
+   "mean": 0.2602040816327343,
+   "se": 0.34608592269972915,
+   "t": 0.751848210418233,
+   "n": 49,
+   "n_clusters": 47
+  }
+ },
+ "r1_o240_NON-OVERLAPPING SIGNED (headline)_contam_-120_300_high_diff": {
+  "coef": -0.21649083362151322,
+  "se": 0.3738851159852925,
+  "t": -0.5790303608395829
+ },
+ "r1_o30_ALL SIGNED_contam_-60_240_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-60,+240])",
+   "n_hawk": 609,
+   "n_dove": 187,
+   "mean": 0.0639204545454577,
+   "se": 0.03254728924811518,
+   "t": 1.9639255994002431,
+   "n": 704,
+   "n_clusters": 355
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-60,+240])",
+   "n_hawk": 151,
+   "n_dove": 31,
+   "mean": 0.2415730337078374,
+   "se": 0.18966927849534107,
+   "t": 1.2736539919603862,
+   "n": 178,
+   "n_clusters": 125
+  }
+ },
+ "r1_o30_ALL SIGNED_contam_-60_240_high_diff": {
+  "coef": 0.17765257916237973,
+  "se": 0.19189802457001018,
+  "t": 0.9257655442803514
+ },
+ "r1_o30_ALL SIGNED_contam_-60_240_high+medium": {
+  "clean": {
+   "tag": "  CLEAN   (high+med in [-60,+240])",
+   "n_hawk": 540,
+   "n_dove": 163,
+   "mean": 0.0657679738562085,
+   "se": 0.036151897666455525,
+   "t": 1.8192122157181536,
+   "n": 612,
+   "n_clusters": 327
+  },
+  "contam": {
+   "tag": "  CONTAM  (high+med in [-60,+240])",
+   "n_hawk": 220,
+   "n_dove": 55,
+   "mean": 0.1768518518518432,
+   "se": 0.12854724372693127,
+   "t": 1.3757731922088026,
+   "n": 270,
+   "n_clusters": 177
+  }
+ },
+ "r1_o30_ALL SIGNED_contam_-60_240_high+medium_diff": {
+  "coef": 0.11108387799563471,
+  "se": 0.13373695568774593,
+  "t": 0.8306146750864998
+ },
+ "r1_o30_ALL SIGNED_contam_-120_300_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-120,+300])",
+   "n_hawk": 561,
+   "n_dove": 170,
+   "mean": 0.06718750000000195,
+   "se": 0.03436905892051682,
+   "t": 1.9548833197726563,
+   "n": 640,
+   "n_clusters": 339
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-120,+300])",
+   "n_hawk": 199,
+   "n_dove": 48,
+   "mean": 0.18595041322312406,
+   "se": 0.14469967425231536,
+   "t": 1.2850783126082168,
+   "n": 242,
+   "n_clusters": 158
+  }
+ },
+ "r1_o30_ALL SIGNED_contam_-120_300_high_diff": {
+  "coef": 0.11876291322312207,
+  "se": 0.1492570842494408,
+  "t": 0.7956936437579312
+ },
+ "r1_o30_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-60,+240])",
+   "n_hawk": 133,
+   "n_dove": 45,
+   "mean": 0.1145833333332982,
+   "se": 0.08590799464772371,
+   "t": 1.333791270569884,
+   "n": 144,
+   "n_clusters": 130
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-60,+240])",
+   "n_hawk": 35,
+   "n_dove": 6,
+   "mean": -0.08536585365849776,
+   "se": 0.22439640345038228,
+   "t": -0.3804243398997861,
+   "n": 41,
+   "n_clusters": 39
+  }
+ },
+ "r1_o30_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high_diff": {
+  "coef": -0.19994918699179598,
+  "se": 0.23864764968208504,
+  "t": -0.8378426825412222
+ },
+ "r1_o30_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high+medium": {
+  "clean": {
+   "tag": "  CLEAN   (high+med in [-60,+240])",
+   "n_hawk": 121,
+   "n_dove": 38,
+   "mean": 0.12199999999995725,
+   "se": 0.09601195207279956,
+   "t": 1.2706751333152009,
+   "n": 125,
+   "n_clusters": 112
+  },
+  "contam": {
+   "tag": "  CONTAM  (high+med in [-60,+240])",
+   "n_hawk": 47,
+   "n_dove": 13,
+   "mean": -0.03749999999996874,
+   "se": 0.16071048482607056,
+   "t": -0.23333885179024402,
+   "n": 60,
+   "n_clusters": 57
+  }
+ },
+ "r1_o30_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high+medium_diff": {
+  "coef": -0.15949999999992595,
+  "se": 0.18668991665809004,
+  "t": -0.8543578724288544
+ },
+ "r1_o30_NON-OVERLAPPING SIGNED (headline)_contam_-120_300_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-120,+300])",
+   "n_hawk": 127,
+   "n_dove": 42,
+   "mean": 0.11296296296292338,
+   "se": 0.09093181186837414,
+   "t": 1.2422821083389368,
+   "n": 135,
+   "n_clusters": 121
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-120,+300])",
+   "n_hawk": 41,
+   "n_dove": 9,
+   "mean": -0.04499999999996249,
+   "se": 0.18670830133453345,
+   "t": -0.24101767129964946,
+   "n": 50,
+   "n_clusters": 48
+  }
+ },
+ "r1_o30_NON-OVERLAPPING SIGNED (headline)_contam_-120_300_high_diff": {
+  "coef": -0.15796296296288587,
+  "se": 0.20676687853866713,
+  "t": -0.7639664731570897
+ },
+ "r3_o240_ALL SIGNED_contam_-60_240_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-60,+240])",
+   "n_hawk": 609,
+   "n_dove": 187,
+   "mean": 0.2028526148970324,
+   "se": 0.13722091344126722,
+   "t": 1.4782922647126717,
+   "n": 631,
+   "n_clusters": 341
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-60,+240])",
+   "n_hawk": 151,
+   "n_dove": 31,
+   "mean": 0.40058479532161984,
+   "se": 0.6009184733017053,
+   "t": 0.6666208697506572,
+   "n": 171,
+   "n_clusters": 121
+  }
+ },
+ "r3_o240_ALL SIGNED_contam_-60_240_high_diff": {
+  "coef": 0.1977321804245874,
+  "se": 0.6107358445425037,
+  "t": 0.3237605622651912
+ },
+ "r3_o240_ALL SIGNED_contam_-60_240_high+medium": {
+  "clean": {
+   "tag": "  CLEAN   (high+med in [-60,+240])",
+   "n_hawk": 540,
+   "n_dove": 163,
+   "mean": 0.07129629629631883,
+   "se": 0.13566371020430007,
+   "t": 0.5255369780831703,
+   "n": 540,
+   "n_clusters": 310
+  },
+  "contam": {
+   "tag": "  CONTAM  (high+med in [-60,+240])",
+   "n_hawk": 220,
+   "n_dove": 55,
+   "mean": 0.6030534351145507,
+   "se": 0.4263314702755136,
+   "t": 1.414517757098325,
+   "n": 262,
+   "n_clusters": 173
+  }
+ },
+ "r3_o240_ALL SIGNED_contam_-60_240_high+medium_diff": {
+  "coef": 0.5317571388182322,
+  "se": 0.44161686260728605,
+  "t": 1.2041142081368044
+ },
+ "r3_o240_ALL SIGNED_contam_-120_300_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-120,+300])",
+   "n_hawk": 561,
+   "n_dove": 170,
+   "mean": 0.1819787985866083,
+   "se": 0.1409309840458466,
+   "t": 1.2912618173971475,
+   "n": 566,
+   "n_clusters": 320
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-120,+300])",
+   "n_hawk": 199,
+   "n_dove": 48,
+   "mean": 0.3961864406779837,
+   "se": 0.45237946190705114,
+   "t": 0.8757834385491771,
+   "n": 236,
+   "n_clusters": 154
+  }
+ },
+ "r3_o240_ALL SIGNED_contam_-120_300_high_diff": {
+  "coef": 0.21420764209137524,
+  "se": 0.46675138089690055,
+  "t": 0.4589330655642795
+ },
+ "r3_o240_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-60,+240])",
+   "n_hawk": 133,
+   "n_dove": 45,
+   "mean": 0.40140845070423176,
+   "se": 0.32898416961523447,
+   "t": 1.2201451856291492,
+   "n": 142,
+   "n_clusters": 127
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-60,+240])",
+   "n_hawk": 35,
+   "n_dove": 6,
+   "mean": 0.2894736842105966,
+   "se": 1.128465620120726,
+   "t": 0.2565197193864249,
+   "n": 38,
+   "n_clusters": 37
+  }
+ },
+ "r3_o240_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high_diff": {
+  "coef": -0.11193476649363504,
+  "se": 1.1290189490205036,
+  "t": -0.09914339045482419
+ },
+ "r3_o240_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high+medium": {
+  "clean": {
+   "tag": "  CLEAN   (high+med in [-60,+240])",
+   "n_hawk": 121,
+   "n_dove": 38,
+   "mean": 0.17886178861786306,
+   "se": 0.2506314332874009,
+   "t": 0.7136446784500527,
+   "n": 123,
+   "n_clusters": 109
+  },
+  "contam": {
+   "tag": "  CONTAM  (high+med in [-60,+240])",
+   "n_hawk": 47,
+   "n_dove": 13,
+   "mean": 0.8070175438597618,
+   "se": 0.9724563200606066,
+   "t": 0.8298753653114886,
+   "n": 57,
+   "n_clusters": 55
+  }
+ },
+ "r3_o240_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high+medium_diff": {
+  "coef": 0.6281557552418987,
+  "se": 0.966879270805768,
+  "t": 0.649673412398647
+ },
+ "r3_o240_NON-OVERLAPPING SIGNED (headline)_contam_-120_300_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-120,+300])",
+   "n_hawk": 127,
+   "n_dove": 42,
+   "mean": 0.4774436090225615,
+   "se": 0.3408315557310516,
+   "t": 1.4008198507279934,
+   "n": 133,
+   "n_clusters": 118
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-120,+300])",
+   "n_hawk": 41,
+   "n_dove": 9,
+   "mean": 0.09574468085112552,
+   "se": 0.9381319599566876,
+   "t": 0.10205886265248433,
+   "n": 47,
+   "n_clusters": 46
+  }
+ },
+ "r3_o240_NON-OVERLAPPING SIGNED (headline)_contam_-120_300_high_diff": {
+  "coef": -0.3816989281714363,
+  "se": 0.9550200902054197,
+  "t": -0.39967633360397153
+ },
+ "r3_o30_ALL SIGNED_contam_-60_240_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-60,+240])",
+   "n_hawk": 609,
+   "n_dove": 187,
+   "mean": 0.11134751773053242,
+   "se": 0.07087663874534583,
+   "t": 1.5710044903595846,
+   "n": 705,
+   "n_clusters": 357
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-60,+240])",
+   "n_hawk": 151,
+   "n_dove": 31,
+   "mean": 0.17151162790696056,
+   "se": 0.396615311301863,
+   "t": 0.4324382418419128,
+   "n": 172,
+   "n_clusters": 122
+  }
+ },
+ "r3_o30_ALL SIGNED_contam_-60_240_high_diff": {
+  "coef": 0.06016411017642818,
+  "se": 0.3970262858430393,
+  "t": 0.15153684358373568
+ },
+ "r3_o30_ALL SIGNED_contam_-60_240_high+medium": {
+  "clean": {
+   "tag": "  CLEAN   (high+med in [-60,+240])",
+   "n_hawk": 540,
+   "n_dove": 163,
+   "mean": 0.11437908496735119,
+   "se": 0.07307949669579014,
+   "t": 1.5651323577593848,
+   "n": 612,
+   "n_clusters": 328
+  },
+  "contam": {
+   "tag": "  CONTAM  (high+med in [-60,+240])",
+   "n_hawk": 220,
+   "n_dove": 55,
+   "mean": 0.14339622641510807,
+   "se": 0.27391165117053495,
+   "t": 0.5235126939738349,
+   "n": 265,
+   "n_clusters": 174
+  }
+ },
+ "r3_o30_ALL SIGNED_contam_-60_240_high+medium_diff": {
+  "coef": 0.02901714144775687,
+  "se": 0.2793319449721271,
+  "t": 0.10388049763034557
+ },
+ "r3_o30_ALL SIGNED_contam_-120_300_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-120,+300])",
+   "n_hawk": 561,
+   "n_dove": 170,
+   "mean": 0.11953125000003136,
+   "se": 0.07381979597035795,
+   "t": 1.6192302949201953,
+   "n": 640,
+   "n_clusters": 340
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-120,+300])",
+   "n_hawk": 199,
+   "n_dove": 48,
+   "mean": 0.13291139240507385,
+   "se": 0.2936292077965372,
+   "t": 0.4526504478300108,
+   "n": 237,
+   "n_clusters": 155
+  }
+ },
+ "r3_o30_ALL SIGNED_contam_-120_300_high_diff": {
+  "coef": 0.013380142405042497,
+  "se": 0.2962514078708818,
+  "t": 0.04516482301705752
+ },
+ "r3_o30_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-60,+240])",
+   "n_hawk": 133,
+   "n_dove": 45,
+   "mean": 0.07770270270270846,
+   "se": 0.16357699642160273,
+   "t": 0.4750221877313226,
+   "n": 148,
+   "n_clusters": 134
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-60,+240])",
+   "n_hawk": 35,
+   "n_dove": 6,
+   "mean": -0.07692307692297198,
+   "se": 0.5184361833830994,
+   "t": -0.14837520873061735,
+   "n": 39,
+   "n_clusters": 38
+  }
+ },
+ "r3_o30_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high_diff": {
+  "coef": -0.15462577962568044,
+  "se": 0.5406418211281132,
+  "t": -0.2860041039796652
+ },
+ "r3_o30_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high+medium": {
+  "clean": {
+   "tag": "  CLEAN   (high+med in [-60,+240])",
+   "n_hawk": 121,
+   "n_dove": 38,
+   "mean": 0.20542635658913672,
+   "se": 0.16811273170257932,
+   "t": 1.2219559726896336,
+   "n": 129,
+   "n_clusters": 116
+  },
+  "contam": {
+   "tag": "  CONTAM  (high+med in [-60,+240])",
+   "n_hawk": 47,
+   "n_dove": 13,
+   "mean": -0.3103448275860981,
+   "se": 0.38681408886708757,
+   "t": -0.8023100412268982,
+   "n": 58,
+   "n_clusters": 56
+  }
+ },
+ "r3_o30_NON-OVERLAPPING SIGNED (headline)_contam_-60_240_high+medium_diff": {
+  "coef": -0.5157711841752347,
+  "se": 0.42177522058717987,
+  "t": -1.22285795608665
+ },
+ "r3_o30_NON-OVERLAPPING SIGNED (headline)_contam_-120_300_high": {
+  "clean": {
+   "tag": "  CLEAN   (high-impact in [-120,+300])",
+   "n_hawk": 127,
+   "n_dove": 42,
+   "mean": 0.06474820143885096,
+   "se": 0.17001729852507547,
+   "t": 0.3808330211134451,
+   "n": 139,
+   "n_clusters": 125
+  },
+  "contam": {
+   "tag": "  CONTAM  (high-impact in [-120,+300])",
+   "n_hawk": 41,
+   "n_dove": 9,
+   "mean": -0.01041666666656956,
+   "se": 0.4354483258835542,
+   "t": -0.023921705624733856,
+   "n": 48,
+   "n_clusters": 47
+  }
+ },
+ "r3_o30_NON-OVERLAPPING SIGNED (headline)_contam_-120_300_high_diff": {
+  "coef": -0.07516486810542053,
+  "se": 0.4661457042029541,
+  "t": -0.16124758295036154
+ }
+}

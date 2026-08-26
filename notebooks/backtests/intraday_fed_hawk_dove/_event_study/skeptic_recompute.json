@@ -1,0 +1,150 @@
+{
+ "identity_maxabs_diff": 0.0,
+ "headline_n": 184,
+ "headline_n_days": 165,
+ "headline_base": {
+  "tag": "BASE (untrimmed)",
+  "n": 184,
+  "n_days": 165,
+  "mean_bp": 0.36141304347828,
+  "se_iid": 0.33109321074581616,
+  "t_iid": 1.091574915306073,
+  "se_cluster": 0.3635518905241324,
+  "t_cluster": 0.9941168039512357,
+  "se_ratio_cluster_over_iid": 1.0980348697129738,
+  "daymean_bp": 0.30252525252527485,
+  "t_daymean_collapse": 0.9002956462588472,
+  "sm_t_iid": 1.0915749153060725,
+  "sm_t_cluster": 0.994116803951236
+ },
+ "trim_days_dropped": [
+  "2025-04-09",
+  "2024-08-05"
+ ],
+ "headline_trim1pct_days": {
+  "tag": "TRIM top 1% of DAYS (|day mean|)",
+  "n": 181,
+  "n_days": 163,
+  "mean_bp": 0.008287292817695888,
+  "se_iid": 0.25259473416052447,
+  "t_iid": 0.032808652346763875,
+  "se_cluster": 0.26951659008051165,
+  "t_cluster": 0.03074872984709497,
+  "se_ratio_cluster_over_iid": 1.0669921167447352,
+  "daymean_bp": 0.01635991820042934,
+  "t_daymean_collapse": 0.06122795976027934,
+  "sm_t_iid": 0.03280865234676406,
+  "sm_t_cluster": 0.030748729847095136
+ },
+ "headline_trim1pct_events": {
+  "tag": "TRIM top 1% of EVENTS (|move|)",
+  "n": 182,
+  "n_days": 164,
+  "mean_bp": 0.06043956043957605,
+  "se_iid": 0.2565595735705479,
+  "t_iid": 0.23557710047002622,
+  "se_cluster": 0.2730318154756277,
+  "t_cluster": 0.2213645334126682,
+  "se_ratio_cluster_over_iid": 1.0642043548632196,
+  "daymean_bp": 0.07418699186993823,
+  "t_daymean_collapse": 0.2729613476771966,
+  "sm_t_iid": 0.2355771004700261,
+  "sm_t_cluster": 0.2213645334126681
+ },
+ "headline_trim1pct_pos_days": {
+  "tag": "TRIM top 1% most POSITIVE days",
+  "n": 181,
+  "n_days": 163,
+  "mean_bp": 0.008287292817695888,
+  "se_iid": 0.25259473416052447,
+  "t_iid": 0.032808652346763875,
+  "se_cluster": 0.26951659008051165,
+  "t_cluster": 0.03074872984709497,
+  "se_ratio_cluster_over_iid": 1.0669921167447352,
+  "daymean_bp": 0.01635991820042934,
+  "t_daymean_collapse": 0.06122795976027934,
+  "sm_t_iid": 0.03280865234676406,
+  "sm_t_cluster": 0.030748729847095136
+ },
+ "svb_n_in_headline": 0,
+ "svb_share_sqvar_pct": 0.0,
+ "top1event_share_sqvar_pct": 23.423726532534104,
+ "top5event_share_sqvar_pct": 53.63030751631724,
+ "excess_kurtosis_240": 14.585976773068762,
+ "headline_ex_tariff": {
+  "tag": "EX 2025-04-09 tariff day",
+  "n": 183,
+  "n_days": 164,
+  "mean_bp": 0.2021857923497451,
+  "se_iid": 0.2918825688978323,
+  "t_iid": 0.6926956724864108,
+  "se_cluster": 0.32900994491681834,
+  "t_cluster": 0.6145279055344742,
+  "se_ratio_cluster_over_iid": 1.127199702809186,
+  "daymean_bp": 0.12449186991872062,
+  "t_daymean_collapse": 0.434172960987283,
+  "sm_t_iid": 0.6926956724864107,
+  "sm_t_cluster": 0.614527905534474
+ },
+ "headline_robust_240": {
+  "median_bp": 0.0,
+  "trim10_mean_bp": 0.19256756756756604,
+  "zero_share_pct": 10.869565217391305,
+  "n_nonzero": 164,
+  "pct_positive": 50.609756097560975,
+  "sign_test_p": 0.9377905864446681,
+  "sign_ci": [
+   0.4270338570500052,
+   0.5849369418735452
+  ],
+  "wilcoxon_p": 0.5344361757812002
+ },
+ "headline_day_sign_test": {
+  "n_days": 150,
+  "pct_pos": 50.66666666666667,
+  "p": 0.9349614855143201
+ },
+ "hit5_ALL_events": {
+  "hit_pct": 54.53296703296703,
+  "n_moved": 728,
+  "n_priced": 900,
+  "t_cluster": 2.3016080091363467,
+  "t_iid": 2.454550066628804,
+  "binom_p_iid": 0.015935543382553225,
+  "n_days": 379
+ },
+ "hit5_NON_OVERLAP": {
+  "hit_pct": 51.24999999999999,
+  "n_moved": 160,
+  "n_priced": 196,
+  "t_cluster": 0.30201624605211547,
+  "t_iid": 0.3153365634011318,
+  "binom_p_iid": 0.8126155651898863,
+  "n_days": 147
+ },
+ "placebo_weekday_max_gap_pp": 0.7961783439490446,
+ "placebo_clock_max_gap_pp": 0.15009080909625766,
+ "placebo_year_max_gap_pp": 0.754951866915643,
+ "placebo_n_events_240": 2455,
+ "placebo_n_days_240": 371,
+ "placebo_240": {
+  "tag": "PLACEBO signed +240",
+  "n": 2455,
+  "n_days": 371,
+  "mean_bp": 0.05010183299389417,
+  "se_iid": 0.07234264693983397,
+  "t_iid": 0.6925628949623992,
+  "se_cluster": 0.10277993602247017,
+  "t_cluster": 0.4874670576068534,
+  "se_ratio_cluster_over_iid": 1.4207378409577731,
+  "daymean_bp": 0.0171879792523394,
+  "t_daymean_collapse": 0.08655405946537337,
+  "sm_t_iid": 0.6925628949623986,
+  "sm_t_cluster": 0.4874670576068535
+ },
+ "excess_real_minus_placebo_240": {
+  "coef": 0.31131121048439314,
+  "t": 0.8254852513351744,
+  "p": 0.4090961525941671
+ }
+}

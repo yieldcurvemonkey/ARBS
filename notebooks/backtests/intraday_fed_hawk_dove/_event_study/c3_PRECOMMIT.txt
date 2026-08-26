@@ -1,0 +1,42 @@
+CHART 3 PRE-REGISTRATION -- written BEFORE any slope was computed.
+=================================================================
+
+HEADLINE CONTRACT RANK: 3.
+
+Chosen a priori, on grounds already on the record in this panel's own build notes
+(VERIFY / panel context), NOT on the basis of any regression output:
+  - the panel's worked bar-rule example is stated at rank 3
+  - the leak measurement of the naive bar rule is quoted at rank 3
+  - the largest signed move in the book is quoted at rank 3
+Rank 3 is ~9-15 months out on the SR3 strip, the segment where a policy-stance
+signal should bite hardest (rank 1 is largely pinned by the near-certain meeting
+path; the back ranks carry term premium noise).
+
+All 5 ranks will be reported as a robustness table in the returned numbers.
+Whatever rank 3 says is the headline, including if it is a null.
+
+HEADLINE SAMPLE: all SIGNED events (stance_score_exante not null) that ALSO have a
+non-null raw move at +240 on rank 3. x and y are computed on exactly the same rows.
+The non-overlapping cut is a robustness number, not a second chart.
+
+MIN EVENTS PER SPEAKER: >= 8 VALID-Y events (not calendar events). Excluded speakers
+reported by name.
+
+REGRESSION: unweighted OLS of speaker mean raw move on speaker mean ex-ante stance,
+n = number of qualifying speakers. WLS (1/SE^2) as a check.
+
+Y IS THE RAW DIRECTIONAL MOVE (d_rate_bp_from_baseline), NOT signed_d_bp.
+Plotting signed_d_bp against stance would slope upward by construction.
+
+LEVER: identified by Cook's distance, not by guess. Full leave-one-out sweep run
+over every qualifying speaker regardless.
+
+KNOWN BEFORE FITTING (from c3_diag.py, rank 1):
+  - only 3 of 22 speakers have a negative mean ex-ante stance (Barr -24.9,
+    Miran -11.0, Waller -2.1). The dove half-plane is nearly empty and the
+    cross-speaker slope is structurally a Barr-vs-cloud contrast.
+  - all three are Governors = permanent voters, so any non-voter slope is
+    estimated on positive-only x.
+  - at rank 1 the speaker means span -0.43..+0.62 bp against SEs of 0.17-0.54 bp.
+These are stated up front so they cannot be presented later as discoveries that
+happen to explain an inconvenient result.

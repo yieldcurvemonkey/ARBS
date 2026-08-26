@@ -1,0 +1,12 @@
+{
+  "rows": 1912,
+  "date_start": "2019-01-02",
+  "date_end": "2026-08-24",
+  "calendar_first_date": "2015-01-05",
+  "calendar_total_events": 2412,
+  "chair_transition_date": "2026-05-22",
+  "chair_transition_confident": true,
+  "chair_transition_evidence": "The calendar dates the handover to the interval (2026-03-30, 2026-05-31] WITHOUT any external input: Powell's title is 'Fed Chair Powell' through 2026-03-30 and 'FOMC Member Powell' on 2026-05-31. Two repo sources independently name 2026-05-22 (fomc_extras.CHAIRS; FED_SPEAKER_QUARTERLY_LABELS.md records the 22 May 2026 swearing-in) and that date falls inside the interval. PROVENANCE SPLIT: the interval is data-derived, the exact day is repo-derived and merely corroborated by the data. Two traps avoided -- Warsh has ZERO events in this calendar so 'first Warsh appearance' yields nothing, and Powell does NOT stop speaking, he is re-titled, so 'when Powell stops' is the wrong test. CAVEAT: exactly ONE Powell event falls after 2026-03-30, so the right-hand edge rests on a single row, and no Chair-titled Fed event of ANY name appears after 2026-03-30.",
+  "off_spine_event_days": 444,
+  "off_spine_events": 638
+}

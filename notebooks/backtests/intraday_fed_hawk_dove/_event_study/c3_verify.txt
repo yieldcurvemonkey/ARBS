@@ -1,0 +1,49 @@
+=== V1: re-derive y from PRICE, not from the d_rate column ===
+  PASS  y recomputed from price matches the stored column   max abs diff 5.684e-14 over 827 rows
+
+=== V2: confirm y is the RAW move, NOT signed_d_bp ===
+  PASS  signed_d_bp is NaN exactly where the score is 0.0   19 zero-score rows
+  PASS  signed == raw * stance_sign on all non-NaN rows   checked 808 rows
+  PASS  raw and signed columns genuinely DIFFER (so y is unsigned)   163 rows differ, of 187 dove rows (rest are doves whose raw move was 0)
+
+=== V2b: robustness -- drop the 19 exactly-zero-score events ===
+  excluding score==0: n_ev 808, speakers 21, slope +0.00139, t +0.128, R2 0.0009
+  headline (incl.):   n_ev 827, speakers 21, slope +0.00051, t +0.048, R2 0.0001
+  zero-score events by speaker: {'Daly': np.int64(7), 'Williams': np.int64(4), 'Barr': np.int64(2), 'Waller': np.int64(2), 'Cook': np.int64(2), 'Kugler': np.int64(1), 'Jefferson': np.int64(1)}
+
+=== V3: per-speaker means recomputed with a plain python loop ===
+  PASS  all speaker means/n reproduce by loop   max abs diff 0.000e+00
+
+=== V4: headline slope via scipy.linregress (independent of c3_stats) ===
+  PASS  slope matches scipy   +0.000509 vs +0.000509
+  PASS  t matches scipy   t +0.0476
+  PASS  R2 matches scipy   R2 0.000119
+
+=== V5: correlation is the same story ===
+  Pearson  r = +0.0109  p = 0.9625
+  Spearman r = -0.0351  p = 0.8801
+
+=== V6: POWER -- what slope COULD this design have found? ===
+  se(slope)            = 0.01068 bp per stance point
+  MDE slope @80% power = 0.03156 bp per stance point
+  x-range              = 49.8 stance points (Barr -24.9 -> Mester +24.9)
+  => detectable end-to-end hawk-minus-dove spread = 1.572 bp at +240min
+  observed end-to-end fitted spread               = +0.025 bp
+  95% CI on the end-to-end spread = -1.089 .. +1.139 bp
+
+=== V7: pooled signed effect (context: is there ANY average reaction?) ===
+  rank 1: mean signed_d_bp = +0.1953 bp  t = +2.800  n = 781
+  rank 2: mean signed_d_bp = +0.2184 bp  t = +2.030  n = 822
+  rank 3: mean signed_d_bp = +0.2321 bp  t = +1.670  n = 808
+  rank 4: mean signed_d_bp = +0.1757 bp  t = +1.155  n = 828
+  rank 5: mean signed_d_bp = +0.1344 bp  t = +0.843  n = 822
+  rank3 hawk: mean RAW move = +0.2230 bp  t = +1.356  n = 621
+  rank3 dove: mean RAW move = -0.2620 bp  t = -1.048  n = 187
+
+=== V8: Barr's leverage share ===
+  Barr leverage 0.4861 of total 2.00 (= 24.3% of all leverage, vs 4.8% if even)
+  Barr Cook's D 0.0041 -- he ANCHORS the x-axis but sits ON the line, so he does not tilt it
+  x-variance share from Barr: 43.8%
+
+============================================================
+VERIFY FAILURES: NONE -- all checks passed

@@ -1,0 +1,29 @@
+REAL DATA   blackout ratio 0.481   FOMC |move| ratio 2.21x
+            (a ratio near 1.0 means the flag carries no information)
+
+--- M1: blackout flag randomly permuted, count preserved ---
+  permuted ratio: mean 1.002  2.5-97.5pct [0.887, 1.136]
+  real 0.481 sits BELOW the permuted 2.5th pct? True  -> the check has teeth
+
+--- M2: FOMC dates shifted +180 days ---
+  blackout ratio 0.829 (real 0.481)   FOMC |move| ratio 0.60x (real 2.21x), n_fomc=57
+  both collapse toward no-signal? True  -> the checks track the real calendar
+
+--- M3: events shifted +3 business days (a broken date join) ---
+  blackout ratio with a +3bd-misaligned join: 0.893 (real 0.481)
+  misalignment degrades the separation? True  -> the check is sensitive to date alignment
+
+--- M4: extract_speaker known answers ---
+  OK   'FOMC Member Cook Speaks' -> 'Cook' (want 'Cook')
+  OK   'Fed Chair Powell Speaks' -> 'Powell' (want 'Powell')
+  OK   'Fed Chairman Powell Testifies' -> 'Powell' (want 'Powell')
+  OK   'Fed Chair Yellen Testimony' -> 'Yellen' (want 'Yellen')
+  OK   'FOMC Member Williams Speaks' -> 'Williams' (want 'Williams')
+
+--- M5: the Chair regex must catch 'Chairman', not just 'Chair' ---
+  naive r'\bChair\b' matches 128;  fixed r'\bChair(?:man)?\b' matches 161
+  the fixed regex catches 33 more (the 'Fed Chairman' form) -> the fix was necessary
+
+============================================================
+MUTATION SUITE: ALL CHECKS HAVE TEETH
+  M1 permuted-blackout True   M2 shifted-FOMC True   M3 misaligned-join True   M4 speaker-extract True

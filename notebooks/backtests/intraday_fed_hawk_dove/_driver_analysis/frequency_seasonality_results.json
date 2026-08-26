@@ -1,0 +1,1292 @@
+{
+  "meta": {
+    "calendar_file": "C:\\Users\\chris\\clee\\ARBS\\notebooks\\backtests\\intraday_fed_hawk_dove\\_driver_analysis\\fed_calendar_raw.parquet",
+    "panel_file": "C:\\Users\\chris\\clee\\ARBS\\notebooks\\backtests\\intraday_fed_hawk_dove\\_driver_analysis\\panel_daily.parquet",
+    "jpm_file": "C:\\Users\\chris\\clee\\project-oasis\\private\\jpm_research\\fed_speak_nlp\\fed_hawk_dove_scores.csv",
+    "calendar_span_raw": [
+      "2015-01-05",
+      "2026-08-25"
+    ],
+    "cutoff_applied": "2026-08-24",
+    "events_raw": 2412,
+    "events_after_cutoff": 2410,
+    "events_dropped_by_cutoff": 2,
+    "event_base": "raw ForexFactory FED_SPEAKERS calendar, weekends included",
+    "weekend_events": 66,
+    "complete_years": [
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ],
+    "partial_year": 2026,
+    "panel_span": [
+      "2019-01-02",
+      "2026-08-24"
+    ]
+  },
+  "events_per_year": [
+    {
+      "year": 2015,
+      "events": 148,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 105,
+      "distinct_speakers": 10,
+      "events_per_speaker": 14.8,
+      "core_roster_events": 8,
+      "trend_fitted": 96.6,
+      "residual_vs_trend": 51.4
+    },
+    {
+      "year": 2016,
+      "events": 119,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 85,
+      "distinct_speakers": 10,
+      "events_per_speaker": 11.9,
+      "core_roster_events": 10,
+      "trend_fitted": 117.5,
+      "residual_vs_trend": 1.5
+    },
+    {
+      "year": 2017,
+      "events": 163,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 105,
+      "distinct_speakers": 11,
+      "events_per_speaker": 14.82,
+      "core_roster_events": 11,
+      "trend_fitted": 138.5,
+      "residual_vs_trend": 24.5
+    },
+    {
+      "year": 2018,
+      "events": 140,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 96,
+      "distinct_speakers": 10,
+      "events_per_speaker": 14.0,
+      "core_roster_events": 18,
+      "trend_fitted": 159.5,
+      "residual_vs_trend": -19.5
+    },
+    {
+      "year": 2019,
+      "events": 181,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 104,
+      "distinct_speakers": 10,
+      "events_per_speaker": 18.1,
+      "core_roster_events": 27,
+      "trend_fitted": 180.4,
+      "residual_vs_trend": 0.6
+    },
+    {
+      "year": 2020,
+      "events": 151,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 88,
+      "distinct_speakers": 10,
+      "events_per_speaker": 15.1,
+      "core_roster_events": 24,
+      "trend_fitted": 201.4,
+      "residual_vs_trend": -50.4
+    },
+    {
+      "year": 2021,
+      "events": 220,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 114,
+      "distinct_speakers": 11,
+      "events_per_speaker": 20.0,
+      "core_roster_events": 29,
+      "trend_fitted": 222.3,
+      "residual_vs_trend": -2.3
+    },
+    {
+      "year": 2022,
+      "events": 163,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 103,
+      "distinct_speakers": 12,
+      "events_per_speaker": 13.58,
+      "core_roster_events": 20,
+      "trend_fitted": 243.3,
+      "residual_vs_trend": -80.3
+    },
+    {
+      "year": 2023,
+      "events": 204,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 115,
+      "distinct_speakers": 14,
+      "events_per_speaker": 14.57,
+      "core_roster_events": 18,
+      "trend_fitted": 264.2,
+      "residual_vs_trend": -60.2
+    },
+    {
+      "year": 2024,
+      "events": 317,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 142,
+      "distinct_speakers": 20,
+      "events_per_speaker": 15.85,
+      "core_roster_events": 18,
+      "trend_fitted": 285.2,
+      "residual_vs_trend": 31.8
+    },
+    {
+      "year": 2025,
+      "events": 409,
+      "is_partial": false,
+      "coverage_note": "full year",
+      "annualised_seasonal": null,
+      "annualised_prorata": null,
+      "speaking_days": 160,
+      "distinct_speakers": 21,
+      "events_per_speaker": 19.48,
+      "core_roster_events": 17,
+      "trend_fitted": 306.1,
+      "residual_vs_trend": 102.9
+    },
+    {
+      "year": 2026,
+      "events": 195,
+      "is_partial": true,
+      "coverage_note": "through 2026-08-24",
+      "annualised_seasonal": 329.5,
+      "annualised_prorata": 301.6,
+      "speaking_days": 88,
+      "distinct_speakers": 19,
+      "events_per_speaker": 10.26,
+      "core_roster_events": 3,
+      "trend_fitted": 327.1,
+      "residual_vs_trend": null
+    }
+  ],
+  "partial_year_handling": {
+    "partial_year": 2026,
+    "ytd_events": 195,
+    "cutoff": "2026-08-24",
+    "calendar_days_elapsed": 236,
+    "fraction_of_year_elapsed": 0.6466,
+    "annualised_prorata": 301.6,
+    "mean_share_of_year_by_24_aug_complete_years": 0.5918,
+    "annualised_seasonal": 329.5,
+    "per_year_share_by_24_aug": {
+      "2015": 0.5405,
+      "2016": 0.605,
+      "2017": 0.638,
+      "2018": 0.6071,
+      "2019": 0.6133,
+      "2020": 0.5695,
+      "2021": 0.6227,
+      "2022": 0.5521,
+      "2023": 0.5294,
+      "2024": 0.6183,
+      "2025": 0.6137
+    },
+    "why_they_differ": "Only 59.2% of a year's events normally land on or before 24 Aug while 64.7% of the year has elapsed - Sep-Nov is the busiest stretch - so pro-rata UNDERSTATES the annualised figure by 28 events."
+  },
+  "seasonality": {
+    "basis": "complete years 2015-2025 (n=11), partial year excluded",
+    "overall_mean_events_per_month": 16.78,
+    "by_month": [
+      {
+        "month": 1,
+        "name": "Jan",
+        "mean_events": 10.73,
+        "q25": 8.5,
+        "q75": 12.0,
+        "seasonality_index": 0.639
+      },
+      {
+        "month": 2,
+        "name": "Feb",
+        "mean_events": 19.55,
+        "q25": 13.5,
+        "q75": 22.5,
+        "seasonality_index": 1.165
+      },
+      {
+        "month": 3,
+        "name": "Mar",
+        "mean_events": 16.82,
+        "q25": 13.5,
+        "q75": 21.0,
+        "seasonality_index": 1.002
+      },
+      {
+        "month": 4,
+        "name": "Apr",
+        "mean_events": 15.45,
+        "q25": 10.5,
+        "q75": 14.5,
+        "seasonality_index": 0.921
+      },
+      {
+        "month": 5,
+        "name": "May",
+        "mean_events": 24.82,
+        "q25": 16.5,
+        "q75": 26.5,
+        "seasonality_index": 1.479
+      },
+      {
+        "month": 6,
+        "name": "Jun",
+        "mean_events": 14.0,
+        "q25": 9.5,
+        "q75": 14.5,
+        "seasonality_index": 0.834
+      },
+      {
+        "month": 7,
+        "name": "Jul",
+        "mean_events": 10.55,
+        "q25": 6.5,
+        "q75": 12.0,
+        "seasonality_index": 0.628
+      },
+      {
+        "month": 8,
+        "name": "Aug",
+        "mean_events": 10.55,
+        "q25": 5.5,
+        "q75": 12.0,
+        "seasonality_index": 0.628
+      },
+      {
+        "month": 9,
+        "name": "Sep",
+        "mean_events": 18.0,
+        "q25": 13.0,
+        "q75": 23.0,
+        "seasonality_index": 1.073
+      },
+      {
+        "month": 10,
+        "name": "Oct",
+        "mean_events": 28.27,
+        "q25": 20.0,
+        "q75": 31.5,
+        "seasonality_index": 1.685
+      },
+      {
+        "month": 11,
+        "name": "Nov",
+        "mean_events": 24.55,
+        "q25": 17.5,
+        "q75": 29.5,
+        "seasonality_index": 1.463
+      },
+      {
+        "month": 12,
+        "name": "Dec",
+        "mean_events": 8.09,
+        "q25": 5.5,
+        "q75": 10.5,
+        "seasonality_index": 0.482
+      }
+    ],
+    "strongest_month": {
+      "month": 10,
+      "name": "Oct",
+      "index": 1.685,
+      "mean_events": 28.27
+    },
+    "weakest_month": {
+      "month": 12,
+      "name": "Dec",
+      "index": 0.482,
+      "mean_events": 8.09
+    },
+    "ratio_strongest_to_weakest": 3.494
+  },
+  "heatmap_year_by_month": {
+    "2015": {
+      "Jan": 7,
+      "Feb": 9,
+      "Mar": 15,
+      "Apr": 11,
+      "May": 15,
+      "Jun": 9,
+      "Jul": 7,
+      "Aug": 10,
+      "Sep": 13,
+      "Oct": 18,
+      "Nov": 24,
+      "Dec": 10
+    },
+    "2016": {
+      "Jan": 5,
+      "Feb": 15,
+      "Mar": 9,
+      "Apr": 9,
+      "May": 16,
+      "Jun": 9,
+      "Jul": 7,
+      "Aug": 3,
+      "Sep": 11,
+      "Oct": 14,
+      "Nov": 16,
+      "Dec": 5
+    },
+    "2017": {
+      "Jan": 12,
+      "Feb": 15,
+      "Mar": 22,
+      "Apr": 12,
+      "May": 17,
+      "Jun": 10,
+      "Jul": 9,
+      "Aug": 9,
+      "Sep": 13,
+      "Oct": 18,
+      "Nov": 22,
+      "Dec": 4
+    },
+    "2018": {
+      "Jan": 10,
+      "Feb": 12,
+      "Mar": 13,
+      "Apr": 14,
+      "May": 21,
+      "Jun": 6,
+      "Jul": 6,
+      "Aug": 3,
+      "Sep": 6,
+      "Oct": 24,
+      "Nov": 13,
+      "Dec": 12
+    },
+    "2019": {
+      "Jan": 10,
+      "Feb": 19,
+      "Mar": 16,
+      "Apr": 11,
+      "May": 24,
+      "Jun": 11,
+      "Jul": 15,
+      "Aug": 6,
+      "Sep": 15,
+      "Oct": 29,
+      "Nov": 19,
+      "Dec": 6
+    },
+    "2020": {
+      "Jan": 15,
+      "Feb": 26,
+      "Mar": 6,
+      "Apr": 4,
+      "May": 15,
+      "Jun": 12,
+      "Jul": 5,
+      "Aug": 5,
+      "Sep": 22,
+      "Oct": 23,
+      "Nov": 10,
+      "Dec": 8
+    },
+    "2021": {
+      "Jan": 10,
+      "Feb": 18,
+      "Mar": 31,
+      "Apr": 13,
+      "May": 29,
+      "Jun": 20,
+      "Jul": 9,
+      "Aug": 8,
+      "Sep": 24,
+      "Oct": 22,
+      "Nov": 29,
+      "Dec": 7
+    },
+    "2022": {
+      "Jan": 6,
+      "Feb": 11,
+      "Mar": 17,
+      "Apr": 10,
+      "May": 17,
+      "Jun": 15,
+      "Jul": 8,
+      "Aug": 10,
+      "Sep": 19,
+      "Oct": 23,
+      "Nov": 25,
+      "Dec": 2
+    },
+    "2023": {
+      "Jan": 10,
+      "Feb": 17,
+      "Mar": 14,
+      "Apr": 15,
+      "May": 24,
+      "Jun": 13,
+      "Jul": 6,
+      "Aug": 14,
+      "Sep": 15,
+      "Oct": 34,
+      "Nov": 33,
+      "Dec": 9
+    },
+    "2024": {
+      "Jan": 12,
+      "Feb": 26,
+      "Mar": 21,
+      "Apr": 35,
+      "May": 45,
+      "Jun": 14,
+      "Jul": 24,
+      "Aug": 22,
+      "Sep": 26,
+      "Oct": 51,
+      "Nov": 30,
+      "Dec": 11
+    },
+    "2025": {
+      "Jan": 21,
+      "Feb": 47,
+      "Mar": 21,
+      "Apr": 36,
+      "May": 50,
+      "Jun": 35,
+      "Jul": 20,
+      "Aug": 26,
+      "Sep": 34,
+      "Oct": 55,
+      "Nov": 49,
+      "Dec": 15
+    },
+    "2026": {
+      "Jan": 26,
+      "Feb": 40,
+      "Mar": 18,
+      "Apr": 22,
+      "May": 45,
+      "Jun": 19,
+      "Jul": 15,
+      "Aug": 10,
+      "Sep": null,
+      "Oct": null,
+      "Nov": null,
+      "Dec": null
+    }
+  },
+  "day_of_week": {
+    "counts": {
+      "Mon": 342,
+      "Tue": 502,
+      "Wed": 501,
+      "Thu": 547,
+      "Fri": 452,
+      "Sat": 37,
+      "Sun": 29
+    },
+    "span": "2015-01-05..2026-08-24",
+    "note": "pooled over ALL years INCLUDING the partial 2026 (to 24 Aug); counts are calendar EVENTS, weekends included"
+  },
+  "speaker_composition": {
+    "top_speakers_by_total_events": {
+      "Williams": 236,
+      "Powell": 203,
+      "Bostic": 156,
+      "Bowman": 138,
+      "Waller": 104,
+      "Brainard": 98,
+      "Goolsbee": 96,
+      "Barkin": 93
+    },
+    "distinct_speakers_total": 36,
+    "share_by_year": {
+      "2015": {
+        "Williams": 0.1486,
+        "Powell": 0.0541,
+        "Bostic": 0.0,
+        "Bowman": 0.0,
+        "Waller": 0.0,
+        "Brainard": 0.0608,
+        "Goolsbee": 0.0,
+        "Barkin": 0.0,
+        "Other": 0.7365
+      },
+      "2016": {
+        "Williams": 0.0,
+        "Powell": 0.084,
+        "Bostic": 0.0,
+        "Bowman": 0.0,
+        "Waller": 0.0,
+        "Brainard": 0.0588,
+        "Goolsbee": 0.0,
+        "Barkin": 0.0,
+        "Other": 0.8571
+      },
+      "2017": {
+        "Williams": 0.0,
+        "Powell": 0.0675,
+        "Bostic": 0.0,
+        "Bowman": 0.0,
+        "Waller": 0.0,
+        "Brainard": 0.0798,
+        "Goolsbee": 0.0,
+        "Barkin": 0.0,
+        "Other": 0.8528
+      },
+      "2018": {
+        "Williams": 0.1357,
+        "Powell": 0.1286,
+        "Bostic": 0.2714,
+        "Bowman": 0.0,
+        "Waller": 0.0,
+        "Brainard": 0.0929,
+        "Goolsbee": 0.0,
+        "Barkin": 0.0214,
+        "Other": 0.35
+      },
+      "2019": {
+        "Williams": 0.1492,
+        "Powell": 0.1492,
+        "Bostic": 0.0,
+        "Bowman": 0.0442,
+        "Waller": 0.0,
+        "Brainard": 0.0773,
+        "Goolsbee": 0.0,
+        "Barkin": 0.0,
+        "Other": 0.5801
+      },
+      "2020": {
+        "Williams": 0.1656,
+        "Powell": 0.1589,
+        "Bostic": 0.0,
+        "Bowman": 0.0331,
+        "Waller": 0.0,
+        "Brainard": 0.0861,
+        "Goolsbee": 0.0,
+        "Barkin": 0.0,
+        "Other": 0.5563
+      },
+      "2021": {
+        "Williams": 0.1273,
+        "Powell": 0.1318,
+        "Bostic": 0.2,
+        "Bowman": 0.0545,
+        "Waller": 0.0364,
+        "Brainard": 0.0636,
+        "Goolsbee": 0.0,
+        "Barkin": 0.0591,
+        "Other": 0.3273
+      },
+      "2022": {
+        "Williams": 0.1534,
+        "Powell": 0.1227,
+        "Bostic": 0.0,
+        "Bowman": 0.0736,
+        "Waller": 0.1104,
+        "Brainard": 0.0859,
+        "Goolsbee": 0.0,
+        "Barkin": 0.0,
+        "Other": 0.454
+      },
+      "2023": {
+        "Williams": 0.098,
+        "Powell": 0.0882,
+        "Bostic": 0.0049,
+        "Bowman": 0.0882,
+        "Waller": 0.0931,
+        "Brainard": 0.0049,
+        "Goolsbee": 0.1127,
+        "Barkin": 0.0049,
+        "Other": 0.5049
+      },
+      "2024": {
+        "Williams": 0.082,
+        "Powell": 0.0568,
+        "Bostic": 0.1199,
+        "Bowman": 0.1104,
+        "Waller": 0.0599,
+        "Brainard": 0.0,
+        "Goolsbee": 0.0568,
+        "Barkin": 0.0852,
+        "Other": 0.429
+      },
+      "2025": {
+        "Williams": 0.0758,
+        "Powell": 0.0416,
+        "Bostic": 0.066,
+        "Bowman": 0.0685,
+        "Waller": 0.066,
+        "Brainard": 0.0,
+        "Goolsbee": 0.0856,
+        "Barkin": 0.0782,
+        "Other": 0.5183
+      },
+      "2026": {
+        "Williams": 0.0667,
+        "Powell": 0.0154,
+        "Bostic": 0.041,
+        "Bowman": 0.1026,
+        "Waller": 0.0667,
+        "Brainard": 0.0,
+        "Goolsbee": 0.1026,
+        "Barkin": 0.0872,
+        "Other": 0.5179
+      }
+    },
+    "persistent_speakers_definition": "speakers appearing in >=10 of the 11 complete years",
+    "persistent_speakers": [
+      "Powell"
+    ],
+    "persistent_speakers_events_by_year": {
+      "2015": 8,
+      "2016": 10,
+      "2017": 11,
+      "2018": 18,
+      "2019": 27,
+      "2020": 24,
+      "2021": 29,
+      "2022": 20,
+      "2023": 18,
+      "2024": 18,
+      "2025": 17,
+      "2026": 3
+    },
+    "persistent_speakers_WARNING": "this 'fixed-roster control' resolves to 1 name(s) (Powell), so it is NOT a roster series and must not be read as one; it is a single-speaker count. The coverage confound (10 distinct names in 2019 -> 21 in 2025) is therefore NOT controlled by this key.",
+    "warsh_events_in_calendar": 0
+  },
+  "jpm_coverage": {
+    "unit": "distinct (date, speaker-last-name) speaking engagement",
+    "join_key": "exact (Date, Speaker) match between calendar and fed_hawk_dove_scores.csv",
+    "by_year": {
+      "2015": {
+        "engagements": 145,
+        "scored": 0,
+        "pct": 0.0,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2016": {
+        "engagements": 118,
+        "scored": 0,
+        "pct": 0.0,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2017": {
+        "engagements": 161,
+        "scored": 0,
+        "pct": 0.0,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2018": {
+        "engagements": 139,
+        "scored": 0,
+        "pct": 0.0,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2019": {
+        "engagements": 178,
+        "scored": 0,
+        "pct": 0.0,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2020": {
+        "engagements": 147,
+        "scored": 0,
+        "pct": 0.0,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2021": {
+        "engagements": 209,
+        "scored": 6,
+        "pct": 2.9,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2022": {
+        "engagements": 159,
+        "scored": 43,
+        "pct": 27.0,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2023": {
+        "engagements": 196,
+        "scored": 75,
+        "pct": 38.3,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2024": {
+        "engagements": 297,
+        "scored": 108,
+        "pct": 36.4,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2025": {
+        "engagements": 394,
+        "scored": 172,
+        "pct": 43.7,
+        "is_partial": false,
+        "coverage_note": "complete year"
+      },
+      "2026": {
+        "engagements": 185,
+        "scored": 59,
+        "pct": 31.9,
+        "is_partial": true,
+        "coverage_note": "PARTIAL YEAR to 24 Aug 2026; bar height is a count, not comparable to a complete year"
+      }
+    },
+    "jpm_feed_max_date": "2026-08-06",
+    "jpm_unscoreable_2026_engagements": 6,
+    "jpm_pct_2026_full_window": 31.9,
+    "jpm_pct_2026_scoreable_window": 33.0,
+    "jpm_feed_gap_note": "the JPM feed's last row is 2026-08-06, before the 2026-08-24 calendar cutoff, so 6 2026 engagements can never carry a score; the 2026 coverage figure is 31.9% on the full window vs 33.0% on the scoreable window (a 1.1pp effect)",
+    "total_engagements": 2328,
+    "total_scored": 463,
+    "total_pct": 19.89,
+    "jpm_rows_total": 700,
+    "jpm_rows_in_calendar_span": 692,
+    "jpm_rows_before_calendar_start": 8,
+    "jpm_rows_matching_calendar_exactly": 463,
+    "jpm_rows_matching_within_1_day": 494,
+    "jpm_rows_matching_within_3_days": 505,
+    "panel_day_level_coverage_for_contrast": "panel reports 308 of 862 speech DAYS scored (35.7%) - a day-level figure, not comparable to the engagement-level percentages here"
+  },
+  "intra_cycle_profile": {
+    "source": "panel_daily.parquet (business days only); x = days_to_fomc = CALENDAR days to next decision",
+    "far_field_baseline_ev_per_day": 1.2001,
+    "far_field_definition": "mean over days_to_fomc >= 18 with n_days >= 8",
+    "empirical_trough_days": [
+      0,
+      9
+    ],
+    "empirical_trough_ev_per_day": 0.0824,
+    "empirical_trough_pct_of_far_field": 6.9,
+    "panel_flag_is_blackout_spans_days": [
+      1,
+      14
+    ],
+    "trough_visible": true,
+    "data_quality_verdict": "PASS - the blackout trough is present and deep (7% of far-field), so the calendar/FOMC join is sound.",
+    "flag_vs_empirical_finding": "The panel's is_blackout (10 BUSINESS days before the decision ~ 14 calendar days) opens about 3 days earlier than the behavioural trough. Days 12-14 are flagged blackout yet run at 1.53 events/day, close to the 1.20 far-field rate. The Fed's actual rule starts the second Saturday before the meeting (~11 calendar days), which is where the speaking actually stops. Anything that conditions on is_blackout is therefore including ~3 near-normal speaking days.",
+    "flagged_but_normal_days": [
+      12,
+      13,
+      14
+    ],
+    "plotted_range_days": [
+      0,
+      44
+    ],
+    "panel_days_covered_by_plotted_range": 1839,
+    "low_sample_offsets_omitted_from_plot": [
+      3,
+      4,
+      10,
+      11,
+      17,
+      18,
+      25,
+      31,
+      32,
+      38
+    ],
+    "low_sample_is_structural_not_random": "Every omitted offset is 3 or 4 mod 7 (3, 4). FOMC decisions fall on Wednesdays, so those offsets land on a weekend and a business-day panel almost never observes them - they carry 1-3 days each and would otherwise draw spikes of up to 3.5 events/day.",
+    "profile": [
+      {
+        "days_to_fomc": 0,
+        "n_business_days": 61,
+        "events_per_day": 0.0328,
+        "pct_flagged_blackout": 0.016,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 1,
+        "n_business_days": 61,
+        "events_per_day": 0.0328,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 2,
+        "n_business_days": 61,
+        "events_per_day": 0.0328,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 3,
+        "n_business_days": 3,
+        "events_per_day": 0.0,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 4,
+        "n_business_days": 2,
+        "events_per_day": 0.0,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 5,
+        "n_business_days": 60,
+        "events_per_day": 0.0667,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 6,
+        "n_business_days": 62,
+        "events_per_day": 0.0968,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 7,
+        "n_business_days": 61,
+        "events_per_day": 0.1148,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 8,
+        "n_business_days": 61,
+        "events_per_day": 0.2459,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 9,
+        "n_business_days": 54,
+        "events_per_day": 0.037,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 10,
+        "n_business_days": 3,
+        "events_per_day": 1.0,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 11,
+        "n_business_days": 2,
+        "events_per_day": 1.5,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 12,
+        "n_business_days": 58,
+        "events_per_day": 1.0517,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 13,
+        "n_business_days": 59,
+        "events_per_day": 1.8475,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 14,
+        "n_business_days": 61,
+        "events_per_day": 1.7049,
+        "pct_flagged_blackout": 1.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 15,
+        "n_business_days": 60,
+        "events_per_day": 1.6333,
+        "pct_flagged_blackout": 0.167,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 16,
+        "n_business_days": 45,
+        "events_per_day": 0.9778,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 17,
+        "n_business_days": 2,
+        "events_per_day": 3.5,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 18,
+        "n_business_days": 1,
+        "events_per_day": 1.0,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 19,
+        "n_business_days": 56,
+        "events_per_day": 0.6964,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 20,
+        "n_business_days": 56,
+        "events_per_day": 1.6429,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 21,
+        "n_business_days": 61,
+        "events_per_day": 1.2787,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 22,
+        "n_business_days": 60,
+        "events_per_day": 1.2333,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 23,
+        "n_business_days": 52,
+        "events_per_day": 0.6731,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 24,
+        "n_business_days": null,
+        "events_per_day": null,
+        "pct_flagged_blackout": null,
+        "low_sample": null
+      },
+      {
+        "days_to_fomc": 25,
+        "n_business_days": 1,
+        "events_per_day": 0.0,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 26,
+        "n_business_days": 56,
+        "events_per_day": 1.4107,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 27,
+        "n_business_days": 59,
+        "events_per_day": 1.339,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 28,
+        "n_business_days": 60,
+        "events_per_day": 1.1833,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 29,
+        "n_business_days": 60,
+        "events_per_day": 1.4833,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 30,
+        "n_business_days": 51,
+        "events_per_day": 1.0392,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 31,
+        "n_business_days": 2,
+        "events_per_day": 1.5,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 32,
+        "n_business_days": 1,
+        "events_per_day": 0.0,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 33,
+        "n_business_days": 55,
+        "events_per_day": 0.8909,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 34,
+        "n_business_days": 58,
+        "events_per_day": 1.5862,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 35,
+        "n_business_days": 57,
+        "events_per_day": 1.2281,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 36,
+        "n_business_days": 60,
+        "events_per_day": 1.5,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 37,
+        "n_business_days": 55,
+        "events_per_day": 1.3273,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 38,
+        "n_business_days": 2,
+        "events_per_day": 1.5,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": true
+      },
+      {
+        "days_to_fomc": 39,
+        "n_business_days": null,
+        "events_per_day": null,
+        "pct_flagged_blackout": null,
+        "low_sample": null
+      },
+      {
+        "days_to_fomc": 40,
+        "n_business_days": 57,
+        "events_per_day": 1.1053,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 41,
+        "n_business_days": 57,
+        "events_per_day": 0.5614,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 42,
+        "n_business_days": 28,
+        "events_per_day": 1.8929,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 43,
+        "n_business_days": 29,
+        "events_per_day": 1.069,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      },
+      {
+        "days_to_fomc": 44,
+        "n_business_days": 29,
+        "events_per_day": 0.8621,
+        "pct_flagged_blackout": 0.0,
+        "low_sample": false
+      }
+    ]
+  },
+  "trend": {
+    "fit_basis": "OLS on annual counts, COMPLETE years 2015-2025 only (n=11)",
+    "slope_events_per_year": 20.955,
+    "intercept": -42126.82,
+    "r2": 0.6344,
+    "t_stat": 3.952,
+    "p_value": 0.00334,
+    "direction": "RISING",
+    "fit_excluding_2024_25": {
+      "years": "2015-2023",
+      "slope": 8.017,
+      "r2": 0.4799,
+      "t_stat": 2.542,
+      "note": "the steep slope is driven by 2024-25; through 2023 the drift is much flatter"
+    },
+    "latest_complete_year": {
+      "year": 2025,
+      "events": 409,
+      "fitted": 306.1,
+      "residual": 102.9,
+      "position": "ABOVE trend"
+    },
+    "partial_year_annualised": {
+      "year": 2026,
+      "annualised_seasonal": 329.5,
+      "annualised_prorata": 301.6,
+      "fitted": 327.1,
+      "residual_seasonal": 2.4,
+      "residual_prorata": -25.5,
+      "position": "ABOVE trend"
+    },
+    "like_for_like_ytd_to_24_aug": {
+      "2015": 80,
+      "2016": 72,
+      "2017": 104,
+      "2018": 85,
+      "2019": 111,
+      "2020": 86,
+      "2021": 137,
+      "2022": 90,
+      "2023": 108,
+      "2024": 196,
+      "2025": 251,
+      "2026": 195
+    },
+    "ytd_2026_vs_2025_pct": -22.3,
+    "ytd_2026_vs_2024_pct": -0.5,
+    "pre_handover_1jan_22may": {
+      "2015": 52,
+      "2016": 49,
+      "2017": 72,
+      "2018": 64,
+      "2019": 78,
+      "2020": 63,
+      "2021": 95,
+      "2022": 55,
+      "2023": 76,
+      "2024": 129,
+      "2025": 160,
+      "2026": 136
+    },
+    "post_handover_23may_24aug": {
+      "2015": 28,
+      "2016": 23,
+      "2017": 32,
+      "2018": 21,
+      "2019": 33,
+      "2020": 23,
+      "2021": 42,
+      "2022": 35,
+      "2023": 32,
+      "2024": 67,
+      "2025": 91,
+      "2026": 59
+    },
+    "pre_handover_2026_vs_2025_pct": -15.0,
+    "post_handover_2026_vs_2025_pct": -35.2
+  },
+  "thesis_check_fewer_higher_signal_events": {
+    "claim": "Warsh wants FEWER, higher-signal Fed speaking events",
+    "verdict": "PARTIALLY SUPPORTED, and NOT over the full sample - the count is RISING, not falling",
+    "detail": [
+      "Over complete years the trend is +21.0 events/yr (R2 0.63); 2025 set the record at 409, +103 above trend.",
+      "2026 YTD is 195 vs 251 in the same window of 2025 (-22.3%) - a genuine decline from the peak.",
+      "But 195 YTD still matches 2024 (196) and beats every year before it: this is the second-busiest pace on record, not a return to the 2015-2023 norm (YTD mean 97).",
+      "The decline STARTED BEFORE the handover: 1 Jan-22 May was 136 in 2026 vs 160 in 2025 (-15.0%), then 23 May-24 Aug 59 vs 91 (-35.2%). It steepens post-handover but does not begin there.",
+      "Annualised, 2026 lands at 330 (seasonal) or 302 (pro-rata) against a fitted 327: essentially ON trend (+2 on the seasonal method, -26 pro-rata). The annualisation method decides the sign, so the honest reading is 'on trend', not 'below' - and 'on trend' here means a still-rising trend.",
+      "So the count is NOT falling in level terms; it is falling only relative to the 2025 spike, and the annualised 2026 figure is indistinguishable from the rising trend line. The thesis needs the next two quarters to separate a Warsh regime from a normal post-peak year."
+    ],
+    "verdict_one_line": "The count is RISING, not falling: +21 events/yr over 2015-2025 with 2025 a record 409. 2026 is down 22% YTD versus 2025 and down 35% since the handover, but its annualised level (330) sits ON the rising trend and still beats every year before 2024. Partial support at best."
+  },
+  "caveats": [
+    "PARTIAL YEAR: 2026 runs to 2026-08-24 only. It is excluded from every mean, quantile and trend fit and is flagged in every panel. Two 2026-08-25 rows in the raw calendar were cut so all windows share one clock.",
+    "COVERAGE CONFOUND, unresolvable from this data: the 2024-25 level shift coincides with the vendor's speaker roster broadening from 10 distinct names in 2019 to 21 in 2025, and with a re-labelling of most events from 'medium' to 'low' impact around 2020. Events per covered speaker is far more stable (11.9-20.0), so a large part of the rise is roster breadth rather than each official speaking more. Whether that breadth is genuine or vendor coverage cannot be settled here.",
+    "Impact was deliberately NOT used as a control: the label regime flips around 2020 (medium-dominant before, low-dominant after), so filtering on it would manufacture a spurious decline.",
+    "WARSH IS INVISIBLE: he has zero events in this calendar, and no Chair-titled event of any name appears after 2026-03-30. The post-handover drop is therefore partly untestable - if ForexFactory lags or mis-tags the new chair, the measured decline is overstated.",
+    "JPM SCORES ARE A COVERAGE MEASURE ONLY. ~60% of score rows were published AFTER the speech they score, so nothing forward-looking may be built from them; P6 answers 'is the sentiment index fed here', not 'is the score right'.",
+    "SECOND PARTIAL-NESS INSIDE P6: the JPM feed's last row is 2026-08-06, 18 days before the calendar cutoff, so 6 2026 engagements can never carry a score. 2026 coverage is 31.9% on the full window vs 33.0% on the scoreable window - a 1.1pp effect, minor but real.",
+    "THE 'FIXED-ROSTER CONTROL' IS NOT ONE: speakers present in >=10 of the 11 complete years resolves to 1 name(s) (Powell). The JSON key was renamed persistent_speakers_* and carries a warning; the coverage confound above is NOT controlled by it.",
+    "JPM join is exact (date, last name): 463 of 692 in-span rows match a calendar engagement exactly (494 within 1 day, 505 within 3). Unmatched rows are speeches the ForexFactory calendar never carried, plus name/date disagreements.",
+    "The intra-cycle panel uses the business-day panel: it starts in 2019 and drops the 66 events inside its span that sit off the business-day spine (44 weekend-dated, 22 on weekday holidays). A calendar-side re-derivation that KEEPS those events, with a calendar-day denominator, puts the trough at 9.0% of far-field against the panel's 6.9% - the same conclusion, so nothing material is lost. The annual/seasonal panels use the full raw calendar from 2015.",
+    "days_to_fomc bins 10 and 11 rest on 3 and 2 observations (a Wednesday decision puts those offsets on a weekend, and the panel is business-day indexed). They are hatched, not treated as signal.",
+    "Counts are speaking ENGAGEMENTS, not distinct speaker-days: 2024-25 average 2.2-2.6 engagements per speaking day vs 1.4-1.5 in 2015-2018. Distinct speaking DAYS rise too (105 in 2015 -> 160 in 2025), so the trend is not purely multi-engagement inflation."
+  ],
+  "verification": {
+    "why": "The intra-cycle trough doubles as the required data-quality check, so the detector itself is tested.",
+    "shuffle_null": {
+      "method": "permute the daily event counts across panel days 200x, holding days_to_fomc fixed, and re-measure trough depth (days 0-9 mean / days 18-44 mean)",
+      "n_draws": 200,
+      "observed_depth": 0.0687,
+      "shuffled_depth_mean": 1.0106,
+      "shuffled_depth_min": 0.7856,
+      "shuffled_depth_1st_pct": 0.8245,
+      "draws_reaching_observed_depth": 0,
+      "verdict": "NOT VACUOUS - 0 of 200 shuffles reach the observed depth; the trough is a property of the FOMC clock, not of the binning."
+    },
+    "calendar_side_rederivation": {
+      "method": "recover the 61 decision dates from the panel, then measure events per CALENDAR day on the raw calendar - weekends and holidays included - instead of trusting panel.n_speakers",
+      "fomc_dates_recovered": 61,
+      "fomc_dates_on_a_wednesday": 58,
+      "near_rate_days_0_9_per_calendar_day": 0.0799,
+      "far_rate_days_18_44_per_calendar_day": 0.8896,
+      "trough_pct_of_far_field": 9.0,
+      "panel_route_said_pct": 6.9,
+      "verdict": "AGREES - two independent routes both find a deep trough."
+    },
+    "panel_vs_calendar_reconciliation": {
+      "calendar_events_inside_panel_span": 1840,
+      "panel_n_speakers_sum": 1774,
+      "off_spine_events": 66,
+      "off_spine_weekend_dated": 44,
+      "off_spine_weekday_holiday": 22
+    },
+    "independent_reimplementation": "frequency_seasonality_verify.py re-derives every headline number by a different code path (scipy.linregress for the fit, a merge for the JPM join, value_counts for the annual counts). All checks pass."
+  }
+}

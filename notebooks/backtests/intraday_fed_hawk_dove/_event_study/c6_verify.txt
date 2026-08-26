@@ -1,0 +1,80 @@
+============================================================================================
+1. days_to_fomc TERCILE, rank 3, +240, all signed  (READ_THIS limitation 7)
+============================================================================================
+    near  |days_to_fomc| range 1-21: mean -0.0087 bp  t -0.031  n 289
+    mid   |days_to_fomc| range 22-30: mean +0.1113 bp  t +0.364  n 256
+    far   |days_to_fomc| range 31-50: mean +0.6141 bp  t +2.127  n 263
+  OK    far tercile mean bp                                        got 0.61         claimed 0.61
+  OK    far tercile t                                              got 2.13         claimed 2.13
+  OK    near tercile mean bp                                       got -0.01        claimed -0.01
+    contamination share by tercile (READ_THIS: 'flat across terciles'):
+      near  33.9%
+      mid   32.0%
+      far   31.2%
+  OK    tercile contamination spread (pp)                          got 2.7          claimed 4.0
+
+============================================================================================
+2. ARGMAX-MINUTE two-proportion z  (READ_THIS verdict row (a))
+============================================================================================
+    real 3.5009% (n=1114)   placebo 2.7067% (n=1367)   pooled 3.0633%   z = +1.142
+  OK    real share at minute 0 (%)                                 got 3.5          claimed 3.5
+  OK    placebo share at minute 0 (%)                              got 2.71         claimed 2.71
+  OK    two-proportion z                                           got 1.14         claimed 1.14
+
+============================================================================================
+3. FIG-4 numbers, read at their real JSON keys  (READ_THIS fig4 + verdict)
+============================================================================================
+    microstructure: {"tick_bp_rank3": 0.5, "frac_zero_move_first_5min": 0.4444444444444444}
+    t_curve_primary: [{"mean": 0.026190476190488463, "se": 0.0370177262303393, "t": 0.7075117479534184, "n": 630, "G": 355, "sd": 0.9728572779272454, "window_min": 5, "mde_bp": 0.0740354524606786}, {"mean": -0.012698412698408367, "se": 0.048216307788644434, "t": -0.2633634403130098, "n": 630, "G": 355, "sd": 1.2298605997876275, "window_min": 15, "mde_bp": 0.09643261557728887}, {"mean": 0.05793650793649377, "se": 0.064
+    pre_event_mirror: [{"mean": -0.00399361022364753, "se": 0.02706961397979058, "t": -0.14753111095817797, "n": 626, "G": 353, "sd": 0.6618036155530437, "window_min": 5, "mde_bp": 0.05413922795958116}, {"mean": -0.0401284109149233, "se": 0.06404299634502213, "t": -0.6265854692172341, "n": 623, "G": 354, "sd": 1.5791022673096031, "window_min": 15, "mde_bp": 0.12808599269004425}, {"mean": 0.11626016260163045, "se": 0.08
+    daily_correlation primary: {"n_days": 527, "abs_pearson": 0.29491886140863555, "abs_r2": 0.08697713481456598, "abs_spearman": 0.27748672070816666, "signed_pearson": 0.4146318436888873, "signed_r2": 0.17191956580084586}
+    overlap_robust @ 1 week: [{"window_min": 7200, "mean_bp": 2.050280696129478, "t_cluster": 2.8975493680794435, "t_nw": 1.6787523082290385, "nw_lag": 5, "t_block": 1.8455846751532916, "p_block": 0.0614, "block_days": 15}]
+  OK    zero-move share, first 5 min                               got 0.444        claimed 0.444
+  OK    5-min MDE bp                                               got 0.074        claimed 0.074
+  OK    5-min t                                                    got 0.71         claimed 0.71
+  OK    30-min PRE-speech mean bp                                  got 0.116        claimed 0.116
+  OK    30-min PRE-speech t                                        got 1.36         claimed 1.36
+  OK    1-week cluster t                                           got 2.9          claimed 2.9
+  OK    1-week block-bootstrap t                                   got 1.85         claimed 1.85
+  OK    1-week Newey-West t                                        got 1.68         claimed 1.68
+  OK    daily |corr| vs event window                               got 0.2949       claimed 0.2949
+
+============================================================================================
+4. c5_fixes.json cross-read: the numbers READ_THIS quotes from it
+============================================================================================
+  headline:
+    gap raw            +0.5841 (t +0.828, n 184)
+    gap DiD matched    +0.7098 (t +0.875)
+    gap DiD clean      -0.0936 (t -0.150, n 488)
+    composite clean    +0.1789 (t +0.714, n 123)
+    day FE             nan (t nan, 0 id days)
+    trim top1% days    +0.0083 (t +0.031)
+    joint clean+trim   +0.1942 (t +0.908)
+    top3 share of sum  103%
+    pre-event gap      +0.656 bp at -90 min
+  all events:
+    gap raw            +0.4851 (t +1.546, n 808)
+    gap DiD matched    +0.7056 (t +1.920)
+    gap DiD clean      +0.3408 (t +1.126, n 2165)
+    composite clean    +0.0713 (t +0.526, n 540)
+    day FE             -0.05599161812756097 (t -0.30453769074746395, 93 id days)
+    trim top1% days    +0.1004 (t +0.645)
+    joint clean+trim   +0.0784 (t +0.602)
+    top3 share of sum  43%
+    pre-event gap      -0.182 bp at -30 min
+
+  strip, release-clean excess over placebo at +240:
+    1Q  full +0.202 (t +2.51, n 775) | clean +0.037 (t +0.64, n 508) | contam +0.514 (t +2.67) | clean excess -0.020 (t -0.28)
+    2Q  full +0.227 (t +1.76, n 816) | clean +0.069 (t +0.70, n 546) | contam +0.546 (t +1.69) | clean excess -0.016 (t -0.14)
+    3Q  full +0.245 (t +1.44, n 802) | clean +0.071 (t +0.53, n 540) | contam +0.603 (t +1.41) | clean excess -0.040 (t -0.25)
+    4Q  full +0.189 (t +1.02, n 822) | clean +0.054 (t +0.35, n 552) | contam +0.463 (t +1.00) | clean excess -0.105 (t -0.58)
+    5Q  full +0.147 (t +0.77, n 816) | clean +0.025 (t +0.15, n 547) | contam +0.396 (t +0.83) | clean excess -0.175 (t -0.92)
+
+  overlap double-count: {'n_multi_groups': 271, 'n_identical_groups': 20, 'max_events_in_group': 10}
+  placebo blackout: real 1.9% vs placebo 48.4%
+  SVB week: {'n_calendar_events': 4, 'n_signed': 0}
+  release coverage: real {'n_signed': 985, 'n_uncovered': 7, 'contam_share_240': 0.28118609406952966, 'contam_share_30': 0.20245398773006135}
+
+============================================================================================
+RESULT: ALL CHECKS PASS
+============================================================================================

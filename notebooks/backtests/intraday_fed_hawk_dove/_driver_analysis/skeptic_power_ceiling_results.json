@@ -1,0 +1,10 @@
+{
+  "observed_rho": 1.173713007614602,
+  "se_powell_frozen": 0.07679931291871889,
+  "se_warsh": 0.16441911216934438,
+  "max_achievable_power_at_observed_rho": 0.5500139414657276,
+  "mde_floor_even_with_infinite_post_data": 1.2400600655993614,
+  "post_clean_days_for_ci_to_exclude_one": 1939.9927453078712,
+  "post_quarters_for_ci_to_exclude_one": 30.79353563980748,
+  "claim_says_quarters": "4-6"
+}

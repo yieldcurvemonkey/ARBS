@@ -1,0 +1,35 @@
+{
+ "tier": "T3_board_perm_voters",
+ "sample": "rung_c_clean",
+ "question": "is the median tilt front-end specific?",
+ "USD-SOFR-1D 2y OUTRIGHT RATE": {
+  "n_days": 1636,
+  "n_principal": 566,
+  "n_nospeech": 872,
+  "mean_ratio": 1.1381,
+  "rotation_p_mean": 0.1122,
+  "median_ratio": 1.1772,
+  "rotation_p_median": 0.463,
+  "null_median_of_median_ratio": 1.0982
+ },
+ "USD-SOFR-1D 5y OUTRIGHT RATE": {
+  "n_days": 1636,
+  "n_principal": 566,
+  "n_nospeech": 872,
+  "mean_ratio": 1.1037,
+  "rotation_p_mean": 0.1124,
+  "median_ratio": 1.1819,
+  "rotation_p_median": 0.0714,
+  "null_median_of_median_ratio": 1.086
+ },
+ "USD-SOFR-1D IMM_3xIMM_4 OUTRIGHT RATE": {
+  "n_days": 1636,
+  "n_principal": 566,
+  "n_nospeech": 872,
+  "mean_ratio": 1.0887,
+  "rotation_p_mean": 0.3478,
+  "median_ratio": 1.3036,
+  "rotation_p_median": 0.058,
+  "null_median_of_median_ratio": 1.1401
+ }
+}

@@ -1,0 +1,53 @@
+==============================================================================
+0. KNOWN-ANSWER TEST of cluster_t
+==============================================================================
+  OK   singleton clusters reproduce the closed form   cluster_t=6.368775 closed_form=6.368775 (scipy 1-sample t=6.368775)
+  OK   duplicating every observation inside its cluster does NOT raise t   n=400 t=6.3688 -> n=800 (dup) t=6.3688
+
+==============================================================================
+1. INDEPENDENT RECOMPUTE via statsmodels OLS on a constant, cluster cov
+==============================================================================
+  OK   window     5: statsmodels t matches   mine=+0.7075 statsmodels=+0.7085
+  OK   window    15: statsmodels t matches   mine=-0.2634 statsmodels=-0.2637
+  OK   window    30: statsmodels t matches   mine=+0.8996 statsmodels=+0.9008
+  OK   window    60: statsmodels t matches   mine=+1.0472 statsmodels=+1.0487
+  OK   window   120: statsmodels t matches   mine=+0.6248 statsmodels=+0.6257
+  OK   window   240: statsmodels t matches   mine=+1.3884 statsmodels=+1.3904
+  OK   window   300: statsmodels t matches   mine=+1.3471 statsmodels=+1.3490
+  OK   window  1440: statsmodels t matches   mine=+1.0467 statsmodels=+1.0482
+  OK   window  7200: statsmodels t matches   mine=+2.8975 statsmodels=+2.9016
+
+==============================================================================
+2. THE INTRADAY RESPONSE AGREES WITH THE PANEL'S OWN signed_d_bp
+==============================================================================
+  OK   window 5: pivot on rate_bp*sign == panel signed_d_bp difference (n=600)   max abs diff 0.00e+00
+  OK   window 60: pivot on rate_bp*sign == panel signed_d_bp difference (n=600)   max abs diff 0.00e+00
+  OK   window 300: pivot on rate_bp*sign == panel signed_d_bp difference (n=600)   max abs diff 0.00e+00
+
+==============================================================================
+3. THE DAILY JOIN, checked by hand on a real date
+==============================================================================
+  OK   cum_1w == sum of d_rate_bp over days t..t+4   2023-05-09: hand +0.6561 stored +0.6561
+  OK   pre_1w == sum of d_rate_bp over days t-5..t-1 (strictly before the speech day)   hand -20.2541 stored -20.2541
+  OK   pre_1w and cum_1w share NO day   cum_1w covers close(t-1)->close(t+4); pre_1w covers close(t-6)->close(t-1)
+
+==============================================================================
+4. MUTATION TESTS - is the estimator load-bearing?
+==============================================================================
+  OK   injecting a genuine +0.5bp 5-min reaction lifts t above 10 (chart claims t~14)   t=14.21 (observed real t=+0.708)
+  OK   sign-flip null centres the 1-week t on 0   mean -0.010, sd 0.978
+  OK   an i.i.d. sign-flip null AGREES with the day-clustered t at 1 week - i.e. neither sees the overlap   sign-flip p = 0.000 vs block-bootstrap p = 0.061; the overlap correction is what moves it
+  OK   block bootstrap reproduces the cluster t where windows do NOT overlap (1 day)   cluster +1.047 vs block +1.048 - so it is not just conservative everywhere
+  OK   block bootstrap DOES bite where 5-day windows overlap (1 week)   cluster +2.898 -> block +1.854
+  OK   a placebo window that starts 5 min AFTER the speech shows nothing either   [+5,+15] mean -0.0389bp t=-1.15
+
+==============================================================================
+5. DAILY-STUDY CORRELATION reproduction, recomputed from raw columns
+==============================================================================
+  OK   published +240 vs close-to-close correlation reproduces from raw columns   raw 0.294919 vs published 0.294919 (n_days=527)
+     daily study reported 0.296 Pearson / R2 0.10 on n=311 days (a different per-trade book).
+     here: 0.2949 Pearson / R2 0.0870 on n=527 days -> REPRODUCES.
+
+==============================================================================
+VERDICT: ALL PASS
+==============================================================================
