@@ -15,9 +15,32 @@ things, and under guidance they moved together.
 
 ## The one-line result
 
-> In the guidance era, event days resolved uncertainty about the *next* meetings
-> **more** than non-event days did. Under Warsh the contrast **flips sign**:
-> event days fail to resolve while non-event days still do.
+> Under guidance, **Fed talk was the market's primary channel for deciding the
+> path** — it resolved more uncertainty than the data did. Under Warsh that
+> ordering **completely inverts**: the data resolves, and the talk resolves
+> nothing at all.
+
+Change in degeneracy distance over the five sessions after a day of each kind.
+Negative = the market became more decided about the meetings *after* the window.
+
+| | | **talk** | **data** | **nothing** |
+|---|---|---|---|---|
+| guidance | JPM | **−0.50** (n 561) | −0.24 (n 420) | −0.24 (n 424) |
+| | FedLock | **−0.48** (n 557) | −0.27 (n 438) | −0.26 (n 410) |
+| Warsh | JPM | **+0.09** (n 19) | **−1.41** (n 6) | −0.51 (n 19) |
+| | FedLock | **+0.35** (n 13) | **−1.20** (n 8) | −0.50 (n 23) |
+
+Guidance era: talk is the **best** resolver, ahead of data and quiet days, which
+are indistinguishable from each other. That is what forward guidance *is*.
+
+Warsh era: talk is the **only bucket that fails to resolve at all**, while data
+resolves five times harder than it used to and even quiet days resolve twice as
+hard.
+
+The Citadel note reaches the same place from the narrative side — *"the data
+between the June meeting and today has been more dovish… it seems the preference
+of the Fed is to extrapolate the trend in weaker prints"*. The data is doing the
+work the Fed's own communication used to do.
 
 | era | Δ degeneracy distance, t→t+5 | |
 |---|---|---|
@@ -224,19 +247,45 @@ else hangs on.**
 
 ---
 
+## 7b. Where the trader is right, stated fairly
+
+The talk/data/nothing split vindicates one half of the pushback and refutes the
+other, and the halves are worth separating.
+
+**Right: the non-event channel did rise.** Quiet days under Warsh resolve
+**−0.51 / −0.50** against **−0.24 / −0.26** under guidance — roughly twice as
+much. Data days resolve **−1.41 / −1.20** against **−0.24 / −0.27** — about five
+times as much. Information genuinely moved out of Fed communication and into
+everything else, which is the substance of "no information is information".
+
+**Wrong about the mechanism.** It is not that *silence* became informative. It is
+that the **data** did. And the two measures separate cleanly: quiet days move the
+strip **less** than they used to (T6) while resolving **more** (this table). The
+market is converging quietly, not repricing on absence.
+
+**Wrong on his two testable predictions.** Season-matched speech frequency is not
+significantly down, and silence-gap movement is down rather than up.
+
+---
+
 ## 8. What to say to the trader
 
-1. *"No information is information"* is a claim about `λ` and about silence. Both
-   are measured here and **both go the wrong way for it**: season-matched speech
-   frequency is statistically unchanged, and the strip moves **less** during
-   Warsh silences than during guidance-era ones.
-2. The objection with real force was **selection** — and it predicts the
+1. **"Each event carries more information" is wrong, and he is right about that.**
+   But the reason is sharper than optionality: Warsh events are the *only* day
+   type that no longer resolves anything. Under guidance, Fed talk was the single
+   best resolver of the path — better than the data. Now it is the worst.
+2. ***"No information is information"* is half right.** The non-event channel did
+   rise — but the risen part is the **data** (−1.41), not the silence (−0.51).
+   And his two testable predictions both fail: season-matched speech frequency is
+   statistically unchanged (p 0.66 JPM, 0.14 FedLock), and the strip moves
+   **less** during Warsh silences, not more.
+3. **The objection with real force was selection** — and it predicts the
    discretionary events light up while the scheduled ones don't. **The data shows
-   the reverse.** On n = 6, with the decidability date on the record.
-3. **He is nonetheless right that this isn't more information** — just not for
-   the reason given. Warsh events move the strip and leave the *next* meetings
-   less decided than before. The information content of an event is not its price
-   impact, and under this chair the two have come apart.
+   the reverse**: scheduled up, discretionary down, in both corpora and after
+   collapsing multi-speech days to one row each. On n = 6, with the decidability
+   date on the record.
+4. **The thing that did rise is price impact, not information.** Under this chair
+   the two have come apart, and that separation is the tradeable fact.
 
 ## 9. What it means for a position
 
@@ -256,6 +305,15 @@ piece of work.
 
 * **2.3 months, 23–16 events, six of them scheduled.** Everything here is a
   description of one window. The scheduled cell becomes a test in Feb–May 2027.
+* **Some days carry two scored speeches**, and both inherit that day's price
+  window, so the raw event counts overstate distinct days: FedLock's "n = 10
+  discretionary" is **7 days**, JPM's "n = 17" is **13**. Collapsed to one row
+  per day the T3a direction is unchanged — discretionary Warsh 2.405 vs guidance
+  2.592 (JPM) and 2.564 vs 2.791 (FedLock), both still **down**, scheduled still
+  **up**. The raw counts are quoted with this note attached.
+* **The Warsh data bucket is 6–8 days.** The talk/data inversion is the study's
+  headline and it rests on that; it is stated as a measured contrast in one
+  window, not as an established regime property.
 * Warsh events are **not independent** — they overlap and share one macro
   backdrop. The period placebo is the correction; the honest p on the regression
   form is ≈0.036 and the within-window contrast is p ≈0.08–0.10.
