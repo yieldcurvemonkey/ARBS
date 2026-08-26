@@ -1,0 +1,4 @@
+# regenerable from scripts/cvxsuite_warm_legs.py
+leg_history.parquet
+screen_*.csv
+board_*.csv

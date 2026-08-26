@@ -325,7 +325,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         constrained_leg_index: int = 1,  # belly by default
         constrained_contracts: Optional[int] = None,
         constrained_bpv: Optional[float] = None,
-        **_,
+        **kwargs,
     ) -> Tuple[List[_STIRFutureGenericPricable], List[float]]:
         if risk_weights is None:
             risk_weights = [1.0, -2.0, 1.0]
@@ -371,7 +371,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         constrained_leg_index: int = 0,
         constrained_contracts: Optional[int] = None,
         constrained_bpv: Optional[float] = None,
-        **_,
+        **kwargs,
     ) -> Tuple[List[_STIRFutureGenericPricable], List[float]]:
         """
         BASIS: same symbol, two different pricers (e.g., two curves/sources).
