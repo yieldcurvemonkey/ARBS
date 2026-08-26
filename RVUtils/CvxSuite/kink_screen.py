@@ -92,7 +92,13 @@ Row construction (binding conventions, in build order)
     independent of point order. ``fpt_stats(hits, steps=cfg.fpt_steps)`` —
     the steps kwarg is REQUIRED by the ou contract whenever censoring
     occurs; ``e_fpt_d`` is biased LOW under censoring, so ``frac_censored``
-    sits next to it. ``e_rev_bp = |mu_L - L_asof| / 2`` is the FLY-level
+    sits next to it. ``p_hit`` is the BOOK-CLOCK hit probability (DESIGN
+    section 6a item 2): the fraction of MC paths hitting within
+    ``cfg.max_hold_bd`` (63bd — the frozen dislocation exit), NOT within
+    the 504-step cap; the cap-clock rate stays recoverable as
+    ``1 - frac_censored``, and hit indices are read as business days under
+    the frozen ``fpt_dt = 1.0`` (the same convention ``p_fpt_exceeds``
+    consumes). ``e_rev_bp = |mu_L - L_asof| / 2`` is the FLY-level
     reversion the FPT clock measures — duration-free by construction, like
     every number derived from L. ``carry_be_days = e_rev_bp / |carry_bp_day|`` (the
     ING breakeven-horizon rule); a NON-NEGATIVE carry has no breakeven
@@ -153,19 +159,29 @@ Row construction (binding conventions, in build order)
     which equals the ``(-1, +2, -1)`` stats fly at same-tenor points (to
     ~2%) and differs at tenor breaks by the annuity trim (``w_sum``
     printed). Both NaN-propagate; endpoints are NaN throughout.
-10. **edge_bp** (bp of L, net of ONE cost): ``e_rev_bp * p_hit -
-    |carry_bp_day| * e_fpt_d - cfg.cost_bp`` (cost default 2.3 bp — the
-    middle of the measured 2.0-2.6 fly-package RT band; the package pays
-    ``dv01_usd`` dollars per bp of L, so ``cost_bp = fee/dv01_usd`` is
-    already in bp of L). e_rev and edge now measure reversion of the FLY
-    level to its own mean — duration-free by construction. NaN propagates;
-    endpoints are NaN.
+10. **edge_bp** (bp of L, net of ONE cost, on the BOOK'S OWN CLOCK — DESIGN
+    section 6a item 2): ``e_rev_bp * p_hit - |carry_bp_day| *
+    min(e_fpt_d, cfg.max_hold_bd) - cfg.cost_bp`` with ``p_hit`` the
+    P(hit <= max_hold_bd) of item 4 and h = max_hold_bd = 63bd, the frozen
+    dislocation exit. The pre-amendment edge credited reversion at the
+    504bd cap and charged carry over the uncapped E[FPT] — pricing a
+    hold-to-reversion trade the 63bd book cannot run (measured: 86/265
+    gate rows and 3/23 episodes failed the hold-consistent gate, zero
+    flipped in). Cost default 2.3 bp — the middle of the measured 2.0-2.6
+    fly-package RT band; the package pays ``dv01_usd`` dollars per bp of
+    L, so ``cost_bp = fee/dv01_usd`` is already in bp of L. e_rev and edge
+    measure reversion of the FLY level to its own mean — duration-free by
+    construction. NaN propagates (``np.minimum``, never Python ``min``, so
+    a NaN e_fpt cannot silently become h); endpoints are NaN.
 11. **book**: ``books.classify_books`` over the EXACT
     ``books.REQUIRED_COLUMNS`` (be_over_rv, zs, rac_net, sign_agree, tag,
-    edge_bp) with ``cfg.gates`` (BookGates section-6 defaults). be_over_rv =
-    sigma_BE / sigma_rlzd — the fly-package PARALLEL-shift breakeven over
-    the POINT's realized (rate-level) vol; this pairing is deliberate and
-    stays (item 3), the one remaining cross-object ratio in the row.
+    edge_bp) with ``cfg.gates`` (BookGates section-6 defaults). The harvest
+    gates read the columns for the RECEIVE-belly side (DESIGN 6a item 5:
+    ``-rac_net > min``, ``zs >= -max_z``) — the rac_net COLUMN stays
+    long-the-level signed (item 9). be_over_rv = sigma_BE / sigma_rlzd —
+    the fly-package PARALLEL-shift breakeven over the POINT's realized
+    (rate-level) vol; this pairing is deliberate and stays (item 3), the
+    one remaining cross-object ratio in the row.
 
 Diagnostics travel in ``df.attrs`` (fit diagnostics/leverage, PCA info
 summary, CA mode + ffill count, frontier fits, leg-roll errors) — the CLI
@@ -298,6 +314,9 @@ class KinkScreenCfg:
     fpt_seed: int = 20260826
     # edge / books
     cost_bp: float = 2.3              # 1x package RT, middle of 2.0-2.6 band
+    max_hold_bd: int = 63             # the frozen book's exit clock (DESIGN
+                                      # section 6 max_hold; 6a item 2: p_hit
+                                      # and the carry charge run on it)
     gates: BookGates = BookGates()
     frontier_min_n: int = 6
     # pricer sanity: |reference_date - asof| tolerance, calendar days
@@ -449,7 +468,7 @@ def build_kink_screen(asof, *, leg_hist_bp: pd.DataFrame, pricer: Any,
     grid order) with diagnostics in ``df.attrs``: ``fit_diag`` (leverage),
     ``pca_info`` (last refit month key, cos_prev, explained), ``ca_mode`` /
     ``ca_cells_ffilled``, ``frontier_value_carry`` / ``frontier_carry_vol``
-    fit rows, ``leg_roll_errors``, ``asof``, ``cost_bp``.
+    fit rows, ``leg_roll_errors``, ``asof``, ``cost_bp``, ``max_hold_bd``.
     """
     cfg = cfg or KinkScreenCfg()
     asof = pd.Timestamp(asof).normalize()
@@ -572,7 +591,16 @@ def build_kink_screen(asof, *, leg_hist_bp: pd.DataFrame, pricer: Any,
         fpt_hits[lab] = hits
         st = fpt_stats(hits, steps=float(cfg.fpt_steps))
         r["e_fpt_d"] = float(st["e_fpt"])
-        r["p_hit"] = float(st["p_hit"])
+        # p_hit runs on the BOOK'S OWN CLOCK (DESIGN 6a item 2): the fraction
+        # of MC paths hitting within cfg.max_hold_bd, NOT within the 504-step
+        # cap (that rate stays recoverable as 1 - frac_censored). Hit indices
+        # are read as business days under the frozen fpt_dt=1.0 — the same
+        # convention p_fpt_exceeds consumes below. Censored (inf) and
+        # slower-than-h hits both count as misses; a no-fit array (NaN hits)
+        # stays NaN — (NaN <= h) is False and would otherwise print a silent
+        # p_hit of 0.
+        r["p_hit"] = (float((hits <= float(cfg.max_hold_bd)).mean())
+                      if not np.isnan(hits).any() else float("nan"))
         r["frac_censored"] = float(st["frac_censored"])
         r["q50_fpt_d"] = float(st["q50"])
         # OU-expected drag of the FLY level toward its mean over the FPT horizon
@@ -696,8 +724,13 @@ def build_kink_screen(asof, *, leg_hist_bp: pd.DataFrame, pricer: Any,
         be = r["sigma_be_bp_day"]
         rv = r["sigma_rlzd_bp_day"]
         r["be_over_rv"] = be / rv if np.isfinite(rv) and rv > 0 else float("nan")
+        # DESIGN 6a item 2 — the edge runs on the book's own clock: reversion
+        # credited only with P(hit <= h) (p_hit above), carry charged over
+        # min(E[FPT], h), h = cfg.max_hold_bd. np.minimum NaN-propagates;
+        # Python min(nan, h) would silently return h and price a no-fit row.
         r["edge_bp"] = (r["e_rev_bp"] * r["p_hit"]
-                        - abs(r["carry_bp_day"]) * r["e_fpt_d"]
+                        - abs(r["carry_bp_day"])
+                        * float(np.minimum(r["e_fpt_d"], float(cfg.max_hold_bd)))
                         - float(cfg.cost_bp))
 
     df = pd.DataFrame.from_dict(rows, orient="index")
@@ -710,6 +743,7 @@ def build_kink_screen(asof, *, leg_hist_bp: pd.DataFrame, pricer: Any,
 
     df.attrs["asof"] = asof
     df.attrs["cost_bp"] = float(cfg.cost_bp)
+    df.attrs["max_hold_bd"] = int(cfg.max_hold_bd)
     df.attrs["ca_mode"] = ca_mode_used
     df.attrs["ca_cells_ffilled"] = int(n_ffilled)
     df.attrs["fit_diag"] = diag

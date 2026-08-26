@@ -467,7 +467,9 @@ def test_edge_rac_and_frontier_arithmetic(bumped):
     """The composed numbers reproduce from the row's own columns exactly —
     and every stats input is now the FLY level (fly_bp), not the point.
 
-    edge_bp = e_rev*p_hit - |carry|*e_fpt - cost          (cost 2.3 default)
+    edge_bp = e_rev*p_hit - |carry|*min(e_fpt, h) - cost   (h = max_hold_bd
+              = 63, the book's own clock, DESIGN §6a item 2; p_hit is
+              P(hit <= h); cost 2.3 default)
     e_rev   = |ou_mu - fly_bp| / 2
     rac_net = carry*e_fpt + rev_drag
     rev_drag = (ou_mu - fly_bp)*(1 - exp(-kappa*e_fpt))
@@ -475,18 +477,22 @@ def test_edge_rac_and_frontier_arithmetic(bumped):
 
     MUTATION: +cost instead of -cost -> edge off by 4.6. MUTATION: dropping
     the p_hit factor -> edge fails wherever p_hit < 1 (the dedicated
-    censoring test below plants that regime; in this fixture the fast-
-    reverting flies mostly hit). MUTATION: anchoring drag/e_rev on adj_bp
-    (the point level, the pre-fix defect) -> both identities fail (fly_bp
-    != adj_bp by construction). MUTATION: carry annualised (x252) in
-    rac_net -> exact equality fails. MUTATION: off_frontier without the
-    intercept -> the frontier identity fails.
+    censoring test below plants that regime; the book-clock p_hit sits
+    below 1 wherever any path takes longer than 63bd). MUTATION: carry
+    charged over the uncapped e_fpt (the pre-§6a defect) -> the identity
+    fails on any row with e_fpt > 63 (the dedicated book-clock test below
+    plants that regime and this identity uses min() itself). MUTATION:
+    anchoring drag/e_rev on adj_bp (the point level, the pre-fix defect)
+    -> both identities fail (fly_bp != adj_bp by construction). MUTATION:
+    carry annualised (x252) in rac_net -> exact equality fails. MUTATION:
+    off_frontier without the intercept -> the frontier identity fails.
     """
     df = bumped["df"]
     r = df.loc["5y1y"]
     assert np.isfinite(r["edge_bp"])
     assert r["edge_bp"] == pytest.approx(
-        r["e_rev_bp"] * r["p_hit"] - abs(r["carry_bp_day"]) * r["e_fpt_d"] - 2.3,
+        r["e_rev_bp"] * r["p_hit"]
+        - abs(r["carry_bp_day"]) * min(r["e_fpt_d"], 63.0) - 2.3,
         rel=1e-12)
     assert r["e_rev_bp"] == pytest.approx(
         abs(r["ou_mu_bp"] - r["fly_bp"]) / 2.0, rel=1e-12)
@@ -509,7 +515,10 @@ def test_edge_rac_and_frontier_arithmetic(bumped):
 def test_edge_p_hit_factor_bites_under_censoring():
     """A tight FPT cap (fpt_steps=3) forces genuine censoring on the planted
     far-from-mean 7y1y fly, so p_hit < 1 there and the edge identity's
-    p_hit FACTOR is load-bearing.
+    p_hit FACTOR is load-bearing. With steps=3 < h=63 the book clock and
+    the cap clock COINCIDE (every path either hits within 3 or never), so
+    this test isolates the p_hit factor; the clock DIVERGENCE is the
+    dedicated book-clock test below.
 
     MUTATION: dropping the p_hit factor from edge_bp (e_rev*1 - ...) fails
     the exact identity on the censored row by e_rev*(1-p_hit) > 0. MUTATION:
@@ -524,13 +533,84 @@ def test_edge_p_hit_factor_bites_under_censoring():
         r = df.loc["7y1y"]
         assert r["frac_censored"] > 0.0, "the tight cap must censor some paths"
         assert r["p_hit"] < 1.0
+        # steps < h: hits <= 63 is exactly hits <= 3, the cap-clock rate
+        assert r["p_hit"] == pytest.approx(1.0 - r["frac_censored"], abs=1e-12)
         assert np.isfinite(r["edge_bp"])
         assert r["edge_bp"] == pytest.approx(
-            r["e_rev_bp"] * r["p_hit"] - abs(r["carry_bp_day"]) * r["e_fpt_d"]
+            r["e_rev_bp"] * r["p_hit"]
+            - abs(r["carry_bp_day"]) * min(r["e_fpt_d"], 63.0)
             - 2.3, rel=1e-12)
         # the factor moves the number: identity-without-p_hit is WRONG here
-        wrong = r["e_rev_bp"] - abs(r["carry_bp_day"]) * r["e_fpt_d"] - 2.3
+        wrong = (r["e_rev_bp"]
+                 - abs(r["carry_bp_day"]) * min(r["e_fpt_d"], 63.0) - 2.3)
         assert abs(wrong - r["edge_bp"]) > 1e-6
+    finally:
+        mp.undo()
+
+
+def test_edge_runs_on_the_book_clock_max_hold():
+    """DESIGN §6a item 2 regression: the edge credits reversion only with
+    P(hit <= max_hold_bd) and charges carry over min(E[FPT], max_hold_bd) —
+    the frozen book exits at 63bd, so an edge priced on the 504bd cap clock
+    gates economics the book cannot realize (the review measured 86/265
+    gate rows and 3/23 episodes failing the hold-consistent gate, zero in).
+
+    Built twice on the same panel (CRN: fresh default_rng(seed) per point,
+    so the hits arrays are IDENTICAL across builds), h=63 (default) vs a
+    tightened h=5: shrinking h can only REMOVE hit probability — and on the
+    planted 7y1y (e_fpt > 5, asserted as a precondition) the min() bites.
+
+    Carry is PLANTED at -5bp per horizon-year through the carry_roll_bp
+    seam (the same seam the positive-carry branch test uses): the synthetic
+    quadratic base curve has a CONSTANT second difference, so every
+    same-tenor fly's aged-rate carry is EXACTLY zero there and the carry
+    term of the edge would be invisible — a planted bleed makes the clock
+    on the charge observable.
+
+    MUTATION (the pre-§6a defect): p_hit read from fpt_stats — the
+    504-step-cap clock — makes p_hit_5 == 1 - frac_censored and the strict
+    inequality fails. MUTATION: carry charged over the uncapped e_fpt ->
+    the h=5 edge identity fails by |carry|*(e_fpt - 5) (nonzero by the
+    planted carry). MUTATION: h read from a literal 63 instead of
+    cfg.max_hold_bd -> the h=5 build equals the h=63 build and every strict
+    inequality fails. The h=504 build pins the limit: with h == steps the
+    book clock IS the cap clock (p_hit == 1 - frac_censored) — the §6a
+    edge generalizes the pre-fix one, it does not fork it.
+    """
+    mp = pytest.MonkeyPatch()
+    try:
+        _patch_seams(mp, FakeGamma())
+        mp.setattr(ks, "carry_roll_bp", lambda pricer, s, h, cache=None: -5.0)
+        panel = make_panel(bump_bp=8.0)
+        df63, _, _ = build(panel)                                  # h = 63
+        df5, _, _ = build(panel, cfg=ks.KinkScreenCfg(max_hold_bd=5))
+        interior = GRID_LABELS[1:-1]
+        # identical hits + shorter clock => p_hit can only fall
+        assert (df5.loc[interior, "p_hit"]
+                <= df63.loc[interior, "p_hit"] + 1e-12).all()
+        r5, r63 = df5.loc["7y1y"], df63.loc["7y1y"]
+        assert r5["e_fpt_d"] > 5.0, "precondition: the min must bite at h=5"
+        assert r5["p_hit"] < r63["p_hit"], \
+            "paths hitting in (5, 63] must drop out of the h=5 credit"
+        assert r5["p_hit"] < 1.0 - r5["frac_censored"], \
+            "book-clock p_hit must sit strictly below the cap-clock hit rate"
+        # e_fpt_d and frac_censored stay the UNCAPPED diagnostics (§6a: keep
+        # printing them) — the clock changes the edge, not the FPT stats
+        assert r5["e_fpt_d"] == r63["e_fpt_d"]
+        assert r5["frac_censored"] == r63["frac_censored"]
+        # identity at h=5 with the min biting
+        assert r5["edge_bp"] == pytest.approx(
+            r5["e_rev_bp"] * r5["p_hit"] - abs(r5["carry_bp_day"]) * 5.0 - 2.3,
+            rel=1e-12)
+        # the uncapped carry charge is a DIFFERENT number here
+        wrong = (r5["e_rev_bp"] * r5["p_hit"]
+                 - abs(r5["carry_bp_day"]) * r5["e_fpt_d"] - 2.3)
+        assert abs(wrong - r5["edge_bp"]) > 1e-9
+        # h == steps: the book clock degenerates to the cap clock exactly
+        df504, _, _ = build(panel, cfg=ks.KinkScreenCfg(max_hold_bd=504))
+        r504 = df504.loc["7y1y"]
+        assert r504["p_hit"] == pytest.approx(1.0 - r504["frac_censored"],
+                                              abs=1e-12)
     finally:
         mp.undo()
 
@@ -696,13 +776,18 @@ def test_books_wiring_identity_and_plants(bumped):
 
 def test_fpt_block_is_deterministic_and_stats_coherent(bumped):
     """Same inputs -> identical FPT numbers (fresh default_rng(seed) per
-    point: common random numbers, order-independent). p_hit + frac_censored
-    == 1 exactly; e_fpt within (0, steps].
+    point: common random numbers, order-independent). The book-clock p_hit
+    (P(hit <= 63), §6a item 2) is bounded by the cap-clock hit rate:
+    p_hit <= 1 - frac_censored, and lives in [0, 1]; e_fpt within
+    (0, steps].
 
     MUTATION: one shared RNG consumed sequentially across points -> the
-    rebuild equality fails (row order would matter). MUTATION: calling
-    fpt_stats without steps= -> the build itself raises under censoring
-    (the ou contract) — this test just has to run.
+    rebuild equality fails (row order would matter). MUTATION: p_hit
+    computed at the 504-step cap (the pre-§6a defect) still satisfies the
+    BOUND here — the strict inequality that kills that mutation lives in
+    test_edge_runs_on_the_book_clock_max_hold. MUTATION: calling fpt_stats
+    without steps= -> the build itself raises under censoring (the ou
+    contract) — this test just has to run.
     """
     mp = pytest.MonkeyPatch()
     try:
@@ -716,7 +801,8 @@ def test_fpt_block_is_deterministic_and_stats_coherent(bumped):
     fin = df[np.isfinite(df["p_hit"])]
     assert len(fin) > 0
     for _, r in fin.iterrows():
-        assert r["p_hit"] + r["frac_censored"] == pytest.approx(1.0, abs=1e-12)
+        assert r["p_hit"] <= 1.0 - r["frac_censored"] + 1e-12
+        assert 0.0 <= r["p_hit"] <= 1.0
         assert 0.0 < r["e_fpt_d"] <= 504.0
 
 

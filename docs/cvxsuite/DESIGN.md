@@ -335,11 +335,19 @@ honest:
    run_backtest in both panel strategies now asserts the closed-position
    count (the rac battery alone cannot see a silently dropped unwind fee).
 
-Consequence of 1–4: the dislocation reference episode set changes from 23 to
-the hold-consistent set (~20 before the direction gate, fewer after), and
-harvest fees rise ~20%. These are corrections of measurement, not selection:
-every change was fixed from first principles before any full-history P&L
-existed, and the review that forced them is part of the record.
+Consequence of 1–4, measured after implementation: the review's "~20
+episodes" was its CLOCK-ONLY probe on the old (double-charging) ruler;
+restoring the ruler (item 1) halves the effective cost floor, so the
+corrected gate passes MORE rows, not fewer — 265 → 479 gate rows (the old
+formula reproduces 265 exactly; clock-only reproduces the review's 179 to
+within one boundary row), episodes 23 → 44 before the direction gate → 38
+with it (25 receive-belly / 13 pay-belly). Harvest fees rise 20% ($100k →
+$120k RT); the dislocation fee halves ($115k → $57.5k, the ruler
+correction). These are corrections of measurement, not selection: every
+change was fixed from first principles before any full-history P&L existed
+on the corrected semantics, and the review that forced them is part of the
+record. (The pre-fix reference run — 23 episodes, double-charged fees — is
+superseded and its numbers are not quotable.)
 
 ## 7. What this suite is NOT
 

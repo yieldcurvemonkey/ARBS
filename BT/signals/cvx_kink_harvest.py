@@ -15,14 +15,24 @@ columns (further columns are ignored):
 
 * ``be_over_rv`` — sigma_BE / sigma_rlzd, both bp/day, unitless. Gate
   INCLUSIVE: ``>= cfg.min_be_over_rv``.
-* ``zs``         — z-score of the ADJUSTED level, POLARITY positive = RICH
-  (books.py contract). Gate INCLUSIVE: ``<= cfg.max_z``.
+* ``zs``         — z-score of the PAIR level (the ``panels.py`` definition:
+  rolling 756d z of ``back - front`` on RAW QUOTED levels — a stated
+  approximation, §6a item 6; the as-of screen adjusts for convexity and
+  ca_bp plumbing here is future work). POLARITY: positive = pair level HIGH
+  = ENTRY-ADVERSE for the level-long steepener this book holds. This is NOT
+  books.py's ``zs``, which is a fly-level object reading the opposite way —
+  citing it here once invited a wrong-direction "fix". Gate INCLUSIVE:
+  ``<= cfg.max_z`` (refuse buying a level already high).
 * ``rac_net``    — rac_net@FPT, bp. Gate STRICT: ``> cfg.min_rac_net``
   (DESIGN §5 "rac_net@FPT > 0" — the floor is exclusive).
 
-NaN in any gate input REFUSES that decision (citi_rule semantics, exactly
-``RVUtils.CvxSuite.books``); a missing ``(date, pair)`` row refuses the same
-way. Inclusivities mirror ``books.classify_books`` and are mutation-tested.
+NaN in any gate input REFUSES that decision (citi_rule semantics); a missing
+``(date, pair)`` row refuses the same way. Inclusivities (be INCLUSIVE >=,
+zs INCLUSIVE <=, rac STRICT >) are mutation-tested. These are the PAIR-shape
+gates: on a same-tenor forward pair the level-long steepener IS the
+short-convexity harvest side, so the gates read the level-long side directly
+— unlike books.py's point-row fly gate, which §6a item 5 re-signed for the
+receive-belly side (on a fly, harvest is SHORT the level).
 
 Reform mechanics and lag-1 (deliberate conventions)
 ---------------------------------------------------
@@ -62,9 +72,11 @@ against its set, and a ``pd.Timestamp`` there is a silent no-op that marks
 zero on every date. Fee is booked once, at unwind (the engine's only cost
 hook): ``2 legs x 2 sides x cfg.half_spread_bp x cfg.package_dv01_usd`` USD
 (bp of rate times USD-per-bp; NO further /1e4 — dv01 already carries the
-dollar scale; at the frozen config that is the incumbent's flat $100,000 per
-closed round trip). Curve requests carry ``{"offline": True}`` — the offline
-store discipline; callers run under ``ARBS_SUPABASE_ENABLED=0``.
+dollar scale; at the frozen config that is $120,000 per closed round trip —
+the DESIGN §6 pre-registered 0.3bp/leg one-way, restored by §6a item 3 after
+a shipped 0.25 understated the freeze by 16.7%). Curve requests carry
+``{"offline": True}`` — the offline store discipline; callers run under
+``ARBS_SUPABASE_ENABLED=0``.
 
 The caller controls ``dates`` (the TimeGrid): every grid day costs a curve
 fetch whether or not the book holds anything, so pass held-window days only
@@ -128,12 +140,16 @@ def _parse_pair(pair: str) -> Tuple[str, str]:
 
 @dataclass(frozen=True)
 class KinkHarvestConfig:
-    """Frozen reference config (DESIGN §6 'Kink harvest'; costs per the task).
+    """Frozen reference config (DESIGN §6 'Kink harvest').
 
     ``start``/``end`` default to the leg-history span (2019-01-02..2026-08-25)
     so the field order of the spec survives dataclass default rules; override
-    per run. ``half_spread_bp`` is ONE-WAY bp of rate per leg (0.25 = 0.5bp
-    round trip per leg, the rac_backtest convention).
+    per run. ``half_spread_bp`` is ONE-WAY bp of rate per leg (0.30 = 0.6bp
+    round trip per leg, the rac_backtest convention) — the §6 PRE-REGISTERED
+    cost, "0.3bp/leg one-way x{0, 0.5, 1, 2}", restored by §6a item 3 (a
+    shipped 0.25 was a 16.7% understatement of the freeze); the x-multiplier
+    ladder is produced in the reference notebook by gross recosting, never by
+    changing this frozen value.
     """
 
     pairs: Tuple[str, ...] = ("10y10y/15y10y", "10y10y/20y10y", "15y5y/20y10y")
@@ -142,7 +158,7 @@ class KinkHarvestConfig:
     min_rac_net: float = 0.0
     reform: str = "M"
     package_dv01_usd: float = 100_000.0
-    half_spread_bp: float = 0.25
+    half_spread_bp: float = 0.30
     start: dt.date = dt.date(2019, 1, 2)
     end: dt.date = dt.date(2026, 8, 25)
 
@@ -173,8 +189,10 @@ def _validate_panel(panel: pd.DataFrame) -> pd.DataFrame:
 def _gates_pass(row: Optional[dict], cfg: KinkHarvestConfig) -> bool:
     """The three harvest gates; NaN or a missing row REFUSES (never a silent pass).
 
-    Inclusivities are the books.py contract: be_over_rv INCLUSIVE >=,
-    zs INCLUSIVE <=, rac_net STRICT >.
+    PAIR-shape inclusivities: be_over_rv INCLUSIVE >=, zs INCLUSIVE <=,
+    rac_net STRICT >. Level-long IS the harvest side on a pair (module
+    docstring) — these are NOT books.py's point-row fly gates, which §6a
+    item 5 re-signed for the receive-belly side.
     """
     if row is None:
         return False
@@ -329,7 +347,9 @@ def build_backtest(episodes: Sequence[HarvestEpisode], dates: Sequence[Any],
     grid_days = {t.date() for t in grid}
 
     #: 2 legs x 2 sides of the one-way half spread, in bp of rate on the
-    #: package DV01; USD because dv01 is USD-per-bp (no /1e4).
+    #: package DV01; USD because dv01 is USD-per-bp (no /1e4). At the frozen
+    #: config: 2 x 2 x 0.30 x $100k = $120,000 (the §6 pre-registered
+    #: 0.3bp/leg one-way; §6a item 3).
     fee = 2.0 * 2.0 * float(cfg.half_spread_bp) * float(cfg.package_dv01_usd)
 
     triggers = []
@@ -382,8 +402,12 @@ def run_backtest(episodes: Sequence[HarvestEpisode], dates: Sequence[Any],
     ``probe=True`` runs :func:`sign_probe` on the first episode's entry date
     and raises if the engine does not exhibit the ±bpv payer mirror. After the
     run the rac_backtest ``assert_ran`` battery runs (non-empty, full grid
-    coverage, finite, not identically zero) — ``QueryDrivenBacktest.run()``
-    swallows per-step exceptions, so the artifacts are the only evidence.
+    coverage, finite, not identically zero) PLUS the closed-position count
+    check ``closed == 2 * len(episodes)`` (§6a item 6, the strikeless
+    ``expect_closed`` battery pattern — the engine books NO fee on a no-match
+    unwind and the rac battery alone cannot see that) —
+    ``QueryDrivenBacktest.run()`` swallows per-step exceptions, so the
+    artifacts are the only evidence.
     """
     from RVUtils.ConvexityRV.rac_backtest import assert_ran
 
@@ -397,6 +421,18 @@ def run_backtest(episodes: Sequence[HarvestEpisode], dates: Sequence[Any],
                 f"sign probe failed — the engine does not show the +bpv-payer mirror: {pr}")
     bt.run()
     assert_ran(bt, expect_days=len(list(dates)), n_episodes=len(episodes))
+    # §6a item 6: every episode is 2 legs opened and 2 closed. A no-match
+    # unwind silently drops BOTH the close and its fee (query_engine returns
+    # before reading the fee), leaving open positions accruing unrealized
+    # P&L — the flattering direction. MUTATION: removing this check lets the
+    # ghost-tag test run to a green finish with zero closes and no fee.
+    closed = getattr(getattr(bt, "portfolio", None), "closed_positions_log", []) or []
+    n_expect = 2 * len(episodes)
+    if len(closed) != n_expect:
+        raise AssertionError(
+            f"closed {len(closed)} positions, expected {n_expect} (2 legs x "
+            f"{len(episodes)} episodes) — an unwind missed its tag or an add "
+            "never filled, and the engine books no fee on a no-match unwind.")
     eq = pd.Series(bt.mtm_history)
     if not np.isfinite(eq.to_numpy(dtype=float)).all():
         raise AssertionError("non-finite marks in mtm_history")

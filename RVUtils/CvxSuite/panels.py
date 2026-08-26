@@ -47,8 +47,14 @@ Harvest conventions (binding, documented per the task)
   1y_bp`` — the carry of the level-long (steepener) side actually held.
 * **zs** = rolling ``z_window`` (756) z of the pair level, ``min_periods =
   z_min_obs`` (252), ddof = 1, window ending AT each date (the kink-screen
-  trailing convention).  Positive = level HIGH vs its own trailing window;
-  the strategy gate ``zs <= max_z`` refuses buying a level already high.
+  trailing convention).  Positive = level HIGH vs its own trailing window =
+  ENTRY-ADVERSE for the level-long steepener; the strategy gate ``zs <=
+  max_z`` refuses buying a level already high.  The level z-scored here is
+  the RAW QUOTED ``back - front`` — a stated approximation, mirroring the
+  dislocation builder's disclosure (DESIGN §6a item 6): the as-of screen
+  z-scores convexity-ADJUSTED levels, but the CA of a smooth surface drifts
+  slowly and the 756d z differences it out; adjusted-level plumbing (a
+  ``ca_bp`` parameter) is future work — never a claim the CA is zero.
 * **rac_net** = carry net of reversion drag AT THE MEASURED AR(1) HALF-LIFE
   HORIZON: ``rac_net = carry_lvl_1y_bp * (HL_d / 252) + rev_drag_bp`` with
   ``rev_drag_bp = (rolling_mean_756 - level) * (1 - 2**(-h/HL))`` evaluated
@@ -76,10 +82,14 @@ Dislocation conventions (binding, documented per the task)
 ----------------------------------------------------------
 * Grid = the 15 INTERIOR points of ``grids.KINK_GRID`` (endpoints have no
   adjacent fly).  ``point`` labels are the lowercase belly leg labels.
-* **Fly level** ``L = belly - 0.5*(front + back)`` on the QUOTED leg-history
-  levels — the rate-space, belly-scaled weights ``(-0.5, +1, -0.5)``: the
+* **Fly level** ``L = 2*belly - front - back`` on the QUOTED leg-history
+  levels — the BELLY=+2 RULER (DESIGN §6a item 1: ONE fly ruler suite-wide,
+  matching the kink screen), rate-space weights ``(-1, +2, -1)``: the
   constant approximation of the kink screen's DV01-neutral
-  ``neutral_weights`` fly (same shape, belly normalised to +1, no pricer).
+  ``neutral_weights`` fly (same shape, belly at +2, no pricer).  Rescaling
+  from the pre-amendment belly=+1 form doubles ``fly_bp``, ``e_rev_bp`` and
+  ``carry_bp_day``; ``zs``, ``half_life_d``, ``e_fpt_d`` and ``p_hit_proxy``
+  are scale-invariant and unchanged.
   Residuals and L are computed on the SAME level definition: RAW quoted
   levels by default; pass ``ca_bp`` (a date x label convexity-adjustment
   frame, bp, positive = quoted forward depressed) to run the whole panel on
@@ -120,10 +130,12 @@ Dislocation conventions (binding, documented per the task)
 * **e_rev_bp** = ``|L - mu_ou| * (1 - 2**(-h/HL))`` at ``h = HL`` =
   ``0.5 * |L - mu_ou|`` — identical to the screen's halfway-target
   ``e_rev_bp = |mu - x|/2``.
-* **p_hit_proxy** = ``1 - exp(-fpt_steps / e_fpt_d)`` (exponential
-  passage-time approximation at the screen's 504-step cap) — the analytic
-  stand-in for the screen's MC ``p_hit``; both -> 1 for strong reverters,
-  which is where the |zs| >= 2 gate lives (stated divergence elsewhere).
+* **p_hit_proxy** = ``1 - exp(-h / e_fpt_d)`` at ``h = max_hold_bd = 63``
+  (exponential passage-time approximation AT THE FROZEN BOOK'S OWN CLOCK —
+  DESIGN §6a item 2: the strategy must exit at 63bd, so the edge credits
+  only reversion reachable inside the hold, never the old 504-step cap) —
+  the analytic stand-in for the screen's MC ``p_hit`` at the SAME horizon.
+  ``e_fpt_d`` itself stays UNCAPPED as its own column.
 * **carry_bp_day** — the ING STRIP-INTERPOLATION APPROXIMATION, PANEL-ONLY
   (stated loudly per the task; the as-of screen keeps the REPRICED
   aged-rate-identity carry): per leg the 3m roll-down is ``0.25 * (f(k) -
@@ -131,19 +143,30 @@ Dislocation conventions (binding, documented per the task)
   abscissa ``k_coord - 1`` year; the level-LONG holder's carry is MINUS the
   roll-down (ageing marks the leg at the strip one year nearer), so
   ``carry_bp_day = -[ sum_i w_i * (f(k_i) - f_interp(k_i - 1)) ] / 252``
-  with ``w = (-0.5, +1, -0.5)`` — signed for the LONG-the-fly-level (pay
-  belly) holder, the screen's carry convention.  The spot-1y leg has no
-  ``k - 1`` on the strip: the 1y1y fly's carry is NaN (meeting zone; the
-  strategy's ``tag == "clean"`` gate never trades it anyway).
-* **edge_bp** = ``e_rev_bp * p_hit_proxy - |carry_bp_day| * e_fpt_d -
-  cost_rt_bp`` (cost default 2.3 bp — the middle of the measured 2.0-2.6
-  fly-package RT band; carry enters as a COST regardless of side, exactly
-  the screen's formula with the analytic pieces substituted).  NaN
+  with the RATE-SPACE weights ``w = (-1, +2, -1)`` (the belly=+2 ruler) —
+  signed for the LONG-the-fly-level (pay belly) holder, the screen's carry
+  convention.  The spot-1y leg has no ``k - 1`` on the strip: the 1y1y
+  fly's carry is NaN (meeting zone; the strategy's ``tag == "clean"`` gate
+  never trades it anyway).
+* **edge_bp** = ``e_rev_bp * p_hit_proxy - |carry_bp_day| * min(e_fpt_d, h)
+  - cost_rt_bp`` at ``h = max_hold_bd = 63`` — THE SHARED EDGE FORMULA
+  (screen and panel alike, DESIGN §6a item 2): reversion credited at
+  P(hit <= h), carry charged as a COST regardless of side over only the
+  days actually held, ``min(E[FPT], h)``.  Cost default 2.3 bp — the middle
+  of the measured 2.0-2.6 fly-package RT band, now correctly denominated on
+  the belly=+2 L (§6a item 1; the suite's own 0.3bp/leg one-way anchor
+  reproduces it on THIS ruler: total leg |DV01| = 2*dv01 against dv01/2 USD
+  per bp of L, so 2 sides x 0.3bp x 4 = 2.4 ~ the band mid).  NaN
   propagates; NaN refuses at the strategy gate.
 * **tag** = ``grids.classify_point`` (meeting / clean / convexity);
   ``leg_front/leg_belly/leg_back`` = the adjacent lowercase grid labels;
   ``w_front/w_belly/w_back`` = ``(-0.5, +1.0, -0.5)`` constants (belly > 0,
-  wings < 0 — the orientation ``cvx_fly_dislocation`` validates).
+  wings < 0 — the orientation ``cvx_fly_dislocation`` validates).  These
+  are the DOLLAR leg weights — per-leg DV01 as fractions of the strategy's
+  ``package_dv01_usd`` (leg i trades ``bpv_i = direction * w_i * dv01``) —
+  NOT the rate-space ``(-1, +2, -1)`` that defines L: the
+  ``(-0.5, +1, -0.5) * dv01`` package pays ``dv01/2`` USD per bp of the
+  belly=+2 L, which is what the strategy's fee is derived from.
 
 What this module does NOT do: no entries, no lag (the strategies read t-1
 themselves), no aliveness claims, no repriced gamma/theta over history (the
@@ -245,10 +268,15 @@ def parse_pair(pair: str) -> Tuple[str, str]:
 @dataclasses.dataclass(frozen=True)
 class CvxPanelCfg:
     """Frozen panel config.  Statistics windows are the DESIGN section-6
-    numbers (z/OU trailing 756, PCA n_pcs 2 / window 756 / min 504 / monthly,
-    FPT step cap 504); ``z_min_obs``/``ou_min_obs`` = 252 is the kink screen's
-    ``stats_min_obs``.  ``cost_rt_bp`` = 2.3 is the frozen mid of the measured
-    2.0-2.6 bp 3-leg-package round-trip band.  ``fpt_z_cap`` is measured on
+    numbers (z/OU trailing 756, PCA n_pcs 2 / window 756 / min 504 / monthly);
+    ``z_min_obs``/``ou_min_obs`` = 252 is the kink screen's ``stats_min_obs``.
+    ``max_hold_bd`` = 63 is the frozen book's exit clock
+    (``FlyDislocationConfig.max_hold_bd``) — DESIGN §6a item 2 requires the
+    edge's p_hit horizon AND its carry charge to run on it (the pre-amendment
+    504-step p_hit cap and uncapped carry horizon priced a hold the 63bd book
+    cannot run).  ``cost_rt_bp`` = 2.3 is the frozen mid of the measured
+    2.0-2.6 bp 3-leg-package round-trip band, denominated on the belly=+2
+    fly level L = 2b - f - k (§6a item 1).  ``fpt_z_cap`` is measured on
     this machine: the Bertram series is stable and monotone to |z0| = 6
     (ratio to HL 0.949) and loses precision by |z0| = 8; beyond the cap the
     deterministic-decay limit ``e_fpt = HL`` applies."""
@@ -269,10 +297,10 @@ class CvxPanelCfg:
     pca_refit: str = "M"
     sign_min_abs_bp: float = 0.5
     # analytic FPT
-    fpt_steps: int = 504
     fpt_z_cap: float = 6.0
     fpt_z_round: int = 2          # |z0| rounding for the series memo (2dp)
-    # edge / costs
+    # edge / costs (the §6a shared edge formula, h = the frozen book's clock)
+    max_hold_bd: int = 63
     cost_rt_bp: float = 2.3
     # strat3 screen composition
     package_dv01_usd: float = 100_000.0
@@ -286,8 +314,8 @@ class CvxPanelCfg:
             raise ValueError(f"ou_min_obs {self.ou_min_obs} > ou_window {self.ou_window}")
         if not (np.isfinite(self.fpt_z_cap) and self.fpt_z_cap > 0):
             raise ValueError(f"fpt_z_cap must be finite and > 0, got {self.fpt_z_cap}")
-        if int(self.fpt_steps) < 1:
-            raise ValueError(f"fpt_steps must be >= 1, got {self.fpt_steps}")
+        if int(self.max_hold_bd) < 1:
+            raise ValueError(f"max_hold_bd must be >= 1, got {self.max_hold_bd}")
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +528,14 @@ def build_harvest_panel(leg_hist_bp: pd.DataFrame, *, pairs: Sequence[str],
                           (steepener: receive front / pay back; module
                           docstring, "Harvest conventions").
     ``zs``                rolling z of level (window ``cfg.z_window``, min
-                          ``cfg.z_min_obs``, ddof 1); positive = level high.
+                          ``cfg.z_min_obs``, ddof 1); positive = level high
+                          = entry-adverse for the level-long steepener.  On
+                          RAW QUOTED levels — a stated approximation
+                          mirroring the dislocation builder's disclosure
+                          (module docstring, "Harvest conventions"; §6a
+                          item 6): the as-of screen adjusts for convexity,
+                          this historical panel does not (ca_bp plumbing is
+                          future work).
     ``half_life_d``       rolling AR(1) half-life of the level (756d fit),
                           business days; NaN = non-reverting window.
     ``rev_drag_bp``       ``(rolling_mean - level) * (1 - 2**(-h/HL))`` at
@@ -657,10 +692,11 @@ def build_dislocation_panel(leg_hist_bp: pd.DataFrame, *,
     interior = list(range(1, len(labels) - 1))
     bellies = [labels[i] for i in interior]
 
-    # fly level L = belly - 0.5*(front + back), rate space, belly-scaled
+    # fly level L = 2*belly - front - back, rate space — the belly=+2 ruler
+    # (DESIGN §6a item 1: one fly ruler suite-wide)
     fly = pd.DataFrame(
-        {labels[i]: hist[labels[i]]
-         - 0.5 * (hist[labels[i - 1]] + hist[labels[i + 1]])
+        {labels[i]: 2.0 * hist[labels[i]]
+         - hist[labels[i - 1]] - hist[labels[i + 1]]
          for i in interior})
     z, _mu_roll = _roll_z(fly, cfg.z_window, cfg.z_min_obs)
 
@@ -679,8 +715,9 @@ def build_dislocation_panel(leg_hist_bp: pd.DataFrame, *,
         _analytic_efpt(z0_abs, kap.to_numpy(dtype=float),
                        hl.to_numpy(dtype=float), cfg),
         index=fly.index, columns=fly.columns)
+    # P(hit <= h) at the frozen book's own clock h = max_hold_bd (§6a item 2)
     with np.errstate(over="ignore"):
-        p_hit = 1.0 - np.exp(-float(cfg.fpt_steps) / efpt.where(efpt > 0))
+        p_hit = 1.0 - np.exp(-float(cfg.max_hold_bd) / efpt.where(efpt > 0))
 
     # ING strip-interpolation carry: leg 1y roll-down = f(k) - f_interp(k-1);
     # level-long carry composes with MINUS sign (module docstring).
@@ -695,12 +732,17 @@ def build_dislocation_panel(leg_hist_bp: pd.DataFrame, *,
     roll1y[:, 0] = np.nan                        # spot 1y: no k-1 on the strip
     roll_df = pd.DataFrame(roll1y, index=hist.index, columns=labels)
     carry = pd.DataFrame(
-        {labels[i]: -(roll_df[labels[i]]
-                      - 0.5 * (roll_df[labels[i - 1]] + roll_df[labels[i + 1]]))
+        {labels[i]: -(2.0 * roll_df[labels[i]]
+                      - roll_df[labels[i - 1]] - roll_df[labels[i + 1]])
          / float(cfg.business_days)
          for i in interior})
 
-    edge = e_rev * p_hit - carry.abs() * efpt - float(cfg.cost_rt_bp)
+    # THE SHARED EDGE FORMULA (§6a item 2, h = max_hold_bd = 63): reversion
+    # credited at P(hit <= h), carry charged over min(E[FPT], h) only —
+    # e_fpt itself stays uncapped as its own column (clip preserves NaN).
+    edge = (e_rev * p_hit
+            - carry.abs() * efpt.clip(upper=float(cfg.max_hold_bd))
+            - float(cfg.cost_rt_bp))
 
     frames = {
         "res_x": res_x[bellies], "res_pca": res_p[bellies],
@@ -721,6 +763,9 @@ def build_dislocation_panel(leg_hist_bp: pd.DataFrame, *,
     out["leg_front"] = pt.map(legf)
     out["leg_belly"] = pt
     out["leg_back"] = pt.map(legb)
+    # DOLLAR leg weights (per-leg DV01 fractions of the strategy's package
+    # dv01) — NOT the rate-space (-1, +2, -1) that defines L (module
+    # docstring: the package pays dv01/2 USD per bp of the belly=+2 L).
     out["w_front"] = -0.5
     out["w_belly"] = 1.0
     out["w_back"] = -0.5
@@ -729,6 +774,8 @@ def build_dislocation_panel(leg_hist_bp: pd.DataFrame, *,
     out.attrs["pca_n_refits"] = len(info_keys)
     out.attrs["pca_last_refit"] = (str(info_keys[-1].date()) if info_keys else None)
     out.attrs["levels"] = "adjusted" if ca_bp is not None else "raw"
+    out.attrs["ruler"] = "belly=+2: L = 2b - f - k (DESIGN 6a item 1)"
+    out.attrs["edge_horizon_bd"] = int(cfg.max_hold_bd)
     out.attrs["cost_rt_bp"] = float(cfg.cost_rt_bp)
     out.attrs["polarity"] = ("zs>0 = fly level high = belly cheap; the fade "
                              "of zs>0 is the RECEIVE-belly side")

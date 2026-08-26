@@ -192,14 +192,22 @@ def main(argv=None) -> int:
           "fade of zs>0 is the RECEIVE-belly side — consistent with "
           "cvx_fly_dislocation's direction = -1 if zs>0 (verified; see the "
           "panels.py seam note)")
+    print("=== RULER + CLOCK (DESIGN 6a items 1-2) === L = 2b - f - k "
+          "(belly=+2, one fly ruler suite-wide); cost 2.3bp RT denominated on "
+          "this L; edge clock h = 63bd (p_hit at h, carry over min(e_fpt, h); "
+          "e_fpt itself stays uncapped)")
     print("\ndislocation NaN shares:")
     print(_nan_share(disl).to_string())
     dg = disl.dropna(subset=["zs", "sign_agree", "edge_bp"])
     print(f"rows with zs+sign_agree+edge finite: {len(dg):,} / {len(disl):,}")
-    n_cand = int(((dg['zs'].abs() >= 2.0) & (dg['sign_agree'] != 0)
-                  & (dg['tag'] == 'clean') & (dg['edge_bp'] > 1.0)).sum())
+    gate_mask = ((dg['zs'].abs() >= 2.0) & (dg['sign_agree'] != 0)
+                 & (dg['tag'] == 'clean') & (dg['edge_bp'] > 1.0))
+    n_cand = int(gate_mask.sum())
     print(f"rows passing the frozen dislocation gates (|z|>=2, agree, clean, "
-          f"edge>1): {n_cand:,}")
+          f"edge>1) BEFORE the direction gate: {n_cand:,}")
+    n_dir = int((gate_mask & (np.sign(dg['zs']) == dg['sign_agree'])).sum())
+    print(f"  ... of which sign_agree == sign(zs) (the 6a item-4 direction "
+          f"gate): {n_dir:,}")
     print("\ndislocation sample rows:")
     print(_sample(disl))
 

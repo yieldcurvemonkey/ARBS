@@ -81,8 +81,12 @@ def _resolve_date(arg: str, hist_index: pd.DatetimeIndex):
 
 def _fmt(df: pd.DataFrame) -> str:
     """The ledger table, sorted by |edge_bp| descending, NaN last."""
+    # p_hit is the BOOK-CLOCK P(hit <= h) (DESIGN 6a.2); frac_censored stays
+    # printed next to e_fpt so a low p_hit is attributable (censored at 504
+    # vs merely slower than h).
     cols = ["tag", "adj_bp", "residual_xsec", "residual_pca", "sign_agree",
-            "zs", "pctl_3y", "carry_bp_day", "e_fpt_d", "p_hit", "e_rev_bp",
+            "zs", "pctl_3y", "carry_bp_day", "e_fpt_d", "p_hit",
+            "frac_censored", "e_rev_bp",
             "rac_net",
             "gamma_usd_per_bp2", "sigma_be_bp_day", "be_status",
             "sigma_impl_bp_day", "sigma_rlzd_bp_day", "be_over_rv",
@@ -92,7 +96,7 @@ def _fmt(df: pd.DataFrame) -> str:
     out = out.loc[order.index]
     ren = {"residual_xsec": "res_x", "residual_pca": "res_pca",
            "sign_agree": "agree", "carry_bp_day": "carry/d",
-           "e_fpt_d": "e_fpt", "e_rev_bp": "e_rev",
+           "e_fpt_d": "e_fpt", "frac_censored": "cens", "e_rev_bp": "e_rev",
            "gamma_usd_per_bp2": "gamma",
            "sigma_be_bp_day": "sig_be", "be_status": "be_st",
            "sigma_impl_bp_day": "sig_impl", "sigma_rlzd_bp_day": "sig_rlzd",
@@ -150,16 +154,20 @@ def _gates(df: pd.DataFrame) -> bool:
 
 
 def _summary(df: pd.DataFrame) -> str:
-    lines = ["", "--- two-book summary " + "-" * 47]
+    lines = ["", "--- two-book summary " + "-" * 47,
+             "harvest = RECEIVE-belly, short the fly level (DESIGN 6a.5) — "
+             "carry shown is the harvest side's own rac_recv = -rac_net"]
     for book in ("harvest", "dislocation"):
         rows = df[df["book"] == book]
         if len(rows) == 0:
             lines.append(f"{book:12s}: none")
             continue
         for lab, r in rows.iterrows():
+            rac = (f"rac_recv(=-rac_net)={-r['rac_net']:+.2f}bp"
+                   if book == "harvest" else f"rac_net={r['rac_net']:+.2f}bp")
             lines.append(
                 f"{book:12s}: {lab:8s} tag={r['tag']:9s} z={r['zs']:+.2f} "
-                f"be/rv={r['be_over_rv']:.2f} rac_net={r['rac_net']:+.2f}bp "
+                f"be/rv={r['be_over_rv']:.2f} {rac} "
                 f"edge={r['edge_bp']:+.2f}bp")
     lines.append(f"{'none':12s}: {int((df['book'] == 'none').sum())} rows")
     return "\n".join(lines)
@@ -205,6 +213,7 @@ def main(argv=None) -> int:
             "asof": asof.date().isoformat(),
             "elapsed_s": round(elapsed, 1),
             "cost_bp": df.attrs.get("cost_bp"),
+            "max_hold_bd": df.attrs.get("max_hold_bd"),
             "ca_mode": df.attrs.get("ca_mode"),
             "ca_cells_ffilled": df.attrs.get("ca_cells_ffilled"),
             "frontier_value_carry": df.attrs.get("frontier_value_carry"),
@@ -216,10 +225,14 @@ def main(argv=None) -> int:
 
     print(f"KINK LEDGER SCREEN — {asof.date()}  "
           f"(build {elapsed:.1f}s, history {leg_hist.index[0].date()}..{asof.date()}, "
-          f"cost 1x = {df.attrs.get('cost_bp')}bp RT)")
-    print(f"sorted by |edge_bp| = |E[rev]*p_hit - |carry/d|*E[FPT] - cost|; "
+          f"cost 1x = {df.attrs.get('cost_bp')}bp RT, "
+          f"hold h = {df.attrs.get('max_hold_bd')}bd)")
+    print(f"sorted by |edge_bp| = |E[rev]*p_hit - |carry/d|*min(E[FPT],h) - cost| "
+          f"— the book's own clock (DESIGN 6a.2): p_hit = P(hit <= h); "
           f"zs = z(fly 2b-f-k): zs>0 = fly above its 3y mean (belly cheap; "
-          f"fade = receive belly); residual>0 = CHEAP; all vols bp/day\n")
+          f"fade = receive belly); residual>0 = CHEAP; rac_net is signed for "
+          f"the LONG-the-level (pay-belly) holder — the harvest "
+          f"(receive-belly) side earns -rac_net (DESIGN 6a.5); all vols bp/day\n")
     print(_fmt(df))
     print()
     units_ok = _gates(df)

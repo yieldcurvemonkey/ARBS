@@ -17,9 +17,17 @@ MUTATION notes (load-bearing asserts, each verified kill-able):
   L = wings - belly) is caught: the planted HIGH belly must print zs > +2,
   not < -2.
 * ``test_carry_strip_identity`` — the carry composition sign (level-long =
-  MINUS the composed roll-down) and the strip-interpolation direction are
-  pinned to a hand-computed +15/252 bp/day; a dropped minus or a k+1
-  interpolation gives a different number.
+  MINUS the composed roll-down), the belly=+2 weights and the
+  strip-interpolation direction are pinned to a hand-computed +30/252
+  bp/day; a dropped minus, a belly=+1 relapse, or a k+1 interpolation each
+  give a different number.
+* ``test_dislocation_fly_ruler_belly2`` — L is reconstructed exactly as
+  ``2b - f - k`` from the input history; the pre-amendment belly=+1 ruler
+  halves it and fails the exact allclose.
+* ``test_dislocation_edge_63bd_clock`` — on slow-reverting rows (e_fpt > 63
+  planted via phi=0.995 noise) the p_hit horizon and the min(e_fpt, 63)
+  carry cap are both binding: reverting either to the 504-step/uncapped
+  pre-amendment clock fails the exact recomputation.
 * ``test_lowercase_leg_panel_refused`` — removing the ``_screen_block``
   leg/pair asserts lets ``screen_panel_from_legs`` skip missing legs
   SILENTLY (``except KeyError: continue``) and the build would report
@@ -76,12 +84,14 @@ def _ar1(rng, n, phi=0.9, sigma=0.8, cols=1):
     return eps
 
 
-def make_hist(n=900, seed=7, *, trend_last=0, trend_bp=0.0,
+def make_hist(n=900, seed=7, *, trend_last=0, trend_bp=0.0, phi=0.9,
               extra=("10y10y", "15y10y", "20y10y")) -> pd.DataFrame:
     """Grid labels (+ harvest legs) in bp: smooth base + common RW + AR noise.
 
     ``trend_last``/``trend_bp``: add a common LINEAR ramp of ``trend_bp`` over
     the final ``trend_last`` rows — the parallel move a fly must not see.
+    ``phi``: AR(1) persistence of the per-point noise (0.995 makes reversion
+    slow enough that e_fpt exceeds the 63bd edge clock — the clock test).
     """
     rng = np.random.default_rng(seed)
     idx = pd.bdate_range("2020-01-06", periods=n)
@@ -91,7 +101,7 @@ def make_hist(n=900, seed=7, *, trend_last=0, trend_bp=0.0,
         ramp = np.zeros(n)
         ramp[-int(trend_last):] = np.linspace(0.0, float(trend_bp), int(trend_last))
         shift = shift + ramp
-    eps = _ar1(rng, n, cols=len(GRID_KS))
+    eps = _ar1(rng, n, phi=phi, cols=len(GRID_KS))
     hist = pd.DataFrame(base[None, :] + shift[:, None] + eps,
                         index=idx, columns=GRID_LABELS)
     for j, lab in enumerate(extra):
@@ -148,10 +158,14 @@ def test_cfg_defaults_are_section6():
     assert (cfg.z_window, cfg.ou_window) == (756, 756)
     assert (cfg.n_pcs, cfg.pca_window, cfg.pca_min_window, cfg.pca_refit) == \
         (2, 756, 504, "M")
-    assert cfg.fpt_steps == 504
+    # §6a item 2: the edge runs on the frozen book's 63bd clock, and the cost
+    # is the band mid denominated on the belly=+2 L (§6a item 1).
+    assert cfg.max_hold_bd == 63
     assert cfg.cost_rt_bp == 2.3
     with pytest.raises(ValueError):
         P.CvxPanelCfg(z_min_obs=800)
+    with pytest.raises(ValueError):
+        P.CvxPanelCfg(max_hold_bd=0)
 
 
 # ---------------------------------------------------------------------------
@@ -239,11 +253,13 @@ def test_carry_strip_identity():
     Flat 300bp everywhere except ``4y1y`` (k=4.5) at 310. Leg 1y roll-downs
     ``f(k) - interp(k-1)``: 3y1y: 0;  4y1y: 310 - interp(3.5) = +10;
     5y1y: 300 - interp(4.5) = -10;  6y1y: 300 - interp(5.5) = 0.
-    Level-long fly carry at 5y1y (wings 4y1y/6y1y) =
-    -[(-10) - 0.5*(10 + 0)]/252 = +15/252 bp/day (the belly ages INTO the
+    Level-long fly carry on the BELLY=+2 ruler (rate weights (-1, +2, -1),
+    §6a item 1) at 5y1y (wings 4y1y/6y1y) =
+    -[2*(-10) - 10 - 0]/252 = +30/252 bp/day (the belly ages INTO the
     high wing: the belly payer gains — sign convention pinned); at 4y1y
-    (wings 3y1y/5y1y) = -[10 - 0.5*(0 - 10)]/252 = -15/252.
-    MUTATION: dropping the minus or interpolating at k+1 both fail.
+    (wings 3y1y/5y1y) = -[2*10 - 0 - (-10)]/252 = -30/252.
+    MUTATION: dropping the minus, interpolating at k+1, or relapsing to the
+    belly=+1 weights (±15/252) each fail.
     """
     n = 300
     idx = pd.bdate_range("2023-01-02", periods=n)
@@ -252,9 +268,9 @@ def test_carry_strip_identity():
     d = P.build_dislocation_panel(hist)
     last_day = idx[-1]
     got = d.loc[(last_day, "5y1y"), "carry_bp_day"]
-    assert got == pytest.approx(15.0 / 252.0, rel=1e-12)
+    assert got == pytest.approx(30.0 / 252.0, rel=1e-12)
     assert d.loc[(last_day, "4y1y"), "carry_bp_day"] == pytest.approx(
-        -15.0 / 252.0, rel=1e-12)
+        -30.0 / 252.0, rel=1e-12)
     # spot-1y wing has no k-1 on the strip -> the 1y1y fly's carry is NaN
     assert np.isnan(d.loc[(last_day, "1y1y"), "carry_bp_day"])
     # fully flat points earn exactly zero
@@ -262,7 +278,8 @@ def test_carry_strip_identity():
 
 
 def test_dislocation_efpt_and_edge_wiring():
-    """e_fpt/p_hit/e_rev/edge propagate together; e_rev is half the OU gap."""
+    """e_fpt/p_hit/e_rev/edge propagate together; e_rev is half the OU gap;
+    edge is the §6a SHARED FORMULA at h = max_hold_bd = 63."""
     hist = make_hist(n=900, seed=11)
     d = P.build_dislocation_panel(hist)
     ok = d[["e_fpt_d", "p_hit_proxy", "e_rev_bp", "carry_bp_day"]].notna().all(axis=1)
@@ -273,10 +290,74 @@ def test_dislocation_efpt_and_edge_wiring():
     lhs = sub["e_rev_bp"]
     rhs = 0.5 * (sub["fly_bp"] - sub["ou_mu_bp"]).abs()
     assert np.allclose(lhs, rhs, rtol=1e-12)
+    cfg = P.CvxPanelCfg()
+    h = float(cfg.max_hold_bd)
     edge = (sub["e_rev_bp"] * sub["p_hit_proxy"]
-            - sub["carry_bp_day"].abs() * sub["e_fpt_d"]
-            - P.CvxPanelCfg().cost_rt_bp)
+            - sub["carry_bp_day"].abs() * np.minimum(sub["e_fpt_d"], h)
+            - cfg.cost_rt_bp)
     assert np.allclose(sub["edge_bp"], edge, rtol=1e-12)
+
+
+def test_dislocation_fly_ruler_belly2():
+    """L = 2b - f - k, exactly, from the input history (§6a item 1).
+
+    MUTATION: relapsing to the belly=+1 ruler (b - 0.5*(f + k)) halves the
+    level and this exact reconstruction fails; so does any weight drift.
+    The w_* DOLLAR sizing columns stay (-0.5, +1, -0.5) — they are per-leg
+    DV01 fractions of the package dv01, NOT the rate-space ruler.
+    """
+    hist = make_hist(n=400, seed=17)
+    d = P.build_dislocation_panel(hist)
+    for i, pt in enumerate(GRID_LABELS):
+        if pt not in INTERIOR:
+            continue
+        got = d.xs(pt, level="point")["fly_bp"]
+        want = (2.0 * hist[pt] - hist[GRID_LABELS[i - 1]]
+                - hist[GRID_LABELS[i + 1]])
+        assert np.allclose(got.to_numpy(), want.to_numpy(), rtol=1e-12), pt
+    # dollar weights untouched by the rate-space ruler change
+    assert (d["w_front"] == -0.5).all() and (d["w_belly"] == 1.0).all() \
+        and (d["w_back"] == -0.5).all()
+    assert d.attrs["ruler"].startswith("belly=+2")
+
+
+def test_dislocation_edge_63bd_clock():
+    """The edge runs on the frozen book's own 63bd clock (§6a item 2).
+
+    phi = 0.995 noise makes reversion slow enough that e_fpt_d exceeds 63bd
+    on a material set of rows, so BOTH clock pieces bind: p_hit_proxy =
+    1 - exp(-63/e_fpt) (not the old 504-step cap) and the carry charged over
+    min(e_fpt, 63) (not the uncapped E[FPT]).  MUTATION: reverting either
+    piece to the pre-amendment clock fails the exact recomputation on the
+    slow rows; e_fpt_d itself must stay UNCAPPED as its own column.
+    """
+    hist = make_hist(n=900, seed=29, phi=0.995)
+    cfg = P.CvxPanelCfg()
+    h = float(cfg.max_hold_bd)
+    d = P.build_dislocation_panel(hist, cfg=cfg)
+    sub = d[d[["e_fpt_d", "p_hit_proxy", "e_rev_bp", "carry_bp_day",
+               "edge_bp"]].notna().all(axis=1)]
+    assert len(sub) > 200, "expected a populated FPT block on slow noise"
+    slow = sub[sub["e_fpt_d"] > h]
+    assert len(slow) > 20, (
+        "the clock must BIND somewhere: no rows with e_fpt_d > 63 — the "
+        "planted phi=0.995 noise should produce them (e_fpt stays uncapped)")
+    p_want = 1.0 - np.exp(-h / sub["e_fpt_d"])
+    assert np.allclose(sub["p_hit_proxy"], p_want, rtol=1e-12)
+    # on the slow rows the 504-step clock is measurably different — the
+    # allclose above is the kill, this pins that the kill has teeth
+    p_old = 1.0 - np.exp(-504.0 / slow["e_fpt_d"])
+    assert float((p_old - (1.0 - np.exp(-h / slow["e_fpt_d"]))).max()) > 0.3
+    edge_want = (sub["e_rev_bp"] * sub["p_hit_proxy"]
+                 - sub["carry_bp_day"].abs() * np.minimum(sub["e_fpt_d"], h)
+                 - cfg.cost_rt_bp)
+    assert np.allclose(sub["edge_bp"], edge_want, rtol=1e-12)
+    edge_uncapped = (sub["e_rev_bp"] * sub["p_hit_proxy"]
+                     - sub["carry_bp_day"].abs() * sub["e_fpt_d"]
+                     - cfg.cost_rt_bp)
+    assert not np.allclose(sub["edge_bp"], edge_uncapped, rtol=1e-9), (
+        "the min(e_fpt, 63) carry cap never bound — the clock test is vacuous")
+    assert d.attrs["edge_horizon_bd"] == 63
 
 
 def test_dislocation_ca_seam_one_level_definition():
@@ -289,7 +370,7 @@ def test_dislocation_ca_seam_one_level_definition():
     last_day = d_raw.index.get_level_values("date").max()
     dl = (d_adj.loc[(last_day, "5y1y"), "fly_bp"]
           - d_raw.loc[(last_day, "5y1y"), "fly_bp"])
-    assert dl == pytest.approx(4.0, abs=1e-9)   # belly weight +1
+    assert dl == pytest.approx(8.0, abs=1e-9)   # belly rate-weight +2 (§6a ruler)
     assert d_adj.attrs["levels"] == "adjusted" and d_raw.attrs["levels"] == "raw"
 
 

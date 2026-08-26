@@ -16,17 +16,28 @@ are ignored):
 Gate columns (NaN in any REFUSES the entry — citi_rule semantics, exactly
 ``RVUtils.CvxSuite.books``):
 
-* ``zs``         — z-score of the screen's COMPOSED MICRO-FLY level (belly
-  over wings, ``2b - f - k`` on convexity-adjusted legs). POLARITY, pinned in
-  RATE space: positive = the fly level is HIGH vs its own trailing window =
-  the belly RATE is high vs the wings = the belly is CHEAP (an upward kink).
-  Gate two-sided INCLUSIVE: ``abs(zs) >= cfg.min_abs_z``.
-* ``sign_agree`` — {+1, -1, 0} from ``residuals.sign_agreement``; entry needs
-  ``in (+1, -1)``; 0 or NaN refuses.
+* ``zs``         — z-score of the screen's COMPOSED MICRO-FLY level on the
+  belly=+2 ruler ``L = 2b - f - k`` (DESIGN §6a item 1: ONE fly ruler
+  suite-wide; the as-of screen runs it on convexity-adjusted legs, the
+  historical panel's raw-quoted default is a stated approximation).
+  POLARITY, pinned in RATE space: positive = the fly level is HIGH vs its
+  own trailing window = the belly RATE is high vs the wings = the belly is
+  CHEAP (an upward kink). Gate two-sided INCLUSIVE: ``abs(zs) >=
+  cfg.min_abs_z``.
+* ``sign_agree`` — {+1, -1, 0} from ``residuals.sign_agreement``; entry
+  needs agreement WITH THE FADE: ``sign_agree == sign(zs)`` (§6a item 4 —
+  +1 both-residuals-cheap confirms fading a CHEAP belly at zs > 0, -1
+  both-rich confirms fading a RICH belly at zs < 0). 0, NaN, and residuals
+  agreeing with each other AGAINST the traded direction all refuse. The
+  pre-amendment gate checked only that the two residual methods agreed with
+  EACH OTHER; 2 of the 23 frozen-config episodes had entered against both
+  cross-sectional models — "sign-agreeing" now means what it says.
 * ``tag``        — ``grids.classify_point`` string; entry needs exactly
   ``"clean"`` (no meeting-zone, no convexity-zone fades).
-* ``edge_bp``    — ``E[reversion]*P(hit) - |carry|*E[FPT]/252 - cost``,
-  ALREADY NET OF 1x COST, bp. Gate STRICT: ``> cfg.min_edge_bp``.
+* ``edge_bp``    — the §6a SHARED EDGE FORMULA at the frozen book's own
+  clock ``h = max_hold_bd = 63``: ``E[reversion]*P(hit<=h) -
+  |carry_bp_day|*min(E[FPT], h) - cost``, ALREADY NET OF 1x COST, bp of the
+  belly=+2 L. Gate STRICT: ``> cfg.min_edge_bp``.
 
 Sizing columns, FROZEN AT ENTRY from the signal row (the screen computes
 them; this module never re-derives or re-normalises weights):
@@ -35,10 +46,15 @@ them; this module never re-derives or re-normalises weights):
   leg labels of the fly around the point.
 * ``w_front`` / ``w_belly`` / ``w_back`` — PCA-neutral DV01 weights per 1.0
   of ``cfg.package_dv01_usd``, in the LONG-THE-FLY orientation: ``w_belly >
-  0``, wings ``< 0`` (classic DV01-neutral shape is (-1, +2, -1)). NaN in any
-  sizing field refuses the entry (a PCA ramp-in month legitimately has no
-  weights); a WRONG SIGN PATTERN on a gate-passing row RAISES — an inverted
-  orientation would silently flip the whole book through ``direction * w``.
+  0``, wings ``< 0``. These are DOLLAR leg weights — per-leg DV01 fractions
+  of the package dv01 (leg i trades ``bpv_i = direction * w_i * dv01``) —
+  NOT the rate-space ``(-1, +2, -1)`` that defines the belly=+2 level L the
+  gates run on: the panel's constant ``(-0.5, +1, -0.5) x dv01`` package
+  pays ``dv01/2`` USD per bp of that L (the fee derivation below). NaN in
+  any sizing field refuses the entry (a PCA ramp-in month legitimately has
+  no weights); a WRONG SIGN PATTERN on a gate-passing row RAISES — an
+  inverted orientation would silently flip the whole book through
+  ``direction * w``.
 
 Direction (the pinned rate-space polarity, kink_ledger.md section 0)
 --------------------------------------------------------------------
@@ -79,11 +95,17 @@ an exit is allowed from the next day's decision on.
 
 Costs
 -----
-``fee_usd = cfg.cost_rt_bp * cfg.package_dv01_usd`` booked once at unwind
-(the engine's only cost hook), split by the engine equally across the three
-legs. ``cost_rt_bp`` is the ALL-IN round trip for the 3-leg package in bp of
-rate on the package DV01 (DESIGN §6's 2.0-2.6bp RT band; 2.3 is the frozen
-mid) — bp times USD-per-bp is USD, so there is NO further /1e4: dv01 already
+``fee_usd = cfg.cost_rt_bp * (cfg.package_dv01_usd / 2)`` booked once at
+unwind (the engine's only cost hook), split by the engine equally across the
+three legs. ``cost_rt_bp`` is the ALL-IN round trip for the 3-leg package in
+bp OF THE BELLY=+2 FLY LEVEL ``L = 2b - f - k`` (DESIGN §6's 2.0-2.6bp RT
+band, 2.3 the frozen mid; §6a item 1 pinned the ruler). The package pays
+``dv01/2`` USD per bp of that L: legs trade ``(-0.5, +1, -0.5) x dv01`` of
+DV01, so P&L = ``dv01 * (db - 0.5*df - 0.5*dk) = (dv01/2) * dL`` — hence
+fee = ``cost_rt_bp x dv01/2`` ($57,500 at the frozen $50k config; the
+pre-amendment ``cost_rt_bp x dv01`` charged the band on a belly=+1 ruler
+the rest of the suite does not use, double-charging every per-leg anchor).
+bp times USD-per-bp is USD, so there is NO further /1e4: dv01 already
 carries the dollar scale (the rac_backtest convention).
 
 Engine construction mirrors ``rac_backtest``/``cvx_kink_harvest``: three
@@ -151,7 +173,10 @@ class FlyDislocationConfig:
 
     ``start``/``end`` default to the leg-history span (2019-01-02..2026-08-25)
     to keep the spec's field order under dataclass default rules; override per
-    run. ``max_hold_bd`` counts GRID positions (panel business days) held.
+    run. ``max_hold_bd`` counts GRID positions (panel business days) held —
+    it is also the §6a edge clock the panel prices at. ``cost_rt_bp`` is
+    denominated on the belly=+2 fly level L = 2b - f - k (§6a item 1; the
+    package pays dv01/2 USD per bp of L, module docstring "Costs").
     """
 
     min_abs_z: float = 2.0
@@ -202,9 +227,10 @@ def _entry_signal(row: Optional[dict], cfg: FlyDislocationConfig,
     """Gate one signal row. None = refuse; dict = the frozen entry terms.
 
     NaN in any gate OR sizing column refuses (no signal / cannot size — the
-    PCA ramp-in case). A gate-PASSING row whose weights carry the wrong sign
-    pattern RAISES: that is an inverted-orientation screen defect which
-    ``direction * w`` would silently turn into the opposite book.
+    PCA ramp-in case). The residuals must agree WITH the fade: ``sign_agree
+    == sign(zs)`` (§6a item 4). A gate-PASSING row whose weights carry the
+    wrong sign pattern RAISES: that is an inverted-orientation screen defect
+    which ``direction * w`` would silently turn into the opposite book.
     """
     if row is None:
         return None
@@ -216,6 +242,13 @@ def _entry_signal(row: Optional[dict], cfg: FlyDislocationConfig,
     if abs(float(z)) < cfg.min_abs_z:          # INCLUSIVE at min_abs_z
         return None
     if float(agree) not in (1.0, -1.0):        # 0 disagrees; anything else refuses
+        return None
+    # §6a item 4 DIRECTION GATE: the residual methods must agree WITH the
+    # fade, not merely with each other — zs > 0 fades a CHEAP belly and needs
+    # both-cheap (+1); zs < 0 needs both-rich (-1). MUTATION: dropping this
+    # check re-admits entries positioned against BOTH cross-sectional models
+    # (2 of the 23 pre-amendment frozen-config episodes were).
+    if float(agree) != (1.0 if float(z) > 0 else -1.0):
         return None
     if str(tag) != TAG_CLEAN:
         return None
@@ -378,7 +411,9 @@ def build_backtest(episodes: Sequence[FlyEpisode], dates: Sequence[Any],
     Per episode: three OUTRIGHT legs at ``bpv_i = direction * w_i *
     package_dv01_usd`` with explicit effective/maturity resolved on the entry
     date's offline curve, one unique tag per episode, unwind fee
-    ``cost_rt_bp * package_dv01_usd``. Raises on an empty episode list, on
+    ``cost_rt_bp * package_dv01_usd / 2`` (bp of the belly=+2 L times the
+    package's USD-per-bp-of-L — module docstring "Costs"). Raises on an
+    empty episode list, on
     any episode date missing from ``dates`` (an off-grid DateTrigger silently
     never fires), on a direction outside {+1,-1} and on a weight sign pattern
     violating the long-the-fly orientation (belly > 0, wings < 0) — a zero
@@ -405,9 +440,12 @@ def build_backtest(episodes: Sequence[FlyEpisode], dates: Sequence[Any],
         raise ValueError("empty time grid")
     grid_days = {t.date() for t in grid}
 
-    #: All-in 3-leg round trip in bp of rate on the package DV01; USD because
-    #: dv01 is USD-per-bp (no /1e4) — the rac_backtest fee convention.
-    fee = float(cfg.cost_rt_bp) * float(cfg.package_dv01_usd)
+    #: cost_rt_bp is bp of the belly=+2 fly level L = 2b - f - k (§6a item 1);
+    #: the (-0.5, +1, -0.5) x dv01 package pays dv01/2 USD per bp of L, so the
+    #: USD round trip is cost_rt_bp x dv01/2 — $57,500 at the frozen $50k
+    #: config (no /1e4: dv01 already carries the dollar scale, the
+    #: rac_backtest convention).
+    fee = float(cfg.cost_rt_bp) * float(cfg.package_dv01_usd) / 2.0
 
     triggers = []
     for k, e in enumerate(episodes):
@@ -467,7 +505,10 @@ def run_backtest(episodes: Sequence[FlyEpisode], dates: Sequence[Any],
     ``probe=True`` runs :func:`sign_probe` on the first episode's belly leg
     at its entry date and raises if the engine does not exhibit the ±bpv
     payer mirror. After the run the rac_backtest ``assert_ran`` battery runs
-    (non-empty, full grid coverage, finite, not identically zero) —
+    (non-empty, full grid coverage, finite, not identically zero) PLUS the
+    closed-position count check ``closed == 3 * len(episodes)`` (§6a item 6,
+    the strikeless ``expect_closed`` battery pattern — the engine books NO
+    fee on a no-match unwind and the rac battery alone cannot see that) —
     ``QueryDrivenBacktest.run()`` swallows per-step exceptions, so the
     artifacts are the only evidence.
     """
@@ -483,6 +524,18 @@ def run_backtest(episodes: Sequence[FlyEpisode], dates: Sequence[Any],
                 f"sign probe failed — the engine does not show the +bpv-payer mirror: {pr}")
     bt.run()
     assert_ran(bt, expect_days=len(list(dates)), n_episodes=len(episodes))
+    # §6a item 6: every episode is 3 legs opened and 3 closed. A no-match
+    # unwind silently drops BOTH the close and its fee (query_engine returns
+    # before reading the fee), leaving open positions accruing unrealized
+    # P&L — the flattering direction. MUTATION: removing this check lets the
+    # ghost-tag test run to a green finish with zero closes and no fee.
+    closed = getattr(getattr(bt, "portfolio", None), "closed_positions_log", []) or []
+    n_expect = 3 * len(episodes)
+    if len(closed) != n_expect:
+        raise AssertionError(
+            f"closed {len(closed)} positions, expected {n_expect} (3 legs x "
+            f"{len(episodes)} episodes) — an unwind missed its tag or an add "
+            "never filled, and the engine books no fee on a no-match unwind.")
     eq = pd.Series(bt.mtm_history)
     if not np.isfinite(eq.to_numpy(dtype=float)).all():
         raise AssertionError("non-finite marks in mtm_history")

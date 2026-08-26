@@ -207,7 +207,9 @@ class TestEpisodes:
         cfg = KinkHarvestConfig()
         assert cfg.pairs == ("10y10y/15y10y", "10y10y/20y10y", "15y5y/20y10y")
         assert (cfg.min_be_over_rv, cfg.max_z, cfg.min_rac_net) == (1.17, 0.5, 0.0)
-        assert (cfg.reform, cfg.package_dv01_usd, cfg.half_spread_bp) == ("M", 100_000.0, 0.25)
+        # half_spread_bp 0.30 is the §6 PRE-REGISTERED 0.3bp/leg one-way
+        # (§6a item 3 restored it; the shipped 0.25 deviated from the freeze).
+        assert (cfg.reform, cfg.package_dv01_usd, cfg.half_spread_bp) == ("M", 100_000.0, 0.30)
 
 
 # ---------------------------------------------------------------------------
@@ -315,11 +317,13 @@ class TestQDB:
             assert q.market_request["offline"] is True
             assert q.market_request["curve_name"] == CURVE
             assert "kh0" in q.tags
-        # Fee: 2 legs x 2 sides x 0.25bp x $100k/bp = $100,000 USD.
-        # MUTATION: any /1e4 or a dropped factor breaks the equality.
+        # Fee: 2 legs x 2 sides x 0.30bp x $100k/bp = $120,000 USD — the
+        # DESIGN §6 pre-registered 0.3bp/leg one-way, restored by §6a item 3
+        # (the shipped 0.25 was a 16.7% post-freeze understatement).
+        # MUTATION: any /1e4, a dropped factor, or a 0.25 relapse breaks it.
         act = unwind.actions[0]
         assert act.match_tag == "kh0"
-        assert act.fee == 100_000.0
+        assert act.fee == pytest.approx(120_000.0)
 
     def test_build_backtest_loud_failures(self):
         mdp = _mdp_with(DriftPricer)
@@ -343,8 +347,8 @@ class TestQDB:
 
         closed = bt.portfolio.closed_positions_log
         assert len(closed) == 4                         # 2 episodes x 2 legs
-        # Fees land: $100k per episode, split across its 2 legs.
-        assert sum(c["fee_allocated"] for c in closed) == pytest.approx(200_000.0)
+        # Fees land: $120k per episode (§6 0.3bp/leg), split across its 2 legs.
+        assert sum(c["fee_allocated"] for c in closed) == pytest.approx(240_000.0)
         for c in closed:
             assert c["realized_pnl"] == pytest.approx(
                 c["gross_realized_pnl"] - c["fee_allocated"])
@@ -374,7 +378,7 @@ class TestQDB:
             entry_d, exit_d = e.entry_date.date(), e.exit_date.date()
             dd = (exit_d - entry_d).days
             exp += 100_000.0 * dd * (leg_scale(entry_d, b_fwd) - leg_scale(entry_d, f_fwd))
-        exp -= 2 * 100_000.0                            # two unwind fees
+        exp -= 2 * 120_000.0                            # two unwind fees (§6 cost)
         assert float(eq.iloc[-1]) == pytest.approx(exp, rel=1e-9)
 
     def test_sign_probe_and_broken_mirror_negative_control(self):
@@ -391,6 +395,32 @@ class TestQDB:
         eps = [HarvestEpisode(PAIR_A, T("2025-06-03"), T("2025-06-10"))]
         with pytest.raises(AssertionError, match="sign probe"):
             run_backtest(eps, GRID, _mdp_with(BrokenMirrorPricer), cfg=CFG, probe=True)
+
+    def test_closed_count_battery_fires_on_ghost_unwind(self, monkeypatch):
+        """§6a item 6: a no-match unwind silently drops the close AND its fee
+        (query_engine returns before reading the fee); marks stay finite and
+        non-zero so the rac assert_ran battery alone PASSES — only the
+        closed-count check in run_backtest catches it (2 legs x episodes).
+        MUTATION: removing that check turns this exact construction into a
+        green run with zero closes and no fee booked — the flattering
+        direction.
+        """
+        import BT.signals.cvx_kink_harvest as KH
+
+        real_build = KH.build_backtest
+
+        def tampered(*a, **k):
+            bt = real_build(*a, **k)
+            for tr in bt.strategy.triggers:
+                for act in tr.actions:
+                    if getattr(act, "match_tag", None) is not None:
+                        act.match_tag = "ghost"   # the unwind matches nothing
+            return bt
+
+        monkeypatch.setattr(KH, "build_backtest", tampered)
+        eps = [HarvestEpisode(PAIR_A, T("2025-06-03"), T("2025-06-10"))]
+        with pytest.raises(AssertionError, match="closed 0 positions, expected 2"):
+            KH.run_backtest(eps, GRID, _mdp_with(DriftPricer), cfg=CFG, probe=False)
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +464,7 @@ class TestIntegrationTiny:
         assert float(eq.abs().max()) > 0.0
         closed = bt.portfolio.closed_positions_log
         assert len(closed) == 2                          # both legs closed
-        assert sum(c["fee_allocated"] for c in closed) == pytest.approx(100_000.0)
+        assert sum(c["fee_allocated"] for c in closed) == pytest.approx(120_000.0)
         print(f"\n[integration kink] equity end {float(eq.iloc[-1]):,.2f} USD, "
               f"max |mark| {float(eq.abs().max()):,.2f}, "
               f"gross {sum(c['gross_realized_pnl'] for c in closed):,.2f}")

@@ -10,8 +10,9 @@ Why these gates exist (the measured deaths they encode, DESIGN.md section 0):
   >= 1.0 bp round trip ("pond equals boat") — so a dislocation entry must
   clear an EXPLICIT expected-net-edge line, not a bare z threshold.
 * W4 rac harvest is dead — gross 0.397 < null 0.446, duration in disguise —
-  so the harvest book charges ``rac_net`` (risk-adjusted carry NET of
-  reversion drag at the FPT horizon), not raw carry.
+  so the harvest book charges the harvest holder's own risk-adjusted carry
+  (``-rac_net`` — the receive-belly side of the level-long-signed column,
+  NET of reversion drag at the FPT horizon), not raw carry.
 * Flow-mark fades are pre-dead program-wide (L-0085/L-0088), so the
   dislocation book additionally requires the ``clean`` tag: meeting-zone and
   convexity-zone points are never faded (the convexity zone is harvest-only,
@@ -30,16 +31,26 @@ Expected columns (EXACT names — the kink_screen composition layer must match)
                 is duration-free by construction). POLARITY (rate space,
                 kink_ledger section 0): positive = fly level above its own
                 mean (belly CHEAP — an upward kink; reversion downward
-                expected); negative = belly RICH. Harvest gate INCLUSIVE
-                upper bound ("do not harvest what has already run"):
-                ``zs <= harvest_max_z``. Dislocation gate two-sided
-                INCLUSIVE: ``|zs| >= disl_min_abs_z`` (symmetric — either
-                side of an extreme fades toward the mean).
+                expected); negative = belly RICH. Harvest gate (RECEIVE-belly
+                side — DESIGN section 6a item 5): "not rich" for the
+                SHORT-the-level holder is an INCLUSIVE LOWER bound,
+                ``zs >= -harvest_max_z`` ("do not harvest what has already
+                run" means do not SHORT a level already deep BELOW its mean).
+                Dislocation gate two-sided INCLUSIVE:
+                ``|zs| >= disl_min_abs_z`` (symmetric — either side of an
+                extreme fades toward the mean).
 ``rac_net``     float: rac_net@FPT — risk-adjusted carry net of reversion drag
-                at the measured half-life horizon (kink_ledger section 6 row).
-                Harvest gate STRICT: ``rac_net > harvest_min_rac_net`` (the
-                DESIGN section 5 rule is "rac_net@FPT > 0"; the field says
-                "min" but the floor is exclusive).
+                at the measured half-life horizon (kink_ledger section 6 row),
+                SIGNED FOR THE LONG-THE-FLY-LEVEL (pay-belly) HOLDER. The
+                column semantics are deliberately UNCHANGED by the 6a-item-5
+                re-signing: the screen table, the panel builders and this
+                gate all keep the one long-signed convention, and it is the
+                GATE that reads the other side. The harvest holder
+                (receive-belly) earns exactly ``-rac_net``, so the harvest
+                gate is STRICT on that side:
+                ``-rac_net > harvest_min_rac_net`` (the DESIGN section 5
+                rule "rac_net@FPT > 0" read on the harvest holder's own
+                book; the field says "min" but the floor is exclusive).
 ``sign_agree``  {+1, -1, 0} from ``residuals.sign_agreement``: +1 both methods
                 say cheap, -1 both say rich, 0 disagree/too small. Dislocation
                 requires membership in {+1, -1} — implemented ``isin((1, -1))``
@@ -48,18 +59,40 @@ Expected columns (EXACT names — the kink_screen composition layer must match)
 ``tag``         str from ``grids.classify_point``: "meeting" | "convexity" |
                 "clean". Dislocation requires EXACTLY ``"clean"``
                 (DESIGN section 6: ``tags == "clean"``).
-``edge_bp``     float, bp: ``E[reversion]*P(hit) - |carry|*E[FPT]/252 - cost``,
-                ALREADY NET OF 1x COST (DESIGN section 6: "after 1x cost";
-                3-leg package RT band 2.0–2.6 bp). Dislocation gate STRICT:
+``edge_bp``     float, bp of the belly=+2 fly level L, on the BOOK'S OWN
+                CLOCK (DESIGN section 6a item 2): ``e_rev * p_hit_h -
+                |carry_bp_day| * min(e_fpt, h) - cost_rt_bp`` with
+                h = max_hold_bd = 63 (the frozen dislocation exit) and
+                ``p_hit_h`` the probability of reversion WITHIN h (screen:
+                fraction of MC paths with hit <= h; panel: the analytic
+                ``1 - exp(-h/e_fpt)``), ALREADY NET OF 1x COST (DESIGN
+                section 6: "after 1x cost"; 3-leg package RT band 2.0–2.6 bp
+                on the belly=+2 L). Dislocation gate STRICT:
                 ``edge_bp > disl_min_edge_bp``.
+
+The harvest side (DESIGN section 6a item 5 — read before touching a sign)
+-------------------------------------------------------------------------
+On a FLY, harvest = selling local convexity = RECEIVING the belly = SHORT
+the level ``L = 2b - f - k``. The pair-shape harvest gate (cvx_kink_harvest,
+where the level-LONG steepener IS the short-convexity side) was transplanted
+here verbatim and gated the WRONG side: ``(rac_net > 0) & (zs <= +max_z)``
+selects rows where the LONG-the-level holder earns and the receive-belly
+harvest holder bleeds (rev_4 finding 1: the planted ``{zs=-3, rac_net=+5}``
+row classified harvest — shorting a level 3 sigma BELOW its mean with
+receive-side carry -5). The re-signed gates read the SAME long-signed
+columns for the receive side: harvest carry is ``-rac_net`` and "not rich"
+for a short is a LOWER bound on ``zs``. Screen label only — no QDB backtest
+ever traded the pre-fix label.
 
 Classification rules
 --------------------
 * harvest      = ``be_over_rv >= harvest_min_be_over_rv``
-                 AND ``zs <= harvest_max_z``
-                 AND ``rac_net > harvest_min_rac_net``.
-                 (No tag condition: the convexity zone is harvest-eligible —
-                 it is only fades that are excluded there.)
+                 AND ``zs >= -harvest_max_z``
+                 AND ``-rac_net > harvest_min_rac_net``.
+                 (RECEIVE-belly side throughout — see "The harvest side"
+                 above. No tag condition: the convexity zone is
+                 harvest-eligible — it is only fades that are excluded
+                 there.)
 * dislocation  = ``|zs| >= disl_min_abs_z`` AND ``sign_agree in {+1, -1}``
                  AND ``tag == "clean"`` AND ``edge_bp > disl_min_edge_bp``.
 * none         = everything else.
@@ -125,13 +158,17 @@ REQUIRED_COLUMNS: Tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class BookGates:
-    """Frozen reference gate config. Defaults = DESIGN.md section 6, verbatim.
+    """Frozen reference gate config. Defaults = DESIGN.md section 6, verbatim
+    (section 6a item 5 re-signed the harvest gate ORIENTATION, not the
+    values).
 
     Field order is contractual (DESIGN.md section 3) — callers may construct
     positionally. Inequality per gate is documented in the module docstring:
     ``harvest_min_be_over_rv`` and ``disl_min_abs_z`` are inclusive,
-    ``harvest_max_z`` is an inclusive upper bound, ``harvest_min_rac_net`` and
-    ``disl_min_edge_bp`` are EXCLUSIVE floors.
+    ``harvest_max_z`` is the MAGNITUDE of an inclusive LOWER bound (the gate
+    reads ``zs >= -harvest_max_z`` — the receive-belly "not rich" side),
+    ``harvest_min_rac_net`` is an EXCLUSIVE floor on the RECEIVE side's
+    carry ``-rac_net``, and ``disl_min_edge_bp`` is an EXCLUSIVE floor.
     """
 
     harvest_min_be_over_rv: float = 1.17
@@ -162,11 +199,16 @@ def classify_books(df: pd.DataFrame, gates: BookGates) -> pd.Series:
     tag = df["tag"]
     edge = df["edge_bp"]
 
-    # NaN in any numeric gate input compares False -> that book's gate fails.
+    # NaN in any numeric gate input compares False -> that book's gate fails
+    # (a NaN rac_net negates to NaN and still compares False).
+    # HARVEST IS THE RECEIVE-BELLY SIDE (DESIGN 6a item 5): the gate reads
+    # the level-long-signed columns for the SHORT-the-level holder — its
+    # carry is -rac_net, and "not rich" for a short is a LOWER bound on zs.
+    # The rac_net COLUMN itself is never re-signed anywhere.
     harvest = (
         (be >= gates.harvest_min_be_over_rv)
-        & (zs <= gates.harvest_max_z)
-        & (rac > gates.harvest_min_rac_net)
+        & (zs >= -gates.harvest_max_z)
+        & (-rac > gates.harvest_min_rac_net)
     )
     dislocation = (
         (zs.abs() >= gates.disl_min_abs_z)

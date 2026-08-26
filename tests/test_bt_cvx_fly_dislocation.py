@@ -108,6 +108,10 @@ class TestEpisodes:
         dict(sign_agree=0.0),         # disagreement refuses
         dict(sign_agree=np.nan),
         dict(sign_agree=0.5),         # not a legal {+1,-1} value
+        dict(sign_agree=-1.0),        # both-RICH residuals vs a zs=+3 fade:
+                                      # agreement AGAINST the fade (§6a item 4)
+        dict(zs=-3.0),                # zs<0 fade vs the both-CHEAP (+1) row —
+                                      # the item-4 direction gate, other side
         dict(tag="convexity"),        # harvest-only zone, never faded
         dict(tag="meeting"),
         dict(tag=np.nan),
@@ -120,7 +124,8 @@ class TestEpisodes:
     def test_each_gate_violated_no_episode(self, bad):
         # Negative control for the planted answer. MUTATION: dropping any one
         # gate check in _entry_signal lets its variant here produce the
-        # episode and fails this test.
+        # episode and fails this test — including the §6a item-4 direction
+        # gate (sign_agree == sign(zs)), pinned from BOTH sides above.
         panel = make_panel(D, overrides={(D[0], POINT): {**GOOD, **bad}})
         assert episodes_from_panel(panel, CFG) == []
 
@@ -377,11 +382,15 @@ class TestQDB:
         bpvs2 = [a.query.structure_kwargs["bpv"] for a in list(bt2.strategy.triggers)[0].actions]
         assert bpvs2 == [+50_000.0, -100_000.0, +50_000.0]
 
-        # Fee: 2.3bp RT x $50k/bp = $115,000 USD, at unwind only.
-        # MUTATION: any /1e4 (fee $11.50) or per-leg multiplication breaks it.
+        # Fee: 2.3bp RT on the belly=+2 L x ($50k/2) USD-per-bp-of-L =
+        # $57,500 USD, at unwind only (§6a item 1: the (-0.5,+1,-0.5) x dv01
+        # package pays dv01/2 per bp of L = 2b-f-k). MUTATION: the
+        # pre-amendment cost_rt_bp x dv01 ($115,000) charged the band on a
+        # belly=+1 ruler the suite does not use — double-charging every
+        # per-leg anchor; any /1e4 (fee $5.75) breaks it too.
         act = unwind.actions[0]
         assert act.match_tag == "fd0"
-        assert act.fee == pytest.approx(115_000.0)
+        assert act.fee == pytest.approx(57_500.0)
 
     def test_build_backtest_loud_failures(self):
         mdp = _mdp_with(DriftPricer)
@@ -416,7 +425,7 @@ class TestQDB:
 
         closed = bt.portfolio.closed_positions_log
         assert len(closed) == 3                          # 1 episode x 3 legs
-        assert sum(c["fee_allocated"] for c in closed) == pytest.approx(115_000.0)
+        assert sum(c["fee_allocated"] for c in closed) == pytest.approx(57_500.0)
         for c in closed:
             assert c["realized_pnl"] == pytest.approx(
                 c["gross_realized_pnl"] - c["fee_allocated"])
@@ -440,7 +449,7 @@ class TestQDB:
         s4, s5, s6 = (leg_scale(e.entry_date.date(), f) for f in (4.0, 5.0, 6.0))
         gross = e.direction * 50_000.0 * dd * (-s4 + 2.0 * s5 - s6)
         assert abs(gross) > 1_000.0                      # curvature keeps it alive
-        assert float(eq.iloc[-1]) == pytest.approx(gross - 115_000.0, rel=1e-9)
+        assert float(eq.iloc[-1]) == pytest.approx(gross - 57_500.0, rel=1e-9)
         assert sum(c["gross_realized_pnl"] for c in closed) == pytest.approx(gross, rel=1e-9)
 
     def test_sign_probe_and_broken_mirror_negative_control(self):
@@ -453,6 +462,31 @@ class TestQDB:
         assert pr_bad["is_payer_convention"] is False
         with pytest.raises(AssertionError, match="sign probe"):
             run_backtest([EP], D, _mdp_with(BrokenMirrorPricer), cfg=CFG, probe=True)
+
+    def test_closed_count_battery_fires_on_ghost_unwind(self, monkeypatch):
+        """§6a item 6: a no-match unwind silently drops the close AND its fee
+        (query_engine returns before reading the fee); marks stay finite and
+        non-zero so the rac assert_ran battery alone PASSES — only the
+        closed-count check in run_backtest catches it (3 legs x episodes).
+        MUTATION: removing that check turns this exact construction into a
+        green run with zero closes and no fee booked — the flattering
+        direction.
+        """
+        import BT.signals.cvx_fly_dislocation as FD
+
+        real_build = FD.build_backtest
+
+        def tampered(*a, **k):
+            bt = real_build(*a, **k)
+            for tr in bt.strategy.triggers:
+                for act in tr.actions:
+                    if getattr(act, "match_tag", None) is not None:
+                        act.match_tag = "ghost"   # the unwind matches nothing
+            return bt
+
+        monkeypatch.setattr(FD, "build_backtest", tampered)
+        with pytest.raises(AssertionError, match="closed 0 positions, expected 3"):
+            FD.run_backtest([EP], D, _mdp_with(DriftPricer), cfg=CFG, probe=False)
 
 
 # ---------------------------------------------------------------------------
@@ -498,7 +532,7 @@ class TestIntegrationTiny:
         assert float(eq.abs().max()) > 0.0
         closed = bt.portfolio.closed_positions_log
         assert len(closed) == 3                          # all three legs closed
-        assert sum(c["fee_allocated"] for c in closed) == pytest.approx(115_000.0)
+        assert sum(c["fee_allocated"] for c in closed) == pytest.approx(57_500.0)
         print(f"\n[integration fly] equity end {float(eq.iloc[-1]):,.2f} USD, "
               f"max |mark| {float(eq.abs().max()):,.2f}, "
               f"gross {sum(c['gross_realized_pnl'] for c in closed):,.2f}")
