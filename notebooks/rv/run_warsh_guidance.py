@@ -218,7 +218,8 @@ def main() -> int:
     line("T6. SILENCE GAPS -- does the strip do more work when he is quiet?")
     t6 = {}
     for src, d in corpora.items():
-        gaps = W.silence_gaps(d["scores"], dpath)
+        gaps = W.silence_gaps(d["scores"], dpath,
+                              setpiece=pd.DatetimeIndex(cal["date"]))
         if gaps.empty:
             _p(f"[{src}] no gaps"); continue
         agg = (gaps.groupby("era")

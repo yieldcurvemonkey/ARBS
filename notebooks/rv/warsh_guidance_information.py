@@ -385,15 +385,25 @@ def variance_buckets(dpath: pd.DataFrame, event_days: pd.DatetimeIndex,
 # ==========================================================================
 def silence_gaps(scores: pd.DataFrame, dpath: pd.DataFrame, *,
                  boundary: pd.Timestamp = WARSH_BOUNDARY,
-                 min_gap_bd: int = 3) -> pd.DataFrame:
-    """Path movement accumulated during runs of consecutive non-speech days.
+                 min_gap_bd: int = 3,
+                 setpiece: Optional[pd.DatetimeIndex] = None) -> pd.DataFrame:
+    """Path movement accumulated during runs of consecutive silent days.
 
     "No information is information" predicts the strip does MORE work during
     Warsh silences than during guidance-era silences of the same length. Gaps
     are measured in business days and compared like-for-like on length, because
     a longer gap trivially accumulates more movement.
+
+    ``setpiece`` MUST be passed for the result to mean anything. Silence was
+    originally defined from the speech book alone, and the speech book does not
+    contain the FOMC decision or the minutes release -- so a "silence" gap
+    could, and did, contain the July-2026 decision itself. Three of the five
+    Warsh gaps were contaminated that way, and excluding them flips the sign of
+    the headline. A day carrying any scheduled communication is not silence.
     """
     sd = set(pd.to_datetime(scores["date"]).dt.normalize())
+    if setpiece is not None:
+        sd |= set(pd.DatetimeIndex(setpiece).normalize())
     idx = pd.DatetimeIndex(dpath.index).normalize()
     quiet = ~np.array([x in sd for x in idx])
     rows: List[dict] = []

@@ -187,6 +187,33 @@ def test_variance_buckets_partition_the_days_and_speaker_wins_collisions():
     assert out[out["bucket"] == "release"]["days"].iloc[0] == 1
 
 
+def test_a_silence_gap_must_not_contain_an_FOMC_DECISION():
+    """The defect the adversarial audit found, and the reason `setpiece` exists.
+
+    Silence was defined from the speech book, which does not carry the FOMC
+    decision or the minutes release. Three of the five Warsh-era "silence" gaps
+    therefore contained a set-piece -- one of them the July-2026 decision -- and
+    excluding them flips the sign of the result they were used to support. A day
+    the Fed announces policy on is not a day the Fed was silent.
+    """
+    idx = pd.bdate_range("2026-01-05", periods=12)
+    dp = pd.DataFrame({"dpath_bp": np.ones(12), "meetings": "x", "n_live": 8},
+                      index=idx)
+    scores = pd.DataFrame({"date": [idx[0]]})          # one speech, day 0
+    decision = pd.DatetimeIndex([idx[5]])              # an FOMC decision inside
+
+    naive = W.silence_gaps(scores, dp, boundary=pd.Timestamp("2100-01-01"),
+                           min_gap_bd=3)
+    assert any((r["start"] <= idx[5] <= r["end"]) for _, r in naive.iterrows()), (
+        "fixture must actually straddle the decision, or this proves nothing")
+
+    fixed = W.silence_gaps(scores, dp, boundary=pd.Timestamp("2100-01-01"),
+                           min_gap_bd=3, setpiece=decision)
+    for _, r in fixed.iterrows():
+        assert not (r["start"] <= idx[5] <= r["end"]), (
+            "a gap still spans the FOMC decision")
+
+
 def test_silence_gaps_contain_no_speech_days_and_respect_the_minimum():
     """A 'silence gap' with a speech in it is not silence, and the H2 test reads
     exactly these runs. Off-by-one here would fold speech days into the quiet

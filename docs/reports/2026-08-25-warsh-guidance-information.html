@@ -1,0 +1,585 @@
+<title>Talk, Data, Nothing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  color-scheme: light;
+  --ground:#f7f8f9;
+  --surface:#ffffff;
+  --surface-2:#f1f3f5;
+  --ink:#101316;
+  --ink-2:#565d66;
+  --ink-3:#858d96;
+  --rule:#e2e5e8;
+  --rule-2:#eceff1;
+  --guid:#2a78d6;
+  --warsh:#eb6834;
+  --guid-soft:rgba(42,120,214,.10);
+  --warsh-soft:rgba(235,104,52,.10);
+  --ok:#0d6b2f;      --ok-bg:rgba(13,107,47,.10);
+  --weak:#8a5a00;    --weak-bg:rgba(138,90,0,.11);
+  --dead:#a3282a;    --dead-bg:rgba(163,40,42,.10);
+  --shadow:0 1px 2px rgba(16,19,22,.05),0 8px 24px -16px rgba(16,19,22,.28);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#131417;
+    --surface:#1b1d21;
+    --surface-2:#22252a;
+    --ink:#eef0f2;
+    --ink-2:#a8b0b8;
+    --ink-3:#7d858e;
+    --rule:#2a2d33;
+    --rule-2:#23262b;
+    --guid:#3987e5;
+    --warsh:#d95926;
+    --guid-soft:rgba(57,135,229,.14);
+    --warsh-soft:rgba(217,89,38,.14);
+    --ok:#4cc46e;    --ok-bg:rgba(76,196,110,.13);
+    --weak:#e0a63a;  --weak-bg:rgba(224,166,58,.13);
+    --dead:#f08281;  --dead-bg:rgba(240,130,129,.13);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#131417;
+  --surface:#1b1d21;
+  --surface-2:#22252a;
+  --ink:#eef0f2;
+  --ink-2:#a8b0b8;
+  --ink-3:#7d858e;
+  --rule:#2a2d33;
+  --rule-2:#23262b;
+  --guid:#3987e5;
+  --warsh:#d95926;
+  --guid-soft:rgba(57,135,229,.14);
+  --warsh-soft:rgba(217,89,38,.14);
+  --ok:#4cc46e;    --ok-bg:rgba(76,196,110,.13);
+  --weak:#e0a63a;  --weak-bg:rgba(224,166,58,.13);
+  --dead:#f08281;  --dead-bg:rgba(240,130,129,.13);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:16.5px;line-height:1.62;-webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1040px;margin:0 auto;padding:0 28px 96px}
+.measure{max-width:68ch}
+
+h1,h2,h3{font-family:Archivo,system-ui,sans-serif;text-wrap:balance;margin:0}
+h1{font-weight:700;font-size:clamp(2.1rem,5.2vw,3.05rem);line-height:1.05;letter-spacing:-.028em}
+h2{font-weight:600;font-size:clamp(1.32rem,2.6vw,1.6rem);line-height:1.16;letter-spacing:-.018em}
+p{margin:0}
+strong{font-weight:600;color:var(--ink)}
+em{font-style:italic}
+.num{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.lab{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.665rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.13em;color:var(--ink-3)}
+
+header{padding:72px 0 0}
+.eyebrow{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--warsh)}
+.standfirst{margin-top:22px;font-size:1.16rem;line-height:1.55;color:var(--ink-2);max-width:60ch}
+
+.correction{
+  margin-top:34px;padding:20px 24px;background:var(--dead-bg);
+  border:1px solid var(--dead);border-radius:4px;max-width:64ch;
+}
+.correction .lab{color:var(--dead);margin-bottom:8px;display:block}
+.correction p{font-size:.97rem;line-height:1.55}
+
+.claimbox{margin-top:26px;padding:20px 24px;background:var(--surface);
+  border:1px solid var(--rule);border-left:3px solid var(--ink-3);
+  border-radius:3px;max-width:64ch}
+.claimbox p+p{margin-top:14px}
+.who{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;
+  font-family:"IBM Plex Mono",monospace;color:var(--ink-3);display:block;margin-bottom:5px}
+
+/* ledger */
+.ledger{margin-top:28px;display:grid;gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.lrow{background:var(--surface);padding:15px 20px;
+  display:grid;grid-template-columns:132px 1fr;gap:18px;align-items:start}
+.chip{display:inline-block;padding:3px 9px;border-radius:3px;
+  font-family:"IBM Plex Mono",monospace;font-size:.645rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
+.chip.ok{color:var(--ok);background:var(--ok-bg)}
+.chip.weak{color:var(--weak);background:var(--weak-bg)}
+.chip.dead{color:var(--dead);background:var(--dead-bg)}
+.lrow .txt{font-size:.93rem;line-height:1.55;color:var(--ink-2)}
+.lrow .txt b{color:var(--ink);font-weight:600;display:block;margin-bottom:2px}
+
+section{margin-top:76px}
+.kicker{margin-bottom:12px}
+.finding{margin-top:14px;font-size:1.03rem;color:var(--ink-2);max-width:66ch}
+.figure{margin-top:30px;background:var(--surface);border:1px solid var(--rule);
+  border-radius:4px;padding:22px 22px 16px;box-shadow:var(--shadow)}
+.figtitle{font-family:Archivo,sans-serif;font-weight:600;font-size:1rem;letter-spacing:-.008em}
+.figsub{margin-top:5px;font-size:.85rem;color:var(--ink-3);line-height:1.45}
+.chartbox{margin-top:20px;overflow-x:auto}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.legend{display:flex;flex-wrap:wrap;gap:20px;margin-top:16px;align-items:center}
+.legend .item{display:flex;align-items:center;gap:7px;font-size:.8rem;color:var(--ink-2)}
+.legend .sw{width:11px;height:11px;border-radius:2px;flex:none}
+.note{margin-top:14px;padding-top:14px;border-top:1px solid var(--rule-2);
+  font-size:.845rem;color:var(--ink-3);line-height:1.5}
+.note+.note{border-top:none;padding-top:0;margin-top:8px}
+
+.t-ax{fill:var(--ink-3);font-family:"IBM Plex Mono",monospace;font-size:10.5px;font-variant-numeric:tabular-nums}
+.t-val{fill:var(--ink);font-family:"IBM Plex Mono",monospace;font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums}
+.t-cat{fill:var(--ink);font-family:"IBM Plex Sans",sans-serif;font-size:12.5px;font-weight:600}
+.t-ann{fill:var(--ink-2);font-family:"IBM Plex Sans",sans-serif;font-size:11.5px}
+.grid{stroke:var(--rule-2);stroke-width:1}
+.axis{stroke:var(--rule);stroke-width:1}
+.zero{stroke:var(--ink-3);stroke-width:1.25}
+
+details{margin-top:14px}
+summary{cursor:pointer;font-family:"IBM Plex Mono",monospace;font-size:.7rem;
+  text-transform:uppercase;letter-spacing:.1em;color:var(--ink-3);padding:4px 0}
+summary:hover{color:var(--ink-2)}
+summary:focus-visible{outline:2px solid var(--guid);outline-offset:3px;border-radius:2px}
+table{border-collapse:collapse;width:100%;margin-top:10px;font-size:.83rem}
+th,td{text-align:right;padding:6px 10px;border-bottom:1px solid var(--rule-2)}
+th:first-child,td:first-child{text-align:left}
+th{font-family:"IBM Plex Mono",monospace;font-size:.66rem;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--ink-3);font-weight:600}
+td{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+td:first-child{font-family:"IBM Plex Sans",sans-serif;color:var(--ink)}
+
+#tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .1s;
+  background:var(--ink);color:var(--ground);padding:6px 9px;border-radius:3px;
+  font-family:"IBM Plex Mono",monospace;font-size:11px;line-height:1.45;
+  z-index:50;white-space:pre;box-shadow:0 4px 14px rgba(0,0,0,.22)}
+
+footer{margin-top:86px;padding-top:26px;border-top:1px solid var(--rule);
+  font-size:.85rem;color:var(--ink-3);max-width:68ch}
+footer p+p{margin-top:12px}
+
+@media (max-width:640px){
+  .wrap{padding:0 18px 64px}
+  .lrow{grid-template-columns:1fr;gap:8px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow"><span class="dot"></span><span class="lab">USD Rates &middot; 25 Aug 2026 &middot; post-audit</span></div>
+  <h1>Talk, data, nothing</h1>
+  <p class="standfirst">One thing about the Warsh regime is solidly measurable: the market is far less decided about the policy path than it was under guidance. Almost everything I first built on top of that did not survive an adversarial audit.</p>
+
+  <div class="correction">
+    <span class="lab">Correction</span>
+    <p>An earlier version of this page said the trader was wrong on both of his testable points. <strong>He wasn&rsquo;t &mdash; and one of those tests couldn&rsquo;t have answered him either way.</strong> Twelve independent audits were run against seven findings; eight came back refuted, including the headline. What follows is the version that survived.</p>
+  </div>
+
+  <div class="claimbox">
+    <p><span class="who">The claim</span>&ldquo;Under Warsh, forward guidance is gone, so each speaker event carries more marginal information than under the old regime.&rdquo;</p>
+    <p><span class="who">The pushback</span>&ldquo;Pure optionality &mdash; he gets to decide what is real news and just stays silent when it suits him. No information is information!&rdquo;</p>
+  </div>
+</header>
+
+<section style="margin-top:56px">
+  <div class="kicker"><span class="lab">The ledger</span></div>
+  <h2>What held, and what fell over</h2>
+  <div class="ledger">
+    <div class="lrow"><div><span class="chip ok">Holds</span></div><div class="txt"><b>The market is far less decided about the path.</b> Front-meeting distance from an all-or-nothing outcome, <span class="num">3.21&rarr;8.29</span>bp. Exceeds <em>all</em> <span class="num">1,358</span> sliding 49-session guidance windows; block <span class="num">p&thinsp;&asymp;&thinsp;0.034</span>. Independently recomputed from raw ZQ settles.</div></div>
+    <div class="lrow"><div><span class="chip ok">Holds</span></div><div class="txt"><b>The obvious statistic on this data is fake.</b> A naive era dummy reports <span class="num">t&thinsp;5.6</span>, <span class="num">p&thinsp;&lt;&thinsp;0.0001</span>. A sliding placebo through the guidance era reaches <span class="num">|t|&thinsp;6.8</span> on windows where nothing happened. Honest <span class="num">p&thinsp;&asymp;&thinsp;0.04&thinsp;&plusmn;&thinsp;0.03</span>.</div></div>
+    <div class="lrow"><div><span class="chip weak">Not significant</span></div><div class="txt"><b>Talk resolves less, data resolves more.</b> Direction is consistent across both corpora, but <span class="num">53%</span> of the five-day change is just minus its own starting level, and event days happened to start lower. Controlling for that: <span class="num">+0.44bp, p&thinsp;0.26</span>.</div></div>
+    <div class="lrow"><div><span class="chip dead">Refuted</span></div><div class="txt"><b>&ldquo;Measured within the window, so it can&rsquo;t be a period effect.&rdquo;</b> False. The same contrast is positive in <span class="num">37&ndash;39%</span> of arbitrary guidance-era windows, and was positive in the summer of 2022 with guidance fully in force.</div></div>
+    <div class="lrow"><div><span class="chip dead">Refuted</span></div><div class="txt"><b>&ldquo;Scheduled events up, discretionary down &mdash; the opposite of selection.&rdquo;</b> A mean-only artefact. On medians <em>both</em> classes are up. The scheduled result also leans on one testimony whose window contains a four-way dovish CPI miss.</div></div>
+    <div class="lrow"><div><span class="chip dead">Refuted</span></div><div class="txt"><b>&ldquo;The strip moves less when he&rsquo;s quiet.&rdquo;</b> Three of the five Warsh &ldquo;silence&rdquo; gaps contained a set-piece &mdash; including the July FOMC decision. Season-matched, the difference is <span class="num">1.760</span> vs <span class="num">1.757</span>. Zero.</div></div>
+    <div class="lrow"><div><span class="chip dead">Refuted</span></div><div class="txt"><b>&ldquo;&hellip;with a smaller standard deviation.&rdquo;</b> I quoted the four-meeting series next to a front-meeting sentence. Like-for-like the Warsh front sd sits at the <span class="num">49th</span> percentile of matched windows &mdash; dead average.</div></div>
+    <div class="lrow"><div><span class="chip weak">Can&rsquo;t answer</span></div><div class="txt"><b>&ldquo;He isn&rsquo;t speaking less.&rdquo;</b> The test counted <span class="num">11</span> FOMC speakers. His claim is about one man. Warsh himself: <span class="num">2&ndash;3</span> appearances against Powell&rsquo;s typical <span class="num">3&ndash;4</span> &mdash; too few to distinguish anything.</div></div>
+  </div>
+</section>
+
+<!-- 1 -->
+<section>
+  <div class="kicker"><span class="lab">01 &middot; The finding that held</span></div>
+  <h2>Guidance ended on a specific Wednesday</h2>
+  <p class="finding">How far the priced front meeting sits from an all-or-nothing outcome. <span class="num">0</span> means the market has decided; <span class="num">12.5</span>bp &mdash; half a click &mdash; is as undecided as a single meeting gets. For the two weeks before 17 June it sat at <span class="num">0.3&ndash;0.5</span>. It has not been below <span class="num">4.8</span> since.</p>
+
+  <div class="figure">
+    <div class="figtitle">Distance from a decided outcome, front FOMC meeting</div>
+    <div class="figsub">Weekly mean, bp. Derived from the ZQ meeting ladder. Higher = less decided.</div>
+    <div class="chartbox"><svg id="c1" viewBox="0 0 960 320" role="img" aria-label="Line chart of front-meeting distance from a decided outcome, weekly from March 2025 to August 2026, showing a step change at 17 June 2026"></svg></div>
+    <div class="legend">
+      <span class="item"><span class="sw" style="background:var(--guid)"></span>Guidance era</span>
+      <span class="item"><span class="sw" style="background:var(--warsh)"></span>Warsh, no guidance</span>
+    </div>
+    <p class="note">Era means: <span class="num">3.21</span>bp under guidance against <span class="num">8.29</span>bp under Warsh. This is the one result that survived every attack &mdash; it holds under season-matching, after adjusting for how close the window sits to its next meeting, and against a placebo that slides a matched 49-session window through the whole guidance era: Warsh exceeds all <span class="num">1,358</span> of them.</p>
+    <p class="note">Two honest limits. The <span class="num">49</span> Warsh sessions are only <span class="num">two</span> distinct front meetings, against 44 on the other side. And a reading of <span class="num">8.3</span> of a possible <span class="num">12.5</span> is about a <span class="num">1-in-3</span> chance of a move, not a coin toss &mdash; the priced move here is a <em>hike</em>.</p>
+  </div>
+</section>
+
+<!-- 2 -->
+<section>
+  <div class="kicker"><span class="lab">02 &middot; The finding that shrank</span></div>
+  <h2>Talk, data, nothing</h2>
+  <p class="finding">Sort every session into three kinds &mdash; <strong>Fed talk</strong>, a <strong>major US data release</strong>, and <strong>nothing</strong> &mdash; and ask what happened to that uncertainty over the following week. The raw picture is striking: under guidance talk was the best resolver on the board, and under Warsh it is the only one that resolves nothing. The raw picture is also mostly an artefact.</p>
+
+  <div class="figure">
+    <div class="figtitle">What each kind of day does to uncertainty over the next five sessions</div>
+    <div class="figsub">Raw group means, bp. Left of zero = the market became more decided. JPM corpus.</div>
+    <div class="chartbox"><svg id="c2" viewBox="0 0 960 330" role="img" aria-label="Dumbbell chart of guidance versus Warsh era for talk, data and nothing days"></svg></div>
+    <div class="legend">
+      <span class="item"><span class="sw" style="background:var(--guid)"></span>Guidance era</span>
+      <span class="item"><span class="sw" style="background:var(--warsh)"></span>Warsh era</span>
+    </div>
+    <p class="note"><strong>Why this shrinks.</strong> Inside the Warsh window the five-day change is <span class="num">53%</span> explained by minus its own starting level (slope <span class="num">&minus;1.03</span>, <span class="num">t&thinsp;&minus;6.8</span>) &mdash; the measure mean-reverts hard. Event days happened to start <span class="num">0.38bp</span> lower than non-event days, which mechanically buys them a bigger rise. Control for the starting level and the event-vs-non-event contrast falls from <span class="num">+0.82</span> to <span class="num">+0.44bp</span>, <span class="num">p&thinsp;0.26</span>. The guidance-era leg collapses too, to <span class="num">&minus;0.11</span>, <span class="num">p&thinsp;0.31</span>.</p>
+    <p class="note">So the direction is real enough to keep looking at and nowhere near strong enough to trade. The claim I made earlier &mdash; that measuring inside one window made this immune to a period effect &mdash; is simply wrong: the same contrast is positive in <span class="num">37&ndash;39%</span> of arbitrary guidance-era windows.</p>
+    <details><summary>Table view</summary>
+      <table><thead><tr><th>Day type</th><th>Guidance</th><th>n</th><th>Warsh</th><th>n</th></tr></thead>
+      <tbody>
+        <tr><td>Fed talk</td><td>&minus;0.50</td><td>561</td><td>+0.09</td><td>19</td></tr>
+        <tr><td>Data release</td><td>&minus;0.24</td><td>420</td><td>&minus;1.41</td><td>6</td></tr>
+        <tr><td>Nothing</td><td>&minus;0.24</td><td>424</td><td>&minus;0.51</td><td>19</td></tr>
+      </tbody></table>
+    </details>
+  </div>
+</section>
+
+<!-- 3 -->
+<section>
+  <div class="kicker"><span class="lab">03 &middot; The finding that reversed</span></div>
+  <h2>One statistic said what I wanted. The other didn&rsquo;t.</h2>
+  <p class="finding">The strongest point I had for the claim was that the events Warsh <em>cannot decline</em> lit up while the ones he <em>chooses</em> did not &mdash; the reverse of what a &ldquo;he picks his moments&rdquo; story predicts. That result exists only on the mean. On the median, both classes rise, and the asymmetry disappears.</p>
+
+  <div class="figure">
+    <div class="figtitle">Size of the repricing, mean against median</div>
+    <div class="figsub">Absolute change in the priced path across the event window, bp. Three of these four lines rise.</div>
+    <div class="chartbox"><svg id="c3" viewBox="0 0 960 320" role="img" aria-label="Slope chart comparing mean and median event responses across eras for scheduled and discretionary events"></svg></div>
+    <div class="legend">
+      <span class="item"><span class="sw" style="background:var(--guid)"></span>Guidance era</span>
+      <span class="item"><span class="sw" style="background:var(--warsh)"></span>Warsh era</span>
+    </div>
+    <p class="note">The discretionary <em>mean</em> is the only one of the four that falls, and it is the one the earlier argument rested on. With six scheduled events and a handful of speeches, the mean is a hostage to one observation &mdash; and dropping the <span class="num">14 Jul</span> testimony, whose window contains a four-way dovish CPI miss 90 minutes earlier, takes the scheduled figure from <span class="num">4.66</span> to <span class="num">3.39</span>, below both baselines.</p>
+  </div>
+</section>
+
+<!-- 4 -->
+<section>
+  <div class="kicker"><span class="lab">04 &middot; The test that couldn&rsquo;t answer</span></div>
+  <h2>I counted the committee. He was talking about one man.</h2>
+  <p class="finding">&ldquo;He stays silent when it suits him&rdquo; is a claim about <strong>Warsh</strong>. The arrival-rate test counted every scored FOMC speaker &mdash; eleven of them in the window. It could not have detected Warsh going completely silent, because ten other people would have kept the count up.</p>
+
+  <div class="figure">
+    <div class="figtitle">Chair appearances in the 18 June &ndash; 25 August window</div>
+    <div class="figsub">The sitting Fed chair only. Powell through 2025, Warsh in 2026.</div>
+    <div class="chartbox"><svg id="c4" viewBox="0 0 960 300" role="img" aria-label="Grouped bars of chair-only speech counts by year for two corpora"></svg></div>
+    <div class="legend">
+      <span class="item"><span class="sw" style="background:var(--guid)"></span>Powell</span>
+      <span class="item"><span class="sw" style="background:var(--warsh)"></span>Warsh</span>
+    </div>
+    <p class="note">Warsh made <span class="num">2</span> (JPM) or <span class="num">3</span> (FedLock) appearances against Powell&rsquo;s typical <span class="num">3&ndash;4</span>. That is directionally consistent with speaking a little less and <em>nowhere near</em> enough to establish it &mdash; the cell has <span class="num">34&ndash;52%</span> power against the deficit it observes. The committee-wide number I reported earlier is a fact about the committee, not about the chair.</p>
+  </div>
+</section>
+
+<!-- 5 -->
+<section>
+  <div class="kicker"><span class="lab">05 &middot; The better hypothesis <span style="color:var(--weak)">&middot; exploratory</span></span></div>
+  <h2>&ldquo;It&rsquo;s a vote tallying exercise&rdquo;</h2>
+  <p class="finding">Jim Bianco&rsquo;s reading, on MacroVoices the day after the July meeting: the chair used to whip the committee, so Fed-watching was chair-parsing. Warsh doesn&rsquo;t, three members dissented in favour of a hike, and <em>&ldquo;Fed watching is not a game of parsing the chairman&rsquo;s words&hellip; it&rsquo;s a vote tallying exercise.&rdquo;</em> That predicts the chair carries <strong>less</strong> and every other voter carries <strong>more</strong> &mdash; and if both moved in opposite directions, pooling them into one &ldquo;talk&rdquo; bucket, which is what &#x00a7;2 did, would wash the effect to exactly the nothing it found.</p>
+
+  <div class="figure">
+    <div class="figtitle">Who was speaking, and what happened next</div>
+    <div class="figsub">Split by whether the sitting chair spoke that day. Two panels: the two measures share no scale. JPM corpus.</div>
+    <div class="chartbox"><svg id="c5" viewBox="0 0 960 344" role="img" aria-label="Two panels comparing price impact and resolution for chair, committee and quiet days across eras"></svg></div>
+    <div class="legend">
+      <span class="item"><span class="sw" style="background:var(--guid)"></span>Guidance era</span>
+      <span class="item"><span class="sw" style="background:var(--warsh)"></span>Warsh era</span>
+    </div>
+    <p class="note"><strong>His description of the old regime is confirmed, and it is the best-powered thing on this page after &#x00a7;1.</strong> Under guidance the chair moved the strip <span class="num">3.03</span>bp against the committee&rsquo;s <span class="num">1.87</span> and a quiet day&rsquo;s <span class="num">1.73</span>, and resolved the most <span class="num">(&minus;0.78</span> vs <span class="num">&minus;0.52</span> vs <span class="num">&minus;0.25)</span>. On <span class="num">59</span>, <span class="num">387</span> and <span class="num">959</span> days. The chair really was the event.</p>
+    <p class="note"><strong>The prediction for the new regime does not show up.</strong> Committee speeches do not become better resolvers &mdash; they become the <em>worst</em>, at <span class="num">&minus;0.12</span> against a quiet day&rsquo;s <span class="num">&minus;0.46</span>. What did change is the chair&rsquo;s price impact, from <span class="num">3.03</span> to <span class="num">5.11</span>bp, while his resolution collapsed. Moves more, tells less &mdash; now concentrated in exactly the person Bianco says stopped answering.</p>
+    <p class="note"><strong>And the dissenters go the other way.</strong> On the four names Bianco calls out, the path becomes <em>less</em> decided after they speak &mdash; <span class="num">+0.70</span> (JPM) and <span class="num">+1.00</span> (FedLock) against other members&rsquo; <span class="num">&minus;0.95</span> and <span class="num">&minus;0.42</span>. Which may be the point rather than a contradiction: a dissenter reveals <em>disagreement</em>, and disagreement widens the distribution instead of narrowing it. That is information in one sense and the opposite of resolution in the other &mdash; the same wedge this whole page keeps running into.</p>
+    <p class="note"><strong>Power.</strong> Two chair days in the Warsh window. Twelve committee days, six dissenter days. The guidance side is solid; the Warsh side is not a test, and this hypothesis arrived after the outcomes were seen, so it is not scored against the pre-registration.</p>
+  </div>
+
+  <div class="measure" style="margin-top:26px;display:flex;flex-direction:column;gap:16px">
+    <p><strong>Where it does earn its place: it supplies the mechanism for the one finding that held.</strong> If the chair no longer whips the committee, the distribution of outcomes genuinely widens &mdash; which is exactly the <span class="num">3.21&rarr;8.29</span> in &#x00a7;1. The surviving result had no causal story until this one.</p>
+    <p>And it says something actionable that does not depend on any of the weak numbers: if it really is a vote-tallying exercise, <strong>the informative event is the meeting, where votes are revealed &mdash; not the speeches.</strong> That fits what this desk already measured elsewhere: the front-month risk premium survives to the day before and dies <em>on</em> the decision, <span class="num">+4.47</span>bp.</p>
+    <p>The clean test of BoE-fication needs no speech corpus at all: <strong>count the dissents.</strong> Three at the July meeting is a hard countable fact, and dissent frequency under Warsh against Powell would settle the mechanism directly. This repo has no vote record &mdash; that is the gap worth closing next.</p>
+  </div>
+</section>
+
+<!-- close -->
+<section>
+  <div class="kicker"><span class="lab">06 &middot; Where it leaves the argument</span></div>
+  <h2>What to say now</h2>
+  <div class="measure" style="margin-top:16px;display:flex;flex-direction:column;gap:16px">
+    <p>The two positions are still about different terms of the same thing. Information flow is the arrival rate of events times the information per event, plus everything arriving outside events. The claim is about <em>information per event</em>; the pushback is about the <em>arrival rate</em> and the <em>outside channel</em>. Both can be true at once &mdash; so even a clean finding on one would not have settled the other.</p>
+    <p>What can be said with confidence: <strong>the market is markedly less decided about the path than it was under guidance, and that is not a summer artefact, a proximity artefact, or a fluke of one window.</strong></p>
+    <p>What cannot: whether Fed communication has stopped carrying information. The direction of every test points that way and not one of them clears its own null. <strong>The honest position is that the trader&rsquo;s objection stands unrefuted</strong> &mdash; not that he is right, but that nothing here defeats him, and the test that looked like it did was measuring the wrong people.</p>
+    <p>For the book, that argues for patience rather than a position. The one tradeable consequence that follows from the surviving finding alone is about <em>distribution</em>, not direction: a path priced this far from a decided outcome is a path where the front meetings carry real two-way risk. Whether event volatility is mispriced against that is a separate question, and it needs the SR3 surface rather than the ladder.</p>
+  </div>
+</section>
+
+<footer>
+  <p><strong>Method.</strong> Uncertainty is measured as distance from an all-or-nothing outcome on the priced ZQ meeting ladder &mdash; <span class="num">|jump &minus; 25&times;round(jump/25)|</span> &mdash; because the Fed moves in 25bp clicks, so a meeting priced at a multiple of 25 is one the market has decided. Every window reads a <em>fixed</em> set of meetings chosen strictly after the window closes, so no measurement spans a meeting that resolved inside it. Both speech corpora are reported throughout.</p>
+  <p><strong>What the audit changed.</strong> A prediction table was fixed before any outcome was computed. Twelve independent adversarial reviews were then run against seven findings, each told to refute rather than confirm; eight came back refuted and each counter-claim was recomputed here before being accepted. That process found a genuine code defect &mdash; silence was defined from the speech book, which does not contain the FOMC decision, so three of five &ldquo;silence&rdquo; gaps contained a set-piece &mdash; now fixed and covered by a test.</p>
+  <p><strong>Limits.</strong> The Warsh era is 2.3 months: 23 events, six of them scheduled, six data days, and two distinct front meetings. Nothing here is a regime property yet. The scheduled-event cell becomes a real test around <span class="num">February 2027</span>. Whether the regime lasts is not testable on 2.3 months and is not claimed.</p>
+</footer>
+
+</div>
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+"use strict";
+var NS="http://www.w3.org/2000/svg";
+function el(n,a){var e=document.createElementNS(NS,n);for(var k in a){if(a[k]!=null)e.setAttribute(k,a[k]);}return e;}
+function txt(x,y,s,cls,anchor){var t=el("text",{x:x,y:y,class:cls,"text-anchor":anchor||"start"});t.textContent=s;return t;}
+
+var tip=document.getElementById("tip");
+function bind(node,label){
+  node.addEventListener("mouseenter",function(){tip.textContent=label;tip.style.opacity="1";});
+  node.addEventListener("mousemove",function(e){
+    var w=tip.offsetWidth,h=tip.offsetHeight,x=e.clientX+14,y=e.clientY-h-10;
+    if(x+w>window.innerWidth-8)x=e.clientX-w-14;
+    if(y<8)y=e.clientY+16;
+    tip.style.left=x+"px";tip.style.top=y+"px";
+  });
+  node.addEventListener("mouseleave",function(){tip.style.opacity="0";});
+}
+var GUID="var(--guid)", WARSH="var(--warsh)";
+
+/* ===== 1. weekly front-meeting distance ===== */
+var W1=[["2025-03-07",2.239],["2025-03-14",1.033],["2025-03-21",2.938],["2025-03-28",4.216],["2025-04-04",5.704],["2025-04-11",8.184],["2025-04-18",3.72],["2025-04-25",2.976],["2025-05-02",1.962],["2025-05-09",2.828],["2025-05-16",1.771],["2025-05-23",1.26],["2025-05-30",0.514],["2025-06-06",0.377],["2025-06-13",0.362],["2025-06-20",2.012],["2025-06-27",5.345],["2025-07-04",4.009],["2025-07-11",1.603],["2025-07-18",1.176],["2025-07-25",1.069],["2025-08-01",5.267],["2025-08-08",3.143],["2025-08-15",3.25],["2025-08-22",5.929],["2025-08-29",5.071],["2025-09-05",1.699],["2025-09-12",2.603],["2025-09-19",1.774],["2025-09-26",1.861],["2025-10-03",0.627],["2025-10-10",0.552],["2025-10-17",0.796],["2025-10-24",0.389],["2025-10-31",5.377],["2025-11-07",9.289],["2025-11-14",10.209],["2025-11-21",8.875],["2025-11-28",6.823],["2025-12-05",0.565],["2025-12-12",3.795],["2025-12-19",6.315],["2025-12-26",4.363],["2026-01-02",4.191],["2026-01-09",3.215],["2026-01-16",1.033],["2026-01-23",1.206],["2026-01-30",2.452],["2026-02-06",3.543],["2026-02-13",2.989],["2026-02-20",1.661],["2026-02-27",1.107],["2026-03-06",0.729],["2026-03-13",0.339],["2026-03-20",1.121],["2026-03-27",1.5],["2026-04-03",0.268],["2026-04-10",0.429],["2026-04-17",0.214],["2026-04-24",0.107],["2026-05-01",0.643],["2026-05-08",1.179],["2026-05-15",1.179],["2026-05-22",1.179],["2026-05-29",0.964],["2026-06-05",0.288],["2026-06-12",0.509],["2026-06-19",5.847],["2026-06-26",8.746],["2026-07-03",6.643],["2026-07-10",7.362],["2026-07-17",4.816],["2026-07-24",7.639],["2026-07-31",9.488],["2026-08-07",11.1],["2026-08-14",9.8],["2026-08-21",8.1]];
+var CUT="2026-06-18";
+
+(function(){
+  var s=document.getElementById("c1"); if(!s)return;
+  var W=960,H=320,L=44,R=152,T=18,B=34;
+  var iw=W-L-R, ih=H-T-B, n=W1.length;
+  var X=function(i){return L+(i/(n-1))*iw;};
+  var Y=function(v){return T+ih-(v/12.5)*ih;};
+
+  [0,2.5,5,7.5,10,12.5].forEach(function(g){
+    s.appendChild(el("line",{x1:L,x2:L+iw,y1:Y(g),y2:Y(g),class:"grid"}));
+    s.appendChild(txt(L-9,Y(g)+3.6,g.toFixed(1),"t-ax","end"));
+  });
+  s.appendChild(el("line",{x1:L,x2:L+iw,y1:Y(0),y2:Y(0),class:"axis"}));
+
+  var ci=0; for(var i=0;i<n;i++){ if(W1[i][0]>=CUT){ci=i;break;} }
+  function path(a,b){var d="";for(var i=a;i<=b;i++){d+=(i===a?"M":"L")+X(i).toFixed(1)+" "+Y(W1[i][1]).toFixed(1);}return d;}
+  s.appendChild(el("rect",{x:X(ci-1),y:T,width:L+iw-X(ci-1),height:ih,fill:"var(--warsh-soft)"}));
+  s.appendChild(el("path",{d:path(0,ci-1),fill:"none",stroke:GUID,"stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"}));
+  s.appendChild(el("path",{d:path(ci-1,n-1),fill:"none",stroke:WARSH,"stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"}));
+
+  s.appendChild(el("line",{x1:X(ci-1),x2:X(ci-1),y1:T-6,y2:T+ih,stroke:"var(--ink-3)","stroke-width":1,"stroke-dasharray":"3 3"}));
+  s.appendChild(txt(X(ci-1)-7,T+4,"17 Jun \u2014 guidance dropped","t-ann","end"));
+  s.appendChild(el("line",{x1:L,x2:L+iw,y1:Y(12.5),y2:Y(12.5),stroke:"var(--ink-3)","stroke-width":1,"stroke-dasharray":"2 4"}));
+  s.appendChild(txt(L+iw+10,Y(12.5)+4,"12.5 = most undecided","t-ann"));
+  s.appendChild(txt(L+iw+10,Y(0)+4,"0 = fully decided","t-ann"));
+
+  var last=n-1;
+  s.appendChild(el("circle",{cx:X(last),cy:Y(W1[last][1]),r:4.5,fill:WARSH,stroke:"var(--surface)","stroke-width":2}));
+  s.appendChild(txt(X(last)+10,Y(W1[last][1])+4,"8.1","t-val"));
+
+  ["2025-04-04","2025-08-01","2025-12-05","2026-04-03","2026-08-07"].forEach(function(d){
+    for(var i=0;i<n;i++){ if(W1[i][0]===d){ s.appendChild(txt(X(i),T+ih+20,d.slice(2,7),"t-ax","middle")); break; } }
+  });
+
+  for(var i=0;i<n;i++){(function(i){
+    var r=el("rect",{x:X(i)-iw/(n-1)/2,y:T,width:iw/(n-1),height:ih,fill:"transparent"});
+    var c=el("circle",{cx:X(i),cy:Y(W1[i][1]),r:0,fill:W1[i][0]>=CUT?WARSH:GUID});
+    r.addEventListener("mouseenter",function(){c.setAttribute("r",4);});
+    r.addEventListener("mouseleave",function(){c.setAttribute("r",0);});
+    bind(r,"w/e "+W1[i][0]+"\n"+W1[i][1].toFixed(2)+"bp from decided");
+    s.appendChild(c); s.appendChild(r);
+  })(i);}
+})();
+
+/* ===== 2. dumbbell ===== */
+(function(){
+  var s=document.getElementById("c2"); if(!s)return;
+  var rows=[
+    {k:"Fed talk", sub:"any Fed communication", g:-0.50, w:0.09, ng:561, nw:19},
+    {k:"Data release", sub:"high-impact US print", g:-0.24, w:-1.41, ng:420, nw:6},
+    {k:"Nothing", sub:"quiet session", g:-0.24, w:-0.51, ng:424, nw:19}
+  ];
+  var W=960,H=330,L=196,R=150,T=44,B=52;
+  var iw=W-L-R, ih=H-T-B, lo=-1.65, hi=0.55;
+  var X=function(v){return L+((v-lo)/(hi-lo))*iw;};
+  var rowY=function(i){return T+ih*(i+0.5)/rows.length;};
+
+  s.appendChild(txt(X(lo)+4,T-22,"\u2190 becomes MORE decided","t-ann"));
+  s.appendChild(txt(X(hi)-4,T-22,"becomes LESS decided \u2192","t-ann","end"));
+
+  [-1.5,-1.0,-0.5,0,0.5].forEach(function(g){
+    s.appendChild(el("line",{x1:X(g),x2:X(g),y1:T-6,y2:T+ih,class:g===0?"zero":"grid"}));
+    s.appendChild(txt(X(g),T+ih+20,(g>0?"+":"")+g.toFixed(1),"t-ax","middle"));
+  });
+  s.appendChild(txt(L+iw/2,T+ih+40,"change in distance-from-decided over the next 5 sessions, bp","t-ax","middle"));
+
+  rows.forEach(function(r,i){
+    var y=rowY(i);
+    s.appendChild(txt(L-18,y-1,r.k,"t-cat","end"));
+    s.appendChild(txt(L-18,y+14,r.sub,"t-ax","end"));
+    var x1=X(r.g), x2=X(r.w), dir=x2>x1?1:-1;
+    s.appendChild(el("line",{x1:x1,x2:x2-dir*9,y1:y,y2:y,stroke:"var(--ink-3)","stroke-width":1.5,opacity:.45}));
+    var ax=x2-dir*9;
+    s.appendChild(el("path",{d:"M"+ax+" "+(y-4)+"L"+(ax+dir*7)+" "+y+"L"+ax+" "+(y+4)+"Z",fill:"var(--ink-3)",opacity:.55}));
+    var dg=el("circle",{cx:x1,cy:y,r:7,fill:GUID,stroke:"var(--surface)","stroke-width":2});
+    var dw=el("circle",{cx:x2,cy:y,r:7,fill:WARSH,stroke:"var(--surface)","stroke-width":2});
+    bind(dg,r.k+" \u2014 guidance\n"+r.g.toFixed(2)+"bp  (n "+r.ng+")");
+    bind(dw,r.k+" \u2014 Warsh\n"+(r.w>0?"+":"")+r.w.toFixed(2)+"bp  (n "+r.nw+")");
+    s.appendChild(dg); s.appendChild(dw);
+    s.appendChild(txt(x1,y-15,r.g.toFixed(2),"t-val","middle"));
+    s.appendChild(txt(x2,y-15,(r.w>0?"+":"")+r.w.toFixed(2),"t-val","middle"));
+  });
+  var yt=rowY(0);
+  s.appendChild(txt(X(0.09)+22,yt+3,"raw gap +0.82bp,","t-ann"));
+  s.appendChild(txt(X(0.09)+22,yt+18,"+0.44 controlled","t-ann"));
+  s.appendChild(txt(X(0.09)+22,yt+33,"(p 0.26)","t-ann"));
+})();
+
+/* ===== 3. mean vs median slope ===== */
+(function(){
+  var s=document.getElementById("c3"); if(!s)return;
+  var W=960,H=320,L=150,R=210,T=40,B=54;
+  var iw=W-L-R, ih=H-T-B, lo=1.2, hi=5.0;
+  var xg=L+iw*0.16, xw=L+iw*0.84;
+  var Y=function(v){return T+ih-((v-lo)/(hi-lo))*ih;};
+  var lines=[
+    {k:"Scheduled \u2014 mean",   g:4.047, w:4.662},
+    {k:"Scheduled \u2014 median", g:2.394, w:3.766},
+    {k:"Discretionary \u2014 median", g:1.653, w:2.107},
+    {k:"Discretionary \u2014 mean",   g:2.577, w:2.356}
+  ];
+  [2,3,4,5].forEach(function(g){
+    s.appendChild(el("line",{x1:L,x2:L+iw,y1:Y(g),y2:Y(g),class:"grid"}));
+    s.appendChild(txt(L-10,Y(g)+3.6,g.toFixed(0),"t-ax","end"));
+  });
+  s.appendChild(txt(L-10,T-12,"bp","t-ax","end"));
+  s.appendChild(txt(xg,T+ih+24,"Guidance","t-cat","middle"));
+  s.appendChild(txt(xw,T+ih+24,"Warsh","t-cat","middle"));
+
+  lines.forEach(function(d){
+    var down=d.w<d.g, col=down?WARSH:"var(--ink-3)";
+    s.appendChild(el("line",{x1:xg,x2:xw,y1:Y(d.g),y2:Y(d.w),
+      stroke:col,"stroke-width":down?2.4:1.6,opacity:down?1:.5}));
+    var a=el("circle",{cx:xg,cy:Y(d.g),r:6,fill:GUID,stroke:"var(--surface)","stroke-width":2});
+    var b=el("circle",{cx:xw,cy:Y(d.w),r:6,fill:WARSH,stroke:"var(--surface)","stroke-width":2});
+    bind(a,d.k+" \u2014 guidance\n"+d.g.toFixed(3)+"bp");
+    bind(b,d.k+" \u2014 Warsh\n"+d.w.toFixed(3)+"bp");
+    s.appendChild(a); s.appendChild(b);
+  });
+  // the guidance endpoints 2.58 and 2.39 are 11px apart -- same treatment
+  var gorder=lines.slice().sort(function(p,q){return q.g-p.g;});
+  var gprev=-1e9;
+  gorder.forEach(function(d){
+    var yTrue=Y(d.g), y=Math.max(yTrue,gprev+15); gprev=y;
+    if(Math.abs(y-yTrue)>1.5){
+      s.appendChild(el("line",{x1:xg-8,x2:xg-22,y1:yTrue,y2:y-4,
+        stroke:"var(--ink-3)","stroke-width":1,opacity:.5}));
+    }
+    s.appendChild(txt(xg-26,y+4,d.g.toFixed(2),"t-val","end"));
+  });
+  // The two discretionary endpoints are 0.25bp apart, which is ~15px here, so
+  // their name labels overlap. Lay the right-hand labels out top-down with a
+  // minimum spacing and draw a leader where a label had to move off its point.
+  var order=lines.slice().sort(function(p,q){return q.w-p.w;});
+  var prev=-1e9;
+  order.forEach(function(d){
+    var yTrue=Y(d.w), y=Math.max(yTrue, prev+17);
+    prev=y;
+    if(Math.abs(y-yTrue)>1.5){
+      s.appendChild(el("line",{x1:xw+8,x2:xw+26,y1:yTrue,y2:y-4,
+        stroke:"var(--ink-3)","stroke-width":1,opacity:.5}));
+    }
+    var down=d.w<d.g;
+    s.appendChild(txt(xw+12,y+4,d.w.toFixed(2),"t-val"));
+    s.appendChild(txt(xw+52,y+4,d.k,down?"t-cat":"t-ann"));
+  });
+  // placed after the whole stack so it cannot land on the label below it
+  s.appendChild(txt(xw+52,prev+21,"the only one that falls","t-ann"));
+})();
+
+/* ===== 4. chair-only counts ===== */
+(function(){
+  var s=document.getElementById("c4"); if(!s)return;
+  var W=960,H=300,L=150,R=54,T=30,B=64;
+  var iw=W-L-R, ih=H-T-B, hi=5;
+  var Y=function(v){return T+ih-(v/hi)*ih;};
+  var years=[2021,2022,2023,2024,2025,2026];
+  var data={jpm:[0,1,4,3,4,2], fedlock:[3,2,4,3,4,3]};
+  [0,1,2,3,4,5].forEach(function(g){
+    s.appendChild(el("line",{x1:L,x2:L+iw,y1:Y(g),y2:Y(g),class:"grid"}));
+    s.appendChild(txt(L-10,Y(g)+3.6,g,"t-ax","end"));
+  });
+  s.appendChild(el("line",{x1:L,x2:L+iw,y1:Y(0),y2:Y(0),class:"axis"}));
+  s.appendChild(txt(L-10,T-10,"appearances","t-ax","end"));
+
+  var gw=iw/years.length, bw=Math.min(46,gw/2-6);
+  years.forEach(function(yr,i){
+    var cx=L+gw*(i+0.5);
+    [["JPM",data.jpm[i],-1],["FedLock",data.fedlock[i],1]].forEach(function(b){
+      var col=yr===2026?WARSH:GUID;
+      var x=cx+b[2]*(bw/2+3)-bw/2, y=Y(b[1]);
+      var r=el("rect",{x:x,y:y,width:bw,height:Math.max(Y(0)-y,1.5),rx:3,fill:col,
+        opacity:b[0]==="JPM"?1:.55});
+      bind(r,(yr===2026?"Warsh":"Powell")+" "+yr+"\n"+b[0]+": "+b[1]+" appearances");
+      s.appendChild(r);
+      s.appendChild(txt(x+bw/2,y-8,b[1],"t-val","middle"));
+    });
+    s.appendChild(txt(cx,T+ih+22,yr,"t-cat","middle"));
+    s.appendChild(txt(cx,T+ih+38,yr===2026?"Warsh":"Powell","t-ax","middle"));
+  });
+  s.appendChild(txt(L,T+ih+60,"solid = JPM corpus   \u00b7   pale = FedLock corpus","t-ax"));
+})();
+
+/* ===== 5. chair vs committee vs quiet, two panels ===== */
+(function(){
+  var s=document.getElementById("c5"); if(!s)return;
+  var W=960,H=344,T=54,B=98;
+  var ih=H-T-B, pw=372, gap=118, L0=76, L1=L0+pw+gap;
+  var CATS=["Chair","Committee","Quiet day"];
+
+  function panel(x0,title,sub,g,w,lo,hi,ticks,fmt,zero,ns){
+    var Y=function(v){return T+ih-((v-lo)/(hi-lo))*ih;};
+    s.appendChild(txt(x0,T-32,title,"t-cat"));
+    s.appendChild(txt(x0,T-16,sub,"t-ax"));
+    ticks.forEach(function(t){
+      s.appendChild(el("line",{x1:x0,x2:x0+pw,y1:Y(t),y2:Y(t),
+        class:(zero&&Math.abs(t)<1e-9)?"zero":"grid"}));
+      s.appendChild(txt(x0-9,Y(t)+3.6,fmt(t),"t-ax","end"));
+    });
+    var base=zero?Y(0):Y(lo), step=pw/3, bw=42;
+    CATS.forEach(function(c,i){
+      var cx=x0+step*(i+0.5);
+      [[g[i],GUID,-1,"Guidance"],[w[i],WARSH,1,"Warsh"]].forEach(function(b){
+        var x=cx+b[2]*(bw/2+3)-bw/2, y=Y(b[0]);
+        var top=Math.min(y,base), h=Math.max(Math.abs(y-base),1.5);
+        var r=el("rect",{x:x,y:top,width:bw,height:h,rx:3,fill:b[1]});
+        bind(r,c+" \u2014 "+b[3]+"\n"+fmt(b[0])+"   n "+ns[b[3]][i]);
+        s.appendChild(r);
+        s.appendChild(txt(x+bw/2,y<base?top-8:top+h+17,fmt(b[0]),"t-val","middle"));
+      });
+      s.appendChild(txt(cx,T+ih+26,c,"t-cat","middle"));
+      s.appendChild(txt(cx,T+ih+42,"n "+ns.Guidance[i]+" / "+ns.Warsh[i],"t-ax","middle"));
+    });
+  }
+
+  var NS={Guidance:[59,387,959], Warsh:[2,12,30]};
+  panel(L0,"How much the strip MOVES","absolute daily path change, bp",
+    [3.03,1.87,1.73],[5.11,1.90,1.82],0,5.6,[0,1,2,3,4,5],
+    function(v){return v.toFixed(2);},false,NS);
+  panel(L1,"How much it RESOLVES","change in distance-from-decided, bp",
+    [-0.78,-0.52,-0.25],[-0.56,-0.12,-0.46],-0.9,0.1,[-0.8,-0.6,-0.4,-0.2,0],
+    function(v){return (v>0?"+":"")+v.toFixed(2);},true,NS);
+
+  s.appendChild(txt(L0+pw/2,H-14,"the chair's move nearly doubles","t-ann","middle"));
+  s.appendChild(txt(L1+pw/2,H-14,"nobody resolves more; the committee resolves least","t-ann","middle"));
+})();
+})();
+</script>
