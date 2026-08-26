@@ -1579,6 +1579,57 @@ def test_timeseries_builder_live_eod_irs_appends_live_row_after_historical_serie
     assert router.calls[1]["end"] == "live"
 
 
+def test_timeseries_builder_live_eod_irs_start_live_skips_historical(monkeypatch):
+    import TB.TimeseriesBuilder as ts_builder_module
+
+    class _LiveOnlyRouter:
+        def __init__(self):
+            self.calls: List[Dict[str, Any]] = []
+            self.mdp = MagicMock()
+
+        def get_timeseries(
+            self,
+            start,
+            end,
+            queries,
+            *,
+            n_jobs=1,
+            ignore_cache=False,
+            ignore_cache_miss=False,
+            freq=None,
+            timestamps=None,
+            _prefetched_ts_rows_by_symbol=None,
+        ) -> pd.DataFrame:
+            _ = n_jobs, ignore_cache, ignore_cache_miss, freq, timestamps, _prefetched_ts_rows_by_symbol
+            self.calls.append({"start": start, "end": end, "queries": list(queries)})
+            col = queries[0].col_name()
+            idx = pd.Index(
+                [datetime.datetime(2025, 1, 8, 10, 0, tzinfo=datetime.timezone.utc)],
+                name="Date",
+            )
+            return pd.DataFrame({col: [4.25]}, index=idx)
+
+    monkeypatch.setattr(ts_builder_module, "_live_eod_history_end", lambda freq: datetime.date(2025, 1, 7))
+
+    router = _LiveOnlyRouter()
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start="live",
+        end="live",
+        queries=[q],
+        freq="nyc_eod",
+    )
+
+    assert len(router.calls) == 1, "start='live' should skip the historical fetch"
+    assert router.calls[0]["end"] == "live"
+    assert list(out.index) == [
+        datetime.datetime(2025, 1, 8, 10, 0, tzinfo=datetime.timezone.utc),
+    ]
+    assert list(out[q.col_name()]) == [4.25]
+
+
 def test_timeseries_builder_curve_store_fast_path_recovers_missing_points_via_bulk_mdp(monkeypatch):
     import TB.IRSwapsTB as irs_tb_module
 

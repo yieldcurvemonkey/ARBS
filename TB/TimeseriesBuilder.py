@@ -1000,8 +1000,13 @@ class TimeseriesBuilder:
                 "end='live' requires an IRS timeseries router. "
                 f"Available: {available}"
             )
-        start_date = start.date() if isinstance(start, datetime.datetime) else start
         history_end = _live_eod_history_end(freq)
+        if isinstance(start, str) and start == "live":
+            start_date = history_end + datetime.timedelta(days=1)
+        elif isinstance(start, datetime.datetime):
+            start_date = start.date()
+        else:
+            start_date = start
         historical_end_bound: DateLike = history_end
         if isinstance(start, datetime.datetime):
             if start.tzinfo is None or start.tzinfo.utcoffset(start) is None:

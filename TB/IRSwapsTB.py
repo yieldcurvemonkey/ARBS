@@ -1376,9 +1376,14 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 raise NotImplementedError("IRSwapsTB end='live' does not support explicit timestamps.")
             if not _is_eod_frequency(freq):
                 raise NotImplementedError("IRSwapsTB end='live' is currently supported only for EOD frequencies.")
-            start_date = start.date() if isinstance(start, datetime.datetime) else start
-            historical_ref_points: List[DateLike] = []
             history_end = _live_eod_history_end(freq)
+            if isinstance(start, str) and start == "live":
+                start_date = history_end + datetime.timedelta(days=1)
+            elif isinstance(start, datetime.datetime):
+                start_date = start.date()
+            else:
+                start_date = start
+            historical_ref_points: List[DateLike] = []
             if start_date <= history_end:
                 historical_ref_points = self._build_reference_points(
                     start=start,

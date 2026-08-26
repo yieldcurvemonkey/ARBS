@@ -28,7 +28,11 @@ from MDP.CitiVelocityExcel.block_parser import MetadataRow
 from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
 from MDP.CitiVelocityExcel.catalog import CitiVeloCatalog
 from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
-from MDP.CitiVelocityExcel.errors import CitiVelocityError
+from MDP.CitiVelocityExcel.errors import (
+    AddInNotSignedInError,
+    CitiVelocityError,
+    ExcelNotRunningError,
+)
 from MDP.CitiVelocityExcel.frequencies import DateLike, normalise_frequency, normalise_price_point
 
 __all__ = ["CitiVeloQuotes", "snapshot_from_frame"]
@@ -109,6 +113,7 @@ class CitiVeloQuotes:
         offline: bool = False,
         max_staleness: Optional[datetime.timedelta] = None,
         client_kwargs: Optional[Mapping[str, Any]] = None,
+        auto_launch: bool = True,
     ):
         self._client = client
         self._owns_client = client is None
@@ -117,6 +122,7 @@ class CitiVeloQuotes:
         self._offline = bool(offline)
         self._max_staleness = max_staleness
         self._client_kwargs = dict(client_kwargs or {})
+        self._auto_launch = bool(auto_launch)
         self._lock = threading.RLock()
         #: Set only by :meth:`direct_reader`. Distinguishes "there happens to be
         #: no cache" from "this reader exists in order to bypass one", which is
@@ -179,6 +185,7 @@ class CitiVeloQuotes:
             offline=self._offline,
             max_staleness=self._max_staleness,
             client_kwargs=self._client_kwargs,
+            auto_launch=self._auto_launch,
         )
         sibling._direct = True
         sibling._client_provider = self.client
@@ -218,9 +225,25 @@ class CitiVeloQuotes:
             return self._client_provider()
         with self._lock:
             if self._client is None:
-                self._client = CitiVelocityExcelClient.connect(**self._client_kwargs)
+                try:
+                    self._client = CitiVelocityExcelClient.connect(**self._client_kwargs)
+                except (ExcelNotRunningError, AddInNotSignedInError):
+                    if not self._auto_launch:
+                        raise
+                    self._client = self._launch_and_wait()
                 self._owns_client = True
             return self._client
+
+    def _launch_and_wait(self) -> CitiVelocityExcelClient:
+        from MDP.CitiVelocityExcel.supervisor import excel_pids, launch_excel, wait_for_addin
+
+        tag = self._client_kwargs.get("workbook_tag", "SCRATCH")
+        if not excel_pids():
+            _logger.info("Excel not running — launching and signing in to Citi Velocity...")
+            launch_excel()
+        else:
+            _logger.info("Excel running but add-in not signed in — pressing Login...")
+        return wait_for_addin(workbook_tag=tag)
 
     def close(self) -> None:
         with self._lock:

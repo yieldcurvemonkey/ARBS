@@ -104,6 +104,8 @@ def _fetch_auctions_raw_fiscaldata(as_of: Union[datetime.date, Literal["all"]], 
     if as_of == "all":
         params = f"filter={f_terms},{f_tips},{f_type}&sort=-record_date&page[size]=10000"
     else:
+        if as_of == "live":
+            as_of = datetime.date.today()
         start_pad = as_of - datetime.timedelta(days=365 * 30)
         f_dates = f"record_date:lte:{as_of.strftime('%Y-%m-%d')},record_date:gte:{start_pad.strftime('%Y-%m-%d')}"
         params = f"filter={f_dates},{f_terms},{f_tips},{f_type}&sort=-record_date&page[size]=9999"
@@ -179,6 +181,11 @@ def _fetch_fiscaldata(
     df = _fetch_auctions_raw_fiscaldata(fetch_as_of, term_strings)
     if df.empty:
         return pd.DataFrame()
+
+    if process_as_of == "live":
+        process_as_of = datetime.date.today()
+    if fetch_as_of == "live":
+        fetch_as_of = datetime.date.today()
 
     # A CUSIP can be auctioned more than once. Collapsing to the EARLIEST tranche is right for the
     # label and the original term, but it destroys the RE-OPENING information CBOT's deliverable
