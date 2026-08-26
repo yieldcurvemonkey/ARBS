@@ -34,6 +34,7 @@ from BT.misc import ql_cal_date_range
 
 _LOGGER_NAME = "IRSwapsTB"
 _EOD_FREQ_ZONES: Dict[str, str] = {
+    "": "America/New_York",
     "eod": "America/New_York",
     "nyc_eod": "America/New_York",
     "chi_eod": "America/Chicago",

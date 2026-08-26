@@ -51,12 +51,13 @@ _LOGGER = logging.getLogger(__name__)
 _BARCHART_IRS_BULK_MIN_TIMESTAMPS = 2000
 _BARCHART_IRS_BULK_CALIBRATION_EXECUTOR = "thread"
 _EOD_FREQ_ZONES: Dict[str, str] = {
+    "": "America/New_York",
     "eod": "America/New_York",
     "nyc_eod": "America/New_York",
     "chi_eod": "America/Chicago",
     "ldn_eod": "Europe/London",
 }
-_EOD_FREQ_KEYS = frozenset({"eod", "nyc_eod", "chi_eod", "ldn_eod"})
+_EOD_FREQ_KEYS = frozenset({"", "eod", "nyc_eod", "chi_eod", "ldn_eod"})
 _IRSWAP_ADJUSTED_SPREAD_VALUES = {
     value
     for value in (
@@ -1038,16 +1039,41 @@ class TimeseriesBuilder:
                 live_start = datetime.datetime.combine(next_day, datetime.time.min)
             else:
                 live_start = datetime.datetime.combine(next_day, datetime.time.min, tzinfo=start.tzinfo)
-        live_df = tb.get_timeseries(  # type: ignore[attr-defined]
-            live_start,
-            "live",
-            flat_queries,
-            n_jobs=n_jobs,
-            ignore_cache=ignore_cache,
-            ignore_cache_miss=ignore_cache_miss,
-            freq=freq,
-            timestamps=None,
-        )
+
+        _spread_values = {IRSwapValue.MMSS, IRSwapValue.SPREADOVER} | _IRSWAP_ADJUSTED_SPREAD_VALUES
+        irs_only = [q for q in flat_queries if q.value not in _spread_values]
+        spread_only = [q for q in flat_queries if q.value in _spread_values]
+
+        live_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+        if irs_only:
+            live_df = tb.get_timeseries(  # type: ignore[attr-defined]
+                live_start,
+                "live",
+                irs_only,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                ignore_cache_miss=ignore_cache_miss,
+                freq=freq,
+                timestamps=None,
+            )
+        if spread_only:
+            today = history_end + datetime.timedelta(days=1)
+            spread_df = self.get_timeseries(
+                start=today,
+                end=today,
+                queries=spread_only,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                ignore_cache_miss=ignore_cache_miss,
+                freq=freq,
+                timestamps=None,
+                drop_multilevel_cols=drop_multilevel_cols,
+                routers=merged_routers,
+                mdps=merged_mdps,
+                _disable_barchart_irs_bulk_planner=_disable_barchart_irs_bulk_planner,
+            )
+            if not spread_df.empty:
+                live_df = pd.concat([live_df, spread_df], axis=1) if not live_df.empty else spread_df
 
         if historical_df.empty:
             return live_df

@@ -265,7 +265,7 @@ _LOOKBACK: Mapping[str, datetime.timedelta] = {
 }
 
 #: The ``CVTSHIST`` frequency each mode is served at.
-_FREQ: Mapping[str, str] = {"eod": "DAILY", "intraday": "MI01", "live": "MI01"}
+_FREQ: Mapping[str, str] = {"eod": "DAILY", "intraday": "MI01", "live": "DAILY"}
 
 #: Per-tag reasons that mean "the market held nothing here", as opposed to "the
 #: fetch did not happen". ``block_parser`` records the first for a column that was

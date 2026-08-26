@@ -564,3 +564,230 @@ f.show()
 # So: hold the receiver on the macro view. This notebook is entitled to set the
 # **clock** — December, not Friday — and to confirm the **sign**. It is not
 # entitled to set the size, and a levels R² does not stand in for an edge.
+
+# %% [markdown]
+# ## 6. Who is actually saying it — sentiment by speaker
+#
+# Everything above uses one **aggregate** Fed-sentiment index. That is the right
+# object for a lead study and the wrong one for the question "is the committee
+# splitting?" — an index that averages a hawkish dissenter against a dovish chair
+# reports the midpoint and hides both.
+#
+# These two charts break the same corpora out **per speaker**. Two figures rather
+# than one because the judges are on different scales and must not share an axis:
+# JPM's `hawk_dove_score` is centred on **0** and runs −65…+62, while FedLock's
+# `m` is centred on about **50** and runs 31.7…73.5.
+#
+# Speeches are irregular events, so a raw per-speaker series is a scatter of
+# spikes. Each line here is a **calendar-time EWMA** of that speaker's own
+# scores — the same construction the aggregate index uses, one speaker at a
+# time, with a longer half-life because an individual speaks far less often than
+# the committee does.
+#
+# The lines are stamped at the **speech date**, not the publication date, which
+# makes them descriptive rather than point-in-time. Right for reading the
+# committee; *not* the version to trade off.
+
+# %%
+import plotly.graph_objects as go
+
+import fed_sentiment_lead_data as SPK_L
+import fedlock_data as SPK_F
+
+#: The people whose votes decide it: both chairs, Board governors, the New York
+#: president (a permanent voter), and the three who dissented for a hike in July
+#: 2026. Edit this list freely — it is the only thing that selects lines.
+VOTERS = ["Warsh", "Powell", "Waller", "Williams", "Bowman", "Jefferson",
+          "Cook", "Logan", "Hammack", "Kashkari"]
+
+#: The sitting chair is drawn heavier and in ink rather than a series colour: a
+#: chair's language is not one voice among twelve, even under a chair who says
+#: he would like it to be.
+CHAIR_STYLE = {"Warsh":  dict(color="#111827", width=3.4),
+               "Powell": dict(color="#6b7280", width=3.0, dash="dash")}
+
+#: Eight non-chair voters, eight slots. This ordering is CVD-checked pairwise,
+#: so keep it if the list grows and fold anything past eight into a second
+#: chart rather than inventing a ninth hue.
+SPK_PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+               "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+
+SPK_HALFLIFE_D = 45     # an individual speaks ~1-4x a month, so 21 days is jumpy
+SPK_TRUNC_D = 270       # blank the line once a speaker has been silent this long
+SPK_MIN_N = 2           # never draw a "trend" through a single speech
+
+
+def surname(name: str) -> str:
+    """`Michelle W Bowman` -> `Bowman`. FedLock carries full names and JPM
+    carries surnames, so the two corpora cannot be keyed the same way without
+    this."""
+    t = str(name).strip()
+    return t.split()[-1] if t else t
+
+
+def speaker_curve(dates, scores, grid, *, halflife_d=SPK_HALFLIFE_D,
+                  trunc_d=SPK_TRUNC_D, min_n=SPK_MIN_N) -> pd.Series:
+    """Calendar-time EWMA of one speaker's scores, on a daily grid.
+
+    Weighted by ``0.5 ** (age / halflife)`` over that speaker's own past
+    speeches only, ignoring anything older than ``trunc_d``. NaN where fewer
+    than ``min_n`` speeches are in view — which is what makes a line stop when
+    someone leaves the committee instead of flat-lining forever at their last
+    reading.
+    """
+    d = np.asarray(pd.DatetimeIndex(dates).values,
+                   dtype="datetime64[D]").astype("int64")
+    v = np.asarray(scores, dtype=float)
+    ok = np.isfinite(v)
+    d, v = d[ok], v[ok]
+    order = np.argsort(d)
+    d, v = d[order], v[order]
+
+    g = np.asarray(pd.DatetimeIndex(grid).values,
+                   dtype="datetime64[D]").astype("int64")
+    out = np.full(len(g), np.nan)
+    for i, t in enumerate(g):
+        age = t - d
+        m = (age >= 0) & (age <= trunc_d)
+        if m.sum() < min_n:
+            continue
+        w = 0.5 ** (age[m] / float(halflife_d))
+        out[i] = float(np.dot(w, v[m]) / w.sum())
+    return pd.Series(out, index=pd.DatetimeIndex(grid))
+
+
+def speaker_panel(scores: pd.DataFrame, score_col: str, start, end,
+                  voters=VOTERS) -> pd.DataFrame:
+    """One column per voter, daily, smoothed.
+
+    A voter absent from the corpus is dropped and RECORDED, not silently
+    returned as an empty column — the two corpora do not carry the same people
+    and a missing line should be visible as a fact rather than as a gap.
+    """
+    s = scores.copy()
+    s["date"] = pd.to_datetime(s["date"])
+    s["key"] = s["speaker"].map(surname).str.lower()
+    grid = pd.bdate_range(start, end)
+    cols, missing, counts = {}, [], {}
+    for who in voters:
+        sub = s[s["key"] == who.lower()]
+        if sub.empty:
+            missing.append(who)
+            continue
+        cols[who] = speaker_curve(sub["date"], sub[score_col], grid)
+        counts[who] = int(len(sub))
+    out = pd.DataFrame(cols, index=grid)
+    out.attrs["missing"] = missing
+    out.attrs["counts"] = counts
+    return out
+
+
+def speaker_figure(panel: pd.DataFrame, *, title: str, ylabel: str,
+                   neutral: float) -> "go.Figure":
+    """One trace per voter, chairs in ink and everyone else on the palette."""
+    f = go.Figure()
+    slot = 0
+    for who in panel.columns:
+        ser = panel[who].dropna()
+        if ser.empty:
+            continue
+        if who in CHAIR_STYLE:
+            style, name = dict(CHAIR_STYLE[who]), who + " (chair)"
+        else:
+            style = dict(color=SPK_PALETTE[slot % len(SPK_PALETTE)], width=1.8)
+            name = who
+            slot += 1
+        f.add_trace(go.Scatter(x=ser.index, y=ser.values, name=name,
+                               mode="lines", line=style,
+                               hovertemplate="%{x|%Y-%m-%d}<br>"
+                                             + name + " %{y:.2f}<extra></extra>"))
+    f.add_hline(y=neutral, line=dict(width=1, dash="dot", color="#9ca3af"),
+                annotation_text="neutral", annotation_position="right")
+    f.add_vline(x=pd.Timestamp("2026-06-17"),
+                line=dict(width=1, dash="dash", color="#9ca3af"))
+    f.add_annotation(x=pd.Timestamp("2026-06-17"), yref="paper", y=1.02,
+                     text="guidance dropped", showarrow=False,
+                     font=dict(size=11, color="#6b7280"), xanchor="right")
+    f.update_layout(title=title, yaxis_title=ylabel, height=520,
+                    hovermode="x unified",
+                    legend=dict(orientation="h", y=-0.16, x=0))
+    return f
+
+
+SPK_START, SPK_END = datetime.date(2021, 1, 1), END
+print(f"speaker panel {SPK_START}..{SPK_END}   half-life {SPK_HALFLIFE_D}d, "
+      f"blanked after {SPK_TRUNC_D}d of silence, min {SPK_MIN_N} speeches")
+
+# %% [markdown]
+# ### Chart 4 — JPM NLP hawk/dove, by speaker
+#
+# Above zero is hawkish. The scale is the judge's own; only the ordering and the
+# spread between speakers carry meaning.
+
+# %%
+_jpm_scores = SPK_L.load_fed_scores(SPK_L.LeadConfig())
+JPM_PANEL = speaker_panel(_jpm_scores, "hawk_dove_score", SPK_START, SPK_END)
+print(f"JPM: {len(JPM_PANEL.columns)} of {len(VOTERS)} voters drawn"
+      + (f"   absent from corpus: {JPM_PANEL.attrs['missing']}"
+         if JPM_PANEL.attrs["missing"] else ""))
+print("   scored communications: "
+      + ", ".join(f"{k} {v}" for k, v in JPM_PANEL.attrs["counts"].items()))
+speaker_figure(JPM_PANEL,
+               title="Fed speaker sentiment by voter — JPM NLP "
+                     f"({SPK_HALFLIFE_D}-day half-life)",
+               ylabel="JPM hawk/dove score (hawkish +)",
+               neutral=0.0).show()
+
+# %% [markdown]
+# ### Chart 5 — FedLock TrueSkill, by speaker
+#
+# A different judge on a different scale: neutral sits near **50**, not zero.
+# FedLock is a single fitted vintage and carries hindsight, so it is an
+# association-only read — but it covers more speakers and runs back much
+# further, which is what a per-speaker view wants.
+
+# %%
+_fl_sp, _fl_prov = SPK_F.load_speeches()
+SPK_F.gate_single_vintage(_fl_sp, _fl_prov)
+FL_PANEL = speaker_panel(_fl_sp, "m", SPK_START, SPK_END)
+_fl_neutral = float(_fl_sp["m"].median())
+print(f"FedLock: {len(FL_PANEL.columns)} of {len(VOTERS)} voters drawn"
+      + (f"   absent from corpus: {FL_PANEL.attrs['missing']}"
+         if FL_PANEL.attrs["missing"] else ""))
+print("   scored communications: "
+      + ", ".join(f"{k} {v}" for k, v in FL_PANEL.attrs["counts"].items()))
+print(f"   corpus median (drawn as neutral): {_fl_neutral:.2f}")
+speaker_figure(FL_PANEL,
+               title="Fed speaker sentiment by voter — FedLock TrueSkill "
+                     f"({SPK_HALFLIFE_D}-day half-life)",
+               ylabel="FedLock m (hawkish +)",
+               neutral=_fl_neutral).show()
+
+# %% [markdown]
+# ### What the two charts are for
+#
+# The aggregate index used everywhere above is a weighted average of these lines.
+# When they fan out, that average describes a committee that does not exist — and
+# the July-2026 meeting produced **three dissents for a hike**, which is a fanned
+# committee by definition.
+#
+# So read the **spread**, not the level: cross-speaker dispersion on a given day
+# is exactly what the aggregate throws away, and it is the quantity a
+# vote-tallying regime makes worth watching. Compare each chart against itself,
+# never across — the two judges share no scale.
+
+# %%
+for _name, _P in (("JPM    ", JPM_PANEL), ("FedLock", FL_PANEL)):
+    _sd = _P.std(axis=1).dropna()
+    if _sd.empty:
+        print(f"{_name}: no overlapping speakers to disperse")
+        continue
+    _pre = _sd[(_sd.index >= pd.Timestamp("2025-06-18"))
+               & (_sd.index < pd.Timestamp("2026-06-18"))]
+    _post = _sd[_sd.index >= pd.Timestamp("2026-06-18")]
+    print(f"{_name}: cross-speaker dispersion   full {_sd.mean():.2f}"
+          f"   year before the drop {_pre.mean():.2f}"
+          f"   since {_post.mean():.2f}"
+          f"   last {_sd.iloc[-1]:.2f} ({_sd.index[-1].date()})")
+print("\nDispersion is DESCRIPTIVE here -- speaker mix changes over time, so a "
+      "rise\nis not by itself evidence the committee disagrees more.")

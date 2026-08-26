@@ -2064,7 +2064,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
             return read_cme_tcf_with_headers(as_of=as_of_date)
 
-        if self.source.upper() in ["USTS_FEDINVEST_WSJ_LIVE-QL", "USTS_WEBULL_WSJ_LIVE-RL"]:
+        if self.source.upper() in ["USTS_FEDINVEST_WSJ_LIVE-QL", "USTS_WEBULL_WSJ_LIVE-RL", "USTS_CITIVELO-QL", "USTS_CITIVELO-RL"]:
             from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import _fetch_fiscaldata
 
             return _fetch_fiscaldata(fetch_as_of=as_of_date, process_as_of=as_of_date, **kwargs)
