@@ -294,6 +294,53 @@ Incumbent nulls (named in §0) are the bar; results reported as
 engine-certified reference numbers with DSR at the declared config count,
 never as verdicts.
 
+### §6a. Dated amendment — 2026-08-26, post-adversarial-review, BEFORE any
+### full-history reference result was produced
+
+The five-refuter review (signs / causality / units / engine / stats; probe
+scripts in the session scratchpad) verified the causality and engine layers
+clean and found the following, all fixed before the reference notebooks ran.
+Corrections that change frozen values are stated here so the freeze stays
+honest:
+
+1. **One fly ruler, suite-wide: belly=+2 (L = 2b − f − k).** The dislocation
+   panel and strategy had denominated L, e_rev, carry and the cost band on
+   the belly=+1 level while the screen used belly=+2 — the single measured
+   2.0–2.6bp RT band was being charged on two rulers 2× apart (strategy fee
+   $115k vs ~$57.5k at the suite's own per-leg anchors; anti-flattering but
+   wrong). Panels rescale to belly=+2; the QDB fee = cost_rt_bp × (P&L per bp
+   of that L) = 2.3bp × dv01/2 with the unchanged (−D/2, +D, −D/2) legs.
+2. **The edge gate runs on the book's own clock.** edge_bp had credited
+   reversion at the 504bd FPT cap and charged carry over the uncapped E[FPT]
+   while the frozen book must exit at 63bd (measured: 86/265 gate rows and
+   3/23 episodes fail the hold-consistent gate, zero flip in). p_hit and the
+   carry charge are now computed at min(E[FPT], max_hold_bd = 63), in the
+   panel and in the screen edge alike.
+3. **Harvest cost restored to the frozen 0.3bp/leg one-way** (the shipped
+   0.25 was a 16.7% understatement vs this section; test pin updated); the
+   {0, 0.5, 1, 2}× ladder is produced in the reference notebook by gross
+   recosting.
+4. **Dislocation entries now require the residuals to agree with the fade**:
+   sign_agree == sign(zs) at entry (2 of 23 episodes had entered against
+   both cross-sectional models; "sign-agreeing" now means what it says).
+5. **books.py point-row harvest gates re-signed for the receive-belly side**
+   (rac_net and the z bound were transplanted from the pair-shape gate where
+   level-long IS the harvest side; on a fly, harvest is SHORT the level, so
+   the gate reads −rac_net > min and zs ≥ −max_z). Screen label only — no
+   backtest traded it.
+6. Doc corrections: the W1 null belongs to strat3 (5,040 cells, E[max SR |
+   null] = 1.599), not strat1; the harvest panel's zs runs on RAW quoted
+   pair levels (stated approximation, mirroring the dislocation builder's
+   disclosure) — adjusted-level plumbing is future work; production
+   run_backtest in both panel strategies now asserts the closed-position
+   count (the rac battery alone cannot see a silently dropped unwind fee).
+
+Consequence of 1–4: the dislocation reference episode set changes from 23 to
+the hold-consistent set (~20 before the direction gate, fewer after), and
+harvest fees rise ~20%. These are corrections of measurement, not selection:
+every change was fixed from first principles before any full-history P&L
+existed, and the review that forced them is part of the record.
+
 ## 7. What this suite is NOT
 
 - Not a new fade family registered with the RV-loop (L-0088 stands: flow-mark
