@@ -24,11 +24,17 @@ Expected columns (EXACT names — the kink_screen composition layer must match)
                 ``be_over_rv >= harvest_min_be_over_rv``. Default 1.17 is
                 Citi's published curve-pair anchor (1.17–1.38) — a curve-pair
                 anchor, not validated on micro-flies (DESIGN.md section 4).
-``zs``          float: trailing z-score of the convexity-adjusted structure
-                level (756d window per DESIGN.md section 6). POLARITY:
-                positive = RICH vs its own trailing window. Harvest gate
-                INCLUSIVE upper bound ("z not rich"): ``zs <= harvest_max_z``.
-                Dislocation gate two-sided INCLUSIVE: ``|zs| >= disl_min_abs_z``.
+``zs``          float: trailing z-score of the COMPOSED MICRO-FLY level
+                (``2*belly - front - back`` on convexity-adjusted legs, 756d
+                window per DESIGN.md section 6 — sum-zero weights, so the z
+                is duration-free by construction). POLARITY (rate space,
+                kink_ledger section 0): positive = fly level above its own
+                mean (belly CHEAP — an upward kink; reversion downward
+                expected); negative = belly RICH. Harvest gate INCLUSIVE
+                upper bound ("do not harvest what has already run"):
+                ``zs <= harvest_max_z``. Dislocation gate two-sided
+                INCLUSIVE: ``|zs| >= disl_min_abs_z`` (symmetric — either
+                side of an extreme fades toward the mean).
 ``rac_net``     float: rac_net@FPT — risk-adjusted carry net of reversion drag
                 at the measured half-life horizon (kink_ledger section 6 row).
                 Harvest gate STRICT: ``rac_net > harvest_min_rac_net`` (the

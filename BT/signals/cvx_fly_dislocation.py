@@ -16,7 +16,10 @@ are ignored):
 Gate columns (NaN in any REFUSES the entry — citi_rule semantics, exactly
 ``RVUtils.CvxSuite.books``):
 
-* ``zs``         — z-score of the ADJUSTED residual, POLARITY positive = RICH.
+* ``zs``         — z-score of the screen's COMPOSED MICRO-FLY level (belly
+  over wings, ``2b - f - k`` on convexity-adjusted legs). POLARITY, pinned in
+  RATE space: positive = the fly level is HIGH vs its own trailing window =
+  the belly RATE is high vs the wings = the belly is CHEAP (an upward kink).
   Gate two-sided INCLUSIVE: ``abs(zs) >= cfg.min_abs_z``.
 * ``sign_agree`` — {+1, -1, 0} from ``residuals.sign_agreement``; entry needs
   ``in (+1, -1)``; 0 or NaN refuses.
@@ -37,16 +40,21 @@ them; this module never re-derives or re-normalises weights):
   weights); a WRONG SIGN PATTERN on a gate-passing row RAISES — an inverted
   orientation would silently flip the whole book through ``direction * w``.
 
-Direction (implemented exactly as specified, stated here)
----------------------------------------------------------
-``zs`` positive = RICH. Fading a RICH point = PAY it: belly rich -> PAY the
-belly (wings received) = LONG local convexity — the dislocation book of
-kink_ledger.md ("pay-belly fades of rich kinks at extreme z"). ``zs``
-negative = cheap -> RECEIVE the belly = short local convexity. So
-``direction = +1 (pay belly) if entry zs > 0 else -1 (receive belly)``, and
+Direction (the pinned rate-space polarity, kink_ledger.md section 0)
+--------------------------------------------------------------------
+``zs`` positive = the fly level is HIGH = the belly RATE is high vs the wings
+= the belly is CHEAP (an upward kink). The fade RECEIVES the belly (receive
+belly / pay wings) = SHORT local convexity — the side that collects the rent
+while positioned for the reversion (kink_ledger.md section 0: "receive an
+upward kink ... = short local convexity => you collect the rent"). ``zs``
+negative = the fly level is LOW = belly RICH (a downward kink) -> the fade
+PAYS the belly = LONG local convexity, paying rent to hold the fade. So
+``direction = -1 (receive belly) if entry zs > 0 else +1 (pay belly)``, and
 each leg trades ``bpv_i = direction * w_i * cfg.package_dv01_usd`` (``+bpv``
 is a PAYER through this engine — rac_backtest convention, re-derived from the
-engine by :func:`sign_probe` on every ``run_backtest``).
+engine by :func:`sign_probe` on every ``run_backtest``). The PRE-FIX mapping
+(``+1 pay belly on zs > 0``) was BACKWARDS — it paid rent to fade what the
+rent framework says to collect on; fixed 2026-08-26 with the fly-level zs.
 
 Timing (deliberate conventions)
 -------------------------------
@@ -157,7 +165,8 @@ class FlyDislocationConfig:
 
 
 class FlyEpisode(NamedTuple):
-    """One held fly. ``direction``: +1 pay belly (fade rich), -1 receive belly."""
+    """One held fly. ``direction``: -1 receive belly (fade a CHEAP belly,
+    entry zs > 0 — collects rent), +1 pay belly (fade a RICH belly, zs < 0)."""
 
     point: str
     entry_date: pd.Timestamp
@@ -228,7 +237,10 @@ def _entry_signal(row: Optional[dict], cfg: FlyDislocationConfig,
             "long-the-fly orientation (belly > 0, wings < 0) — an inverted screen "
             "orientation would silently flip the book")
     return {
-        "direction": 1 if float(z) > 0 else -1,   # rich -> PAY belly; cheap -> RECEIVE
+        # zs > 0 = fly HIGH = belly CHEAP -> RECEIVE the belly (collect rent);
+        # zs < 0 = belly RICH -> PAY the belly. The pre-fix +sign(zs) mapping
+        # was backwards (module docstring, Direction).
+        "direction": -1 if float(z) > 0 else +1,
         "entry_zs": float(z),
         "leg_front": str(legs[0]), "leg_belly": str(legs[1]), "leg_back": str(legs[2]),
         "w_front": w_front, "w_belly": w_belly, "w_back": w_back,

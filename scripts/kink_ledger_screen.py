@@ -218,7 +218,8 @@ def main(argv=None) -> int:
           f"(build {elapsed:.1f}s, history {leg_hist.index[0].date()}..{asof.date()}, "
           f"cost 1x = {df.attrs.get('cost_bp')}bp RT)")
     print(f"sorted by |edge_bp| = |E[rev]*p_hit - |carry/d|*E[FPT] - cost|; "
-          f"zs>0 = RICH; residual>0 = CHEAP; all vols bp/day\n")
+          f"zs = z(fly 2b-f-k): zs>0 = fly above its 3y mean (belly cheap; "
+          f"fade = receive belly); residual>0 = CHEAP; all vols bp/day\n")
     print(_fmt(df))
     print()
     units_ok = _gates(df)

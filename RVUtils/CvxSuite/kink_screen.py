@@ -52,27 +52,49 @@ Row construction (binding conventions, in build order)
     monthly refits, loadings frozen strictly before each month).
     ``sign_agree``: +1 both cheap, -1 both rich, 0 disagree/small, NaN no
     data (residual > 0 = CHEAP, the CurvePCAModel convention).
-3.  **Trailing stats at asof, per point, on the ADJUSTED series** (windows
-    end AT asof, inclusive): ``zs = (x_asof - mean_756)/std_756`` —
-    POLARITY: positive = the level sits HIGH vs its own trailing window =
-    RICH (the books contract and the CurveFlyScreener ``add_risk_adjustment``
-    convention in which corr(carry, z) = +0.61 was measured; kink_ledger
-    section 2.2: "carry > 0 with z <= 0 — paid to hold something already
-    cheap"). NOTE the two polarities: a residual is cheap-positive, the z is
-    rich-positive. ``pctl_3y`` = share of the trailing window at or below
-    the asof level, in [0, 1]. OU fit (``calibrate_ou``) on the same 756
-    tail; ``sigma_rlzd_bp_day`` = trailing std of daily diffs (bp/day, NOT
-    annualised; ``ex_dates=None`` — swap legs have no roll dates, the
-    ex-roll mask is a futures-composition concern).
-4.  **FPT** (H-S fn 24): target = halfway from the asof level to the OU
-    mean; ``fpt_sample`` with the section-6 frozen config (sims 2000, steps
+3.  **Trailing stats at asof, per INTERIOR point, on the COMPOSED MICRO-FLY
+    level** ``L_p(t) = 2*adj_belly(t) - adj_front(t) - adj_back(t)`` over
+    the adjacent grid legs (bp; ``FLY_STATS_WEIGHTS``; windows end AT asof,
+    inclusive; the asof composed level is printed as ``fly_bp``). The
+    weights are the FIXED sum-zero rate-space fly ``(-1, +2, -1)`` — the
+    pinned ``(-0.5, +1, -0.5)`` shape at the package's belly=+2 scale — so
+    a common level move across the legs cancels EXACTLY: every trailing
+    stat is duration-free BY CONSTRUCTION. (An outright level z is
+    DURATION: on 2026-08-21 it put 15/17 points at z ~ +2 together and
+    manufactured +23bp "dislocation edges" that were really "the belly is
+    rich vs its own 3y level" — the recorded W4 failure mode, DESIGN
+    section 0.) The belly=+2 scale is the one the theta/Gamma package pays
+    ``cfg.dv01_usd`` dollars per bp of (exactly at same-tenor points; at
+    tenor breaks to the printed ``w_sum`` annuity trim), so
+    ``carry_bp_day`` and ``cfg.cost_bp`` are already denominated in this L;
+    zs/pctl/half-life/p_hit are scale-invariant anyway.
+    ``zs = (L_asof - mean_756)/std_756`` — POLARITY, pinned once in RATE
+    space (kink_ledger section 0) and propagated to books and the QDB fade:
+    positive = the fly level sits HIGH = the belly RATE is high vs the
+    wings = the belly is CHEAP (an upward kink); the fade RECEIVES the
+    belly (short local convexity — the side that collects rent). Negative
+    = belly RICH; the fade PAYS the belly (long convexity, pays rent).
+    Residual and zs polarities now AGREE: both are cheap-positive.
+    ``pctl_3y`` = share of the trailing fly window at or below L_asof, in
+    [0, 1]. OU fit (``calibrate_ou``) on the same 756-row fly tail.
+    ENDPOINTS (spot 1y, 40y10y) have no adjacent fly: the whole stats
+    block (fly_bp/zs/pctl/OU/FPT/e_rev/rev_drag) is NaN there and
+    ``n_hist`` is 0. ``sigma_rlzd_bp_day`` DELIBERATELY stays the POINT's
+    trailing std of daily diffs (bp/day, NOT annualised; ``ex_dates=None``
+    — swap legs have no roll dates): sigma_BE is a breakeven on the
+    PARALLEL curve shift, so ``be_over_rv`` needs a rate-level vol in its
+    denominator, and a micro-fly's own level vol legitimately sits below
+    the 0.5 bp/day units floor.
+4.  **FPT** (H-S fn 24): target = halfway from the asof FLY level to the
+    fly's OU mean; ``fpt_sample`` with the section-6 frozen config (sims 2000, steps
     504, dt 1.0, seed 20260826) and a FRESH ``default_rng(seed)`` PER POINT
     — common random numbers across the cross-section, deterministic and
     independent of point order. ``fpt_stats(hits, steps=cfg.fpt_steps)`` —
     the steps kwarg is REQUIRED by the ou contract whenever censoring
     occurs; ``e_fpt_d`` is biased LOW under censoring, so ``frac_censored``
-    sits next to it. ``e_rev_bp = |mu - x_asof| / 2`` is the reversion the
-    FPT clock measures. ``carry_be_days = e_rev_bp / |carry_bp_day|`` (the
+    sits next to it. ``e_rev_bp = |mu_L - L_asof| / 2`` is the FLY-level
+    reversion the FPT clock measures — duration-free by construction, like
+    every number derived from L. ``carry_be_days = e_rev_bp / |carry_bp_day|`` (the
     ING breakeven-horizon rule); a NON-NEGATIVE carry has no breakeven
     horizon — ``carry_be_days = inf`` and ``p_fpt_gt_carry_be = 0.0``,
     branched BEFORE ``p_fpt_exceeds`` (which returns NaN on non-finite
@@ -121,22 +143,29 @@ Row construction (binding conventions, in build order)
     fit rows and the leg-roll path's forward-leg agreement with the identity
     (worst 0.44 bp measured) are in the carry module docstring. Off-frontier
     residuals: > 0 = cheap for its carry / carry-rich for its vol.
-9.  **rac_net@FPT** (bp, defined precisely): ``rac_net = carry_bp_day *
-    e_fpt_d + rev_drag_fpt_bp`` where ``rev_drag_fpt_bp = (mu - x_asof) *
-    (1 - exp(-kappa * e_fpt_d))`` — the OU-expected move of the POINT toward
-    its mean over the FPT horizon (``ou_conditional``), signed for the
-    LONG-the-level holder. Object mix, stated plainly: the carry term is bp
-    of the FLY level, the drag term bp of the POINT level (the ledger row's
-    own section-6 mix — the fly is the point's tradeable expression, belly
-    +2). Both NaN-propagate; endpoints are NaN through the carry term.
-10. **edge_bp** (bp, net of ONE cost): ``e_rev_bp * p_hit -
+9.  **rac_net@FPT** (bp of L, defined precisely): ``rac_net = carry_bp_day
+    * e_fpt_d + rev_drag_fpt_bp`` where ``rev_drag_fpt_bp = (mu_L - L_asof)
+    * (1 - exp(-kappa_L * e_fpt_d))`` — the OU-expected move of the FLY
+    level toward its own mean over the fly's FPT horizon
+    (``ou_conditional``), signed for the LONG-the-fly-level holder. Both
+    terms now describe ONE tradeable object; the only remaining gap is
+    that ``carry_bp_day`` is repriced on the ``neutral_weights`` package,
+    which equals the ``(-1, +2, -1)`` stats fly at same-tenor points (to
+    ~2%) and differs at tenor breaks by the annuity trim (``w_sum``
+    printed). Both NaN-propagate; endpoints are NaN throughout.
+10. **edge_bp** (bp of L, net of ONE cost): ``e_rev_bp * p_hit -
     |carry_bp_day| * e_fpt_d - cfg.cost_bp`` (cost default 2.3 bp — the
-    middle of the measured 2.0-2.6 fly-package RT band). NaN propagates.
+    middle of the measured 2.0-2.6 fly-package RT band; the package pays
+    ``dv01_usd`` dollars per bp of L, so ``cost_bp = fee/dv01_usd`` is
+    already in bp of L). e_rev and edge now measure reversion of the FLY
+    level to its own mean — duration-free by construction. NaN propagates;
+    endpoints are NaN.
 11. **book**: ``books.classify_books`` over the EXACT
     ``books.REQUIRED_COLUMNS`` (be_over_rv, zs, rac_net, sign_agree, tag,
     edge_bp) with ``cfg.gates`` (BookGates section-6 defaults). be_over_rv =
-    sigma_BE / sigma_rlzd — the fly-package breakeven over the POINT's
-    realized vol (v1 convention, same object mix as rac_net, stated).
+    sigma_BE / sigma_rlzd — the fly-package PARALLEL-shift breakeven over
+    the POINT's realized (rate-level) vol; this pairing is deliberate and
+    stays (item 3), the one remaining cross-object ratio in the row.
 
 Diagnostics travel in ``df.attrs`` (fit diagnostics/leverage, PCA info
 summary, CA mode + ffill count, frontier fits, leg-roll errors) — the CLI
@@ -192,14 +221,25 @@ from RVUtils.CvxSuite.vols import (
     realized_vol_bp_day,
 )
 
-__all__ = ["KinkScreenCfg", "build_kink_screen", "SCREEN_COLUMNS"]
+__all__ = ["KinkScreenCfg", "build_kink_screen", "SCREEN_COLUMNS",
+           "FLY_STATS_WEIGHTS"]
 
 BUSINESS_DAYS = 252.0
+
+#: Fixed sum-zero rate-space weights of the composed stats fly
+#: (front, belly, back): ``L = 2*belly - front - back`` in bp — the pinned
+#: ``(-0.5, +1, -0.5)`` shape at the package's belly=+2 scale. Sum-zero is
+#: load-bearing: it is what makes ``zs`` duration-free by construction (a
+#: common level move across the three legs cancels EXACTLY). The theta/Gamma
+#: package's ``neutral_weights`` differ from these at tenor breaks by the
+#: annuity trim — that package-vs-stats gap is the printed ``w_sum`` column,
+#: never hidden.
+FLY_STATS_WEIGHTS: Tuple[float, float, float] = (-1.0, 2.0, -1.0)
 
 #: Column order of the returned frame (index = leg label, name "point").
 SCREEN_COLUMNS: Tuple[str, ...] = (
     "fwd", "tenor", "k_coord", "tag",
-    "level_bp", "ca_bp", "adj_bp",
+    "level_bp", "ca_bp", "adj_bp", "fly_bp",
     "residual_xsec", "residual_pca", "sign_agree",
     "zs", "pctl_3y", "n_hist",
     "ou_kappa", "ou_mu_bp", "half_life_d",
@@ -467,13 +507,44 @@ def build_kink_screen(asof, *, leg_hist_bp: pd.DataFrame, pricer: Any,
     info_keys = sorted(k for k in pca_info if k <= asof)
     last_loadings = pca_info[info_keys[-1]]["loadings"] if info_keys else None
 
-    # ---- 3/4. per-point trailing stats + FPT ------------------------------
+    # ---- 3/4. per-point trailing stats + FPT on the COMPOSED MICRO-FLY ----
+    # The stats series of interior point i is the FIXED sum-zero rate-space
+    # fly of its adjacent grid legs (module docstring item 3):
+    #     L_i(t) = 2*adj_i(t) - adj_{i-1}(t) - adj_{i+1}(t)
+    # Sum-zero weights cancel a common level move EXACTLY — an outright-level
+    # z is duration in disguise (the 2026-08-21 15/17-points-at-z~+2
+    # artifact, DESIGN section 0 / the W4 failure mode). Endpoints have no
+    # adjacent fly: their whole stats block is NaN and n_hist is 0.
+    fly_level: Dict[str, pd.Series] = {}
+    for i, lab in enumerate(labels):
+        if 0 < i < len(labels) - 1:
+            fly_level[lab] = (FLY_STATS_WEIGHTS[0] * adj[labels[i - 1]]
+                              + FLY_STATS_WEIGHTS[1] * adj[lab]
+                              + FLY_STATS_WEIGHTS[2] * adj[labels[i + 1]])
+
     rows: Dict[str, Dict[str, Any]] = {lab: {} for lab in labels}
     fpt_hits: Dict[str, np.ndarray] = {}
+    _NAN_STATS = ("fly_bp", "zs", "pctl_3y", "ou_kappa", "ou_mu_bp",
+                  "half_life_d", "e_fpt_d", "p_hit", "frac_censored",
+                  "q50_fpt_d", "e_rev_bp", "rev_drag_fpt_bp")
     for lab in labels:
         r = rows[lab]
-        s = adj[lab]
+        # realized vol DELIBERATELY stays on the POINT series (docstring
+        # item 3): sigma_BE is a breakeven on the PARALLEL curve shift, so
+        # be_over_rv needs a rate-level vol in its denominator — a
+        # micro-fly's own level vol legitimately sits below the 0.5 bp/day
+        # units floor and would trip the guard.
+        rv = realized_vol_bp_day(adj[lab], window=int(cfg.rlzd_window),
+                                 min_periods=int(cfg.rlzd_min_periods))
+        r["sigma_rlzd_bp_day"] = float(rv.loc[asof])
+        if lab not in fly_level:            # endpoint: no fly, no stats
+            r["n_hist"] = 0
+            r.update({k: float("nan") for k in _NAN_STATS})
+            fpt_hits[lab] = np.full(int(cfg.fpt_sims), np.nan)
+            continue
+        s = fly_level[lab]
         x0 = float(s.loc[asof]) if pd.notna(s.loc[asof]) else float("nan")
+        r["fly_bp"] = x0
         w = _trailing(s, cfg.z_window)
         n_hist = int(len(w))
         r["n_hist"] = n_hist
@@ -504,17 +575,13 @@ def build_kink_screen(asof, *, leg_hist_bp: pd.DataFrame, pricer: Any,
         r["p_hit"] = float(st["p_hit"])
         r["frac_censored"] = float(st["frac_censored"])
         r["q50_fpt_d"] = float(st["q50"])
-        # OU-expected drag of the POINT toward its mean over the FPT horizon
+        # OU-expected drag of the FLY level toward its mean over the FPT horizon
         if np.isfinite(st["e_fpt"]) and np.isfinite(x0):
             cond = ou_conditional(x0, params, st["e_fpt"])
             r["rev_drag_fpt_bp"] = (float(cond["mean"]) - x0
                                     if np.isfinite(cond["mean"]) else float("nan"))
         else:
             r["rev_drag_fpt_bp"] = float("nan")
-        # realized vol of the adjusted series, bp/day, window ending at asof
-        rv = realized_vol_bp_day(s, window=int(cfg.rlzd_window),
-                                 min_periods=int(cfg.rlzd_min_periods))
-        r["sigma_rlzd_bp_day"] = float(rv.loc[asof])
 
     # ---- 5/6. micro-fly carry + rent block --------------------------------
     carry_cache: Dict = {}
@@ -573,7 +640,8 @@ def build_kink_screen(asof, *, leg_hist_bp: pd.DataFrame, pricer: Any,
         else:
             r["carry_be_days"] = float("nan")
             r["p_fpt_gt_carry_be"] = float("nan")
-        # rac_net@FPT: fly carry over the point's FPT clock + the point's drag
+        # rac_net@FPT: fly carry over the fly's own FPT clock + the fly's own
+        # drag — one tradeable object (docstring item 9)
         r["rac_net"] = c * r["e_fpt_d"] + r["rev_drag_fpt_bp"]
 
     # ---- 7. sigma_impl (support-gated) ------------------------------------

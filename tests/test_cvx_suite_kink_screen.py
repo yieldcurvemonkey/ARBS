@@ -37,9 +37,15 @@ KS_COORDS = {grids.leg_label(p): grids.k_coord(p) for p in grids.KINK_GRID}
 ASOF = pd.Timestamp("2026-08-21")
 N_DAYS = 1150
 SEED = 20260826
+#: Every column that is NaN at the two grid endpoints (no adjacent micro-fly):
+#: the fly package block AND, since the stats series became the composed fly
+#: level, the whole zs/pctl/OU/FPT/e_rev/drag block too.
 FLY_COLS = ("carry_bp_day", "gamma_usd_per_bp2", "theta_usd_day",
             "sigma_be_bp_day", "be_over_rv", "rac_net", "edge_bp",
-            "w_front", "w_belly", "w_back", "w_pca_front", "w_pca_back")
+            "w_front", "w_belly", "w_back", "w_pca_front", "w_pca_back",
+            "fly_bp", "zs", "pctl_3y", "ou_kappa", "ou_mu_bp", "half_life_d",
+            "e_fpt_d", "p_hit", "frac_censored", "q50_fpt_d", "e_rev_bp",
+            "rev_drag_fpt_bp", "carry_be_days", "p_fpt_gt_carry_be")
 
 
 def _base_bp(k: float) -> float:
@@ -48,25 +54,54 @@ def _base_bp(k: float) -> float:
     return 300.0 + 6.0 * k - 0.10 * k * k
 
 
+AR_PHI = 0.95     # per-leg idio persistence (see make_panel docstring)
+AR_INNOV = 0.08   # per-leg idio innovation std, bp
+
+
 def make_panel(bump_bp: float = 0.0, bump_label: str = "7y1y",
                seed: int = SEED) -> pd.DataFrame:
-    """Seeded synthetic panel: base(k) + common level RW + slope RW + small
-    iid noise. ``bump_bp`` is added to ``bump_label`` from the FIRST TRADING
-    DAY OF THE ASOF MONTH onward — strictly after the last PCA refit's fit
-    window, so the frozen loadings provably never saw it."""
+    """Seeded synthetic panel: base(k) + common level RW + slope RW + a
+    per-leg stationary AR(1) idio component + small iid noise. ``bump_bp``
+    is added to ``bump_label`` from the FIRST TRADING DAY OF THE ASOF MONTH
+    onward — strictly after the last PCA refit's fit window, so the frozen
+    loadings provably never saw it.
+
+    The AR(1) idio component (phi 0.95, innovation 0.08bp -> stationary std
+    0.26bp per leg) exists BECAUSE the stats series is now the composed
+    sum-zero micro-fly: the fly cancels the level/slope walks exactly, and a
+    purely-iid remainder flips a coin on the sign of the AR(1) phi-hat
+    (calibrate_ou returns all-NaN for phi outside (0,1)). A persistent idio
+    kink per leg is also what the fly statistic measures in production; with
+    it, every interior fly fits phi well inside (0,1), deterministically.
+    """
     rng = np.random.default_rng(seed)
     idx = pd.bdate_range(end=ASOF, periods=N_DAYS)
     kvec = np.array([KS_COORDS[c] for c in GRID_LABELS])
     level = np.cumsum(rng.normal(0.0, 2.0, N_DAYS))
     slope = np.cumsum(rng.normal(0.0, 0.6, N_DAYS))
+    innov = rng.normal(0.0, AR_INNOV, (N_DAYS, len(kvec)))
+    ar = np.empty_like(innov)
+    ar[0] = innov[0] / np.sqrt(1.0 - AR_PHI ** 2)   # stationary start
+    for t in range(1, N_DAYS):
+        ar[t] = AR_PHI * ar[t - 1] + innov[t]
     eps = rng.normal(0.0, 0.3, (N_DAYS, len(kvec)))
     X = (_base_bp(kvec)[None, :] + level[:, None]
-         + slope[:, None] * (kvec[None, :] / 45.0) + eps)
+         + slope[:, None] * (kvec[None, :] / 45.0) + ar + eps)
     df = pd.DataFrame(X, index=idx, columns=GRID_LABELS)
     if bump_bp:
         month_start = idx[(idx.year == ASOF.year) & (idx.month == ASOF.month)][0]
         df.loc[df.index >= month_start, bump_label] += float(bump_bp)
     return df
+
+
+def _fly_series(panel: pd.DataFrame, lab: str) -> pd.Series:
+    """The screen's composed stats fly for interior label ``lab``, recomputed
+    independently here (fixed sum-zero weights; CA = 0 under ZERO_SIGMA so
+    adjusted == raw panel)."""
+    i = GRID_LABELS.index(lab)
+    assert 0 < i < len(GRID_LABELS) - 1, f"{lab} is an endpoint"
+    return (2.0 * panel[lab] - panel[GRID_LABELS[i - 1]]
+            - panel[GRID_LABELS[i + 1]])
 
 
 ZERO_SIGMA = pd.DataFrame(0.0, index=pd.bdate_range(end=ASOF, periods=N_DAYS),
@@ -215,11 +250,12 @@ def test_planted_kink_negative_and_null_controls():
     Negative control for the planted answer above: the +1 in the bumped
     fixture is not vacuous — the same machinery produces -1 and 0 when the
     input says so (seeded, deterministic). Measured noise floor of this
-    seed: max |residual_xsec| 0.63, max |residual_pca| 0.89 — the 7y1y
-    noise leans -0.63/-0.77 in BOTH models, so the flat build runs with
-    ``sign_min_abs_bp = 1.0`` (above the floor, far below the ~5bp planted
-    response). MUTATION: an implementation ignoring ``sign_min_abs_bp``
-    reads the -0.6/-0.8 pair as agreement and the all-zeros assert fails.
+    seed (with the AR(1) idio component): max |residual_xsec| 0.68, max
+    |residual_pca| 1.01 — the 7y1y noise leans -0.20/-0.22 in both models
+    — so the flat build runs with ``sign_min_abs_bp = 1.5`` (above BOTH
+    floors, far below the ~6-7bp planted response). MUTATION: an
+    implementation ignoring ``sign_min_abs_bp`` reads any same-signed
+    noise pair as agreement and the all-zeros assert fails.
     """
     mp = pytest.MonkeyPatch()
     try:
@@ -229,7 +265,7 @@ def test_planted_kink_negative_and_null_controls():
         assert down.loc["7y1y", "residual_pca"] < -2.0
         assert down.loc["7y1y", "sign_agree"] == -1.0
         flat, _, _ = build(make_panel(bump_bp=0.0),
-                           cfg=ks.KinkScreenCfg(sign_min_abs_bp=1.0))
+                           cfg=ks.KinkScreenCfg(sign_min_abs_bp=1.5))
         assert abs(flat.loc["7y1y", "residual_xsec"]) < 2.0
         assert flat["residual_xsec"].abs().max() < 2.0
         assert (flat["sign_agree"] == 0.0).all()
@@ -239,47 +275,128 @@ def test_planted_kink_negative_and_null_controls():
 
 def test_endpoints_get_nan_fly_columns_and_none_book(bumped):
     """The spot 1y and 40y10y points have no adjacent micro-fly: every
-    fly-derived column is NaN and the books NaN-refusal labels them none.
+    fly-derived column — the package block AND the whole zs/pctl/OU/FPT
+    stats block, which now lives on the composed fly level — is NaN,
+    ``n_hist`` is 0, and the books NaN-refusal labels them none. The
+    POINT-level realized vol stays FINITE there (it never moved to the fly).
 
     MUTATION: manufacturing endpoint flies (wrapping the grid, or a 2-leg
-    substitute) would print finite carry/gamma here and fail. MUTATION:
+    substitute) would print finite carry/gamma/zs here and fail. MUTATION:
     NaN->0 anywhere in the carry path would classify an endpoint into a
-    book and fail the "none" assert.
+    book and fail the "none" assert. MUTATION: computing zs on the outright
+    point series (the pre-fix defect) prints a finite endpoint zs and the
+    NaN assert fails. MUTATION: over-NaNing sigma_rlzd (moving it to the
+    fly) fails the finite assert.
     """
     df = bumped["df"]
     for lab in ("1y", "40y10y"):
         for col in FLY_COLS:
             assert np.isnan(df.loc[lab, col]), f"{lab}.{col} must be NaN"
+        assert df.loc[lab, "n_hist"] == 0
+        assert np.isfinite(df.loc[lab, "sigma_rlzd_bp_day"])
         assert df.loc[lab, "book"] == "none"
     # interior points DO have the fly block
     assert np.isfinite(df.loc["5y1y", "carry_bp_day"])
     assert np.isfinite(df.loc["5y1y", "gamma_usd_per_bp2"])
+    assert np.isfinite(df.loc["5y1y", "zs"])
+    assert np.isfinite(df.loc["5y1y", "fly_bp"])
 
 
-def test_zs_polarity_positive_is_rich():
-    """Plant the asof 5y1y level 3 trailing sigmas ABOVE its own window ->
-    zs strongly positive (RICH, the books polarity) and pctl_3y ~ 1.
+def test_zs_polarity_positive_is_fly_above_mean():
+    """Plant the asof 5y1y FLY level (L = 2*5y1y - 4y1y - 6y1y) 3 trailing
+    sigmas ABOVE its own window (by solving for the belly leg value) -> zs
+    strongly positive and pctl_3y ~ 1. POLARITY: positive = the fly level
+    is HIGH = the belly RATE is high vs the wings = the belly is CHEAP (an
+    upward kink; the fade receives it) — the pinned rate-space convention.
 
-    MUTATION: zs = (mean - x)/std (the receive-side sign flip) -> zs comes
-    out ~-2.9 and the > 2 assert fails; pctl catches an independent flip.
-    Negative control: planting BELOW gives the mirror numbers.
+    MUTATION: zs = (mean - L)/std (a sign flip) -> zs ~ -2.9 and the > 2
+    assert fails; pctl catches an independent flip. MUTATION: computing zs
+    on the OUTRIGHT point series (the pre-fix defect): the belly-leg plant
+    moves the outright by only ~L-units/2 (a fraction of the outright's fat
+    random-walk sigma), so the outright z barely moves from its seed value
+    and CANNOT satisfy > +2 AND < -2 across the two branches — at least one
+    branch fails. Negative control: planting BELOW gives mirror numbers.
     """
     mp = pytest.MonkeyPatch()
     try:
         _patch_seams(mp, FakeGamma())
         for sign in (+1.0, -1.0):
             panel = make_panel(bump_bp=0.0)
-            w = panel["5y1y"].iloc[:-1].tail(755)
-            panel.iloc[-1, panel.columns.get_loc("5y1y")] = (
-                w.mean() + sign * 3.0 * w.std(ddof=1))
+            fly = _fly_series(panel, "5y1y")
+            w = fly.iloc[:-1].tail(755)
+            target_L = w.mean() + sign * 3.0 * w.std(ddof=1)
+            # L_asof = 2*b - f - k  ->  b = (L_asof + f + k) / 2
+            belly = (target_L + panel["4y1y"].iloc[-1]
+                     + panel["6y1y"].iloc[-1]) / 2.0
+            panel.iloc[-1, panel.columns.get_loc("5y1y")] = belly
             df, _, _ = build(panel)
             zs, pctl = df.loc["5y1y", "zs"], df.loc["5y1y", "pctl_3y"]
             if sign > 0:
-                assert zs > 2.0, "level above own window must read RICH (+)"
+                assert zs > 2.0, "fly above own window must read POSITIVE (belly cheap)"
                 assert pctl > 0.95
             else:
                 assert zs < -2.0
                 assert pctl < 0.05
+            # the printed composed level is the planted one
+            assert df.loc["5y1y", "fly_bp"] == pytest.approx(target_L, rel=1e-9)
+    finally:
+        mp.undo()
+
+
+def test_level_shift_invariance_vs_genuine_kink():
+    """THE DEFECT-1 regression pair: the fly-level zs must see a genuine
+    single-point kink and must NOT see a parallel level move.
+
+    (i) +100bp on EVERY leg over the last 63 sessions: the sum-zero fly
+    weights cancel it EXACTLY, so every interior fly's zs is unchanged (to
+    float noise) and no fly reaches the |zs| >= 2 dislocation gate — while
+    the OUTRIGHT z (the pre-fix statistic) jumps by > 1 sigma on every
+    point (the potency control: the plant would have tripped the old
+    screen across the board, the recorded 2026-08-21 15/17-at-z~+2
+    artifact).
+    (ii) +8bp on 7y1y alone over the same window: the 7y1y fly reads
+    strongly POSITIVE (belly rate high vs wings = cheap belly) and both
+    neighbouring flies, where 7y1y is a wing, read negative.
+
+    MUTATION: reverting the stats series to the outright adjusted level
+    (zs on adj[lab] — the pre-fix defect) fails (i) loudly: every zs jumps
+    ~+2 and the invariance asserts break by > 1 sigma. MUTATION: fly
+    weights that do not sum to zero (e.g. the DV01-neutral package weights
+    at tenor breaks) break the exact-cancellation asserts at those points.
+    """
+    mp = pytest.MonkeyPatch()
+    try:
+        _patch_seams(mp, FakeGamma())
+        base = make_panel(bump_bp=0.0)
+        df_base, _, _ = build(base)
+        interior = GRID_LABELS[1:-1]
+
+        # (i) parallel level shift
+        shifted = base.copy()
+        shifted.iloc[-63:, :] += 100.0
+        df_shift, _, _ = build(shifted)
+        for lab in interior:
+            assert df_shift.loc[lab, "zs"] == pytest.approx(
+                df_base.loc[lab, "zs"], abs=1e-6), \
+                f"{lab}: a parallel shift moved the fly zs"
+        assert df_shift.loc[interior, "zs"].abs().max() < 2.0, \
+            "a pure level move must not put any fly at the dislocation gate"
+        for lab in GRID_LABELS:
+            wb = base[lab].tail(756)
+            ws = shifted[lab].tail(756)
+            z_b = (wb.iloc[-1] - wb.mean()) / wb.std(ddof=1)
+            z_s = (ws.iloc[-1] - ws.mean()) / ws.std(ddof=1)
+            assert z_s - z_b > 1.0, \
+                f"{lab}: potency control — the outright z must see the shift"
+
+        # (ii) genuine single-point kink
+        kinked = base.copy()
+        kinked.iloc[-63:, kinked.columns.get_loc("7y1y")] += 8.0
+        df_kink, _, _ = build(kinked)
+        assert df_kink.loc["7y1y", "zs"] > 2.0, \
+            "a real upward kink must read strongly positive (belly cheap)"
+        assert df_kink.loc["6y1y", "zs"] < -1.0
+        assert df_kink.loc["8y1y", "zs"] < -1.0
     finally:
         mp.undo()
 
@@ -347,16 +464,21 @@ def test_package_recipe_bpv_legs(bumped):
 
 
 def test_edge_rac_and_frontier_arithmetic(bumped):
-    """The composed numbers reproduce from the row's own columns exactly.
+    """The composed numbers reproduce from the row's own columns exactly —
+    and every stats input is now the FLY level (fly_bp), not the point.
 
     edge_bp = e_rev*p_hit - |carry|*e_fpt - cost          (cost 2.3 default)
+    e_rev   = |ou_mu - fly_bp| / 2
     rac_net = carry*e_fpt + rev_drag
-    rev_drag = (mu - adj)*(1 - exp(-kappa*e_fpt))
+    rev_drag = (ou_mu - fly_bp)*(1 - exp(-kappa*e_fpt))
     off_value_carry = residual_xsec - (icpt + slope*leg_roll)
 
     MUTATION: +cost instead of -cost -> edge off by 4.6. MUTATION: dropping
-    the p_hit factor -> edge fails whenever p_hit < 1 (true here: the RW-ish
-    synthetic panel censors heavily). MUTATION: carry annualised (x252) in
+    the p_hit factor -> edge fails wherever p_hit < 1 (the dedicated
+    censoring test below plants that regime; in this fixture the fast-
+    reverting flies mostly hit). MUTATION: anchoring drag/e_rev on adj_bp
+    (the point level, the pre-fix defect) -> both identities fail (fly_bp
+    != adj_bp by construction). MUTATION: carry annualised (x252) in
     rac_net -> exact equality fails. MUTATION: off_frontier without the
     intercept -> the frontier identity fails.
     """
@@ -366,7 +488,9 @@ def test_edge_rac_and_frontier_arithmetic(bumped):
     assert r["edge_bp"] == pytest.approx(
         r["e_rev_bp"] * r["p_hit"] - abs(r["carry_bp_day"]) * r["e_fpt_d"] - 2.3,
         rel=1e-12)
-    drag = (r["ou_mu_bp"] - r["adj_bp"]) * (
+    assert r["e_rev_bp"] == pytest.approx(
+        abs(r["ou_mu_bp"] - r["fly_bp"]) / 2.0, rel=1e-12)
+    drag = (r["ou_mu_bp"] - r["fly_bp"]) * (
         1.0 - math.exp(-r["ou_kappa"] * r["e_fpt_d"]))
     assert r["rev_drag_fpt_bp"] == pytest.approx(drag, rel=1e-9)
     assert r["rac_net"] == pytest.approx(
@@ -380,6 +504,35 @@ def test_edge_rac_and_frontier_arithmetic(bumped):
     for lab, row in fin.iterrows():
         assert row["be_over_rv"] == pytest.approx(
             row["sigma_be_bp_day"] / row["sigma_rlzd_bp_day"], rel=1e-12)
+
+
+def test_edge_p_hit_factor_bites_under_censoring():
+    """A tight FPT cap (fpt_steps=3) forces genuine censoring on the planted
+    far-from-mean 7y1y fly, so p_hit < 1 there and the edge identity's
+    p_hit FACTOR is load-bearing.
+
+    MUTATION: dropping the p_hit factor from edge_bp (e_rev*1 - ...) fails
+    the exact identity on the censored row by e_rev*(1-p_hit) > 0. MUTATION:
+    computing p_hit as 1 - frac_censored with censored paths folded into the
+    hits (the canonical kernel's convention) also fails here.
+    """
+    mp = pytest.MonkeyPatch()
+    try:
+        _patch_seams(mp, FakeGamma())
+        cfg = ks.KinkScreenCfg(fpt_steps=3)
+        df, _, _ = build(make_panel(bump_bp=8.0), cfg=cfg)
+        r = df.loc["7y1y"]
+        assert r["frac_censored"] > 0.0, "the tight cap must censor some paths"
+        assert r["p_hit"] < 1.0
+        assert np.isfinite(r["edge_bp"])
+        assert r["edge_bp"] == pytest.approx(
+            r["e_rev_bp"] * r["p_hit"] - abs(r["carry_bp_day"]) * r["e_fpt_d"]
+            - 2.3, rel=1e-12)
+        # the factor moves the number: identity-without-p_hit is WRONG here
+        wrong = r["e_rev_bp"] - abs(r["carry_bp_day"]) * r["e_fpt_d"] - 2.3
+        assert abs(wrong - r["edge_bp"]) > 1e-6
+    finally:
+        mp.undo()
 
 
 def test_carry_breakeven_branch_positive_carry():
@@ -666,11 +819,15 @@ def test_real_screen_2026_08_21(real_inputs):
     assert bool(((fin >= 0.5) & (fin <= 40.0)).all()), \
         f"sigma_rlzd outside [0.5, 40] bp/day: {fin[(fin < 0.5) | (fin > 40)].to_dict()}"
 
-    # endpoints NaN through the fly block on real data too
+    # endpoints NaN through the fly block on real data too — including the
+    # zs/OU stats, which now live on the composed fly level
     assert np.isnan(df.loc["1y", "gamma_usd_per_bp2"])
     assert np.isnan(df.loc["40y10y", "gamma_usd_per_bp2"])
-    # interior gammas priced off the real curve
+    assert np.isnan(df.loc["1y", "zs"])
+    assert np.isnan(df.loc["40y10y", "zs"])
+    # interior gammas priced off the real curve; interior fly stats finite
     assert np.isfinite(df.loc["10y2y", "gamma_usd_per_bp2"])
+    assert np.isfinite(df.loc["10y2y", "fly_bp"])
 
     non_none = int((df["book"] != "none").sum())
     if non_none == 0:

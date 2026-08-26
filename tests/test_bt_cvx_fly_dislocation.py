@@ -42,8 +42,9 @@ POINT = "5y1y"
 LEGS = dict(leg_front="4y1y", leg_belly="5y1y", leg_back="6y1y")
 W = dict(w_front=-1.0, w_belly=2.0, w_back=-1.0)
 
-#: All gates pass, point RICH (zs +3, both-rich agreement) -> pay belly.
-GOOD = dict(zs=3.0, sign_agree=-1.0, tag="clean", edge_bp=2.0, **LEGS, **W)
+#: All gates pass, fly level HIGH (zs +3 = belly CHEAP, both-cheap
+#: agreement) -> RECEIVE the belly (direction -1, the rent-collecting side).
+GOOD = dict(zs=3.0, sign_agree=1.0, tag="clean", edge_bp=2.0, **LEGS, **W)
 #: No signal: |zs| < 2, disagreeing, no edge.
 QUIET = dict(zs=1.0, sign_agree=0.0, tag="clean", edge_bp=0.0, **LEGS, **W)
 
@@ -76,24 +77,29 @@ def _zs_path(values, start_idx=2):
 # Episode extraction
 # ---------------------------------------------------------------------------
 class TestEpisodes:
-    def test_planted_pay_belly_episode(self):
-        # Signal at D[0] (zs +3, rich) -> fill D[1], direction +1 (PAY the
-        # belly = long local convexity); zs decays and crosses zero at D[3].
+    def test_planted_receive_belly_episode(self):
+        # Signal at D[0] (zs +3 = fly HIGH = belly CHEAP) -> fill D[1],
+        # direction -1 (RECEIVE the belly = short local convexity, the
+        # rent-collecting fade); zs decays and crosses zero at D[3].
+        # MUTATION: reverting to the OLD backwards mapping (+1 pay belly on
+        # zs > 0) fails this exact-episode assert on the direction field.
         panel = make_panel(D, overrides={(D[0], POINT): GOOD,
                                          **_zs_path([1.5, -0.5])})
         eps = episodes_from_panel(panel, CFG)
-        assert eps == [FlyEpisode(POINT, D[1], D[3], +1, "4y1y", "5y1y", "6y1y",
+        assert eps == [FlyEpisode(POINT, D[1], D[3], -1, "4y1y", "5y1y", "6y1y",
                                   -1.0, 2.0, -1.0, 3.0, "target")]
 
-    def test_receive_belly_polarity(self):
-        # zs negative = CHEAP -> RECEIVE the belly (direction -1).
-        # MUTATION: flipping the polarity (direction = -sign(zs)) fails both
-        # this and the pay-belly test above.
-        cheap = {**GOOD, "zs": -3.0, "sign_agree": 1.0}
-        panel = make_panel(D, overrides={(D[0], POINT): cheap,
+    def test_pay_belly_polarity_on_negative_zs(self):
+        # zs negative = fly LOW = belly RICH -> PAY the belly (direction +1,
+        # long local convexity — pays rent to hold the fade).
+        # MUTATION: flipping the polarity back (direction = +sign(zs), the
+        # pre-fix mapping) fails both this and the receive-belly test above
+        # — the pair pins the mapping from both sides.
+        rich = {**GOOD, "zs": -3.0, "sign_agree": -1.0}
+        panel = make_panel(D, overrides={(D[0], POINT): rich,
                                          **_zs_path([-1.5, 0.2])})
         eps = episodes_from_panel(panel, CFG)
-        assert len(eps) == 1 and eps[0].direction == -1
+        assert len(eps) == 1 and eps[0].direction == +1
         assert eps[0].entry_zs == -3.0 and eps[0].exit_reason == "target"
 
     @pytest.mark.parametrize("bad", [
@@ -145,7 +151,7 @@ class TestEpisodes:
         panel = make_panel(D, overrides={(D[0], POINT): GOOD,
                                          **_zs_path([-6.5])})
         eps = episodes_from_panel(panel, CFG)
-        assert eps == [FlyEpisode(POINT, D[1], D[2], +1, "4y1y", "5y1y", "6y1y",
+        assert eps == [FlyEpisode(POINT, D[1], D[2], -1, "4y1y", "5y1y", "6y1y",
                                   -1.0, 2.0, -1.0, 3.0, "stop")]
         # Same-sign stop exactly AT entry*mult fires (INCLUSIVE >=).
         # MUTATION: `>=` -> `>` misses the boundary and this exits "end".
@@ -331,8 +337,10 @@ def _mdp_with(pricer_cls):
     return _MDP()
 
 
+#: Hand-made PAY-belly episode (direction +1 <=> entry zs < 0 = belly RICH
+#: under the pinned polarity) — exercises the engine wiring for the +1 side.
 EP = FlyEpisode(POINT, T("2025-06-03"), T("2025-06-10"), +1,
-                "4y1y", "5y1y", "6y1y", -1.0, 2.0, -1.0, 3.0, "target")
+                "4y1y", "5y1y", "6y1y", -1.0, 2.0, -1.0, -3.0, "target")
 
 
 class TestQDB:
@@ -390,10 +398,16 @@ class TestQDB:
 
     def test_qdb_smoke_panel_to_pnl(self):
         # End to end: panel -> episodes -> QDB. Entry D[1], target exit D[5].
+        # The planted zs=+3 row (belly CHEAP) must produce a RECEIVE-belly
+        # episode (direction -1) — the pinned polarity, asserted explicitly.
+        # MUTATION: the OLD backwards mapping (+1 on zs>0) fails the
+        # direction assert AND the sign of every expected-P&L number below.
         panel = make_panel(D, overrides={(D[0], POINT): GOOD,
                                          **_zs_path([2.5, 2.4, 2.2, -0.3])})
         eps = episodes_from_panel(panel, CFG)
         assert [(e.entry_date, e.exit_date) for e in eps] == [(D[1], D[5])]
+        assert eps[0].direction == -1, \
+            "zs=+3 (belly cheap) must map to RECEIVE the belly"
         bt, eq = run_backtest(eps, D, _mdp_with(DriftPricer), cfg=CFG, probe=True)
 
         assert len(eq) == len(D)
@@ -408,11 +422,14 @@ class TestQDB:
                 c["gross_realized_pnl"] - c["fee_allocated"])
 
         # First-principles expected P&L: gross = sum_i bpv_i * dd * s_i with
-        # bpv = (-1,+2,-1) x $50k and s = 1 + CURV*((eff-ANCHOR)/365.25y)^2,
-        # eff = entry + round(fwd_years*365.25) days. The fly books the SECOND
-        # difference of the leg scale: nonzero ONLY because the scale is
-        # convex — a linear scale would cancel exactly (that cancellation is
-        # the negative control below).
+        # bpv = direction * (-1,+2,-1) x $50k (direction -1: receive belly)
+        # and s = 1 + CURV*((eff-ANCHOR)/365.25y)^2, eff = entry +
+        # round(fwd_years*365.25) days. The fly books the SECOND difference
+        # of the leg scale: nonzero ONLY because the scale is convex — a
+        # linear scale would cancel exactly (that cancellation is the
+        # negative control below). MUTATION: dropping `direction` from the
+        # gross (the old pay-belly arithmetic) flips its sign and both
+        # equalities fail.
         def leg_scale(entry, fwd_years):
             eff = entry + datetime.timedelta(days=round(fwd_years * 365.25))
             fy = (eff - ANCHOR).days / 365.25
@@ -421,7 +438,7 @@ class TestQDB:
         e = eps[0]
         dd = (e.exit_date.date() - e.entry_date.date()).days
         s4, s5, s6 = (leg_scale(e.entry_date.date(), f) for f in (4.0, 5.0, 6.0))
-        gross = 50_000.0 * dd * (-s4 + 2.0 * s5 - s6)
+        gross = e.direction * 50_000.0 * dd * (-s4 + 2.0 * s5 - s6)
         assert abs(gross) > 1_000.0                      # curvature keeps it alive
         assert float(eq.iloc[-1]) == pytest.approx(gross - 115_000.0, rel=1e-9)
         assert sum(c["gross_realized_pnl"] for c in closed) == pytest.approx(gross, rel=1e-9)
@@ -472,8 +489,9 @@ def _store_mdp_or_skip(days):
 class TestIntegrationTiny:
     def test_one_episode_ten_days_real_store(self):
         mdp = _store_mdp_or_skip(INT_GRID)
+        # pay-belly (direction +1) <=> entry zs < 0 under the pinned polarity
         ep = FlyEpisode(POINT, INT_GRID[0], INT_GRID[-1], +1,
-                        "4y1y", "5y1y", "6y1y", -1.0, 2.0, -1.0, 2.5, "end")
+                        "4y1y", "5y1y", "6y1y", -1.0, 2.0, -1.0, -2.5, "end")
         bt, eq = run_backtest([ep], INT_GRID, mdp, cfg=CFG, probe=True)
 
         assert len(eq) == len(INT_GRID)
