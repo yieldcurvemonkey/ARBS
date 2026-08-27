@@ -2108,7 +2108,10 @@ def _build_registry_impl() -> OrderedDict[str, WarmTargetSpec]:
         WarmTargetSpec(
             target="stirfutures.pricer",
             default_source="WEBULL_STIRF-RL",
-            allowed_sources=("WEBULL_STIRF-RL", "BARCHART_STIRF-RL", "BARCHART_TOS_LIVE_STIRF-RL", "SCHWAB_APP_STIRF-RL"),
+            # BARCHART_STIRF_SETTLE-RL is the CME settle (daily bars, keyed 15:00 ET);
+            # BARCHART_STIRF-RL beside it is the 15:59 CT Globex close. Separate cache
+            # namespaces on purpose -- see MDP.STIRFutures.STIRFutureMDP.SETTLE_SOURCE.
+            allowed_sources=("WEBULL_STIRF-RL", "BARCHART_STIRF-RL", "BARCHART_STIRF_SETTLE-RL", "BARCHART_TOS_LIVE_STIRF-RL", "SCHWAB_APP_STIRF-RL"),
             supported_scopes=frozenset({PERSISTENT_SCOPE, EPHEMERAL_SCOPE}),
             request_schema={"required": ["symbols|tickers", "timestamp|timestamps"], "optional": ["cache_full_intraday_fetch", "max_workers"], "notes": ["Use cache_full_intraday_fetch for dense intraday persistence."]},
             preset_docs={"smoke": "Warm a small STIR future set.", "front": "Warm a broader STIR future set across recent dates."},

@@ -2271,9 +2271,11 @@ q = SwaptionQuery(
 - `DV01`: Dollar value of 1bp (full notional)
 - `GAMMA_01`: Second-order sensitivity
 - `NOTIONAL`: Total notional (signed)
-- `CARRY_BPS_RUNNING`: Carry in bps over horizon
-- `ROLL_BPS_RUNNING`: Rolldown in bps
-- `CARRY_AND_ROLL_BPS_RUNNING`: Combined
+- `CARRY_BPS_RUNNING`: Carry in bps over horizon (receiver-positive; zero before the swap starts)
+- `ROLL_BPS_RUNNING`: Rolldown in bps (static curve, ageing BOTH ends of the leg)
+- `CARRY_AND_ROLL_BPS_RUNNING`: Combined. Graded +0.991 corr / 0.338bp MAE against Citi's published Figure-7 carry screen; see `Query/IRSwaps/_carry_roll.py`
+- `THETA`: one day's PV decay in currency, `pv(sod) - pv(eod)`, positive when the PV falls
+- `THETA_CASHFLOWS` / `THETA_FORWARDING` / `THETA_ROLLDOWN` / `THETA_OPTION`: the four parts, summing to `THETA` exactly. rateslib backend only; see `Query/IRSwaps/backends/rateslib/rl_theta.py` for the construction, the sign convention and the measured limits of a one-day rolldown
 - And more...
 
 ### FixedRateBondQuery

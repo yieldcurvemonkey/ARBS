@@ -2,26 +2,42 @@ r"""Recurring warm for SR3 **EOD settles** at full pack depth.
 
 Why this job exists
 ===================
-The convexity-adjustment panel is built from 17:00 EOD SR3 settles
-(``BARCHART_STIRF-RL``). Nothing in the daily warmer fed that cache. The one
-STIR entry, ``warm_stirf_cme_session``, warms *curves* (``Q12STIRT``,
-``Q16STIRT``, ``…MIX23``) through the intraday CME-session path, whose fetcher is
-wired to ``BARCHART_TOS_LIVE_STIRF-RL`` -- a different cache, 1-minute bars, and
-one that reaches depth 20 on **zero** dates.
+The convexity-adjustment panel is built from EOD SR3 settles. Nothing in the
+daily warmer fed that cache. The one STIR entry, ``warm_stirf_cme_session``,
+warms *curves* (``Q12STIRT``, ``Q16STIRT``, ``…MIX23``) through the intraday
+CME-session path, whose fetcher is wired to ``BARCHART_TOS_LIVE_STIRF-RL`` -- a
+different cache, 1-minute bars, and one that reaches depth 20 on **zero** dates.
 
 The consequence was measured: settle depth decays toward the front as you move
 forward in time, because the only thing that ever wrote deep settles was ad-hoc
 historical analysis. Dates holding a contiguous strip of depth >= 20 by year:
 253 (2020), 187 (2021), 52 (2022), 51 (2023), **19 (2024), 1 (2025), 0 (2026)**.
 Blues (rank 13) needs depth 16 and Golds (rank 17) needs depth 20, so the deep
-packs simply stopped being computable. A one-time backfill would move that cliff
-rather than remove it, which is why this is a recurring job and not a script.
+packs simply stopped being computable.
+
+Two things changed on 2026-08-27
+================================
+**The source.** It was ``BARCHART_STIRF-RL``, which resolves a date to the
+1-minute bar nearest 17:00 New York -- the 15:59 CT Globex close, measured to be
+that bar on 24 of 27 cells and NOT the settlement price. It is now
+``BARCHART_STIRF_SETTLE-RL``, whose date request returns Barchart's daily bar,
+measured to be the CME settle (mean 0.201 bp from the 13:59 CT settle-window bar
+against 0.907 bp for the session close). See
+``RVUtils.ConvexityRV.strat2_sofr_convexity.assert_settle_source``.
+
+**The fetch shape, and this is what removes the cliff rather than moving it.**
+The old source could only be asked for one day at a time, so warming cost
+``len(symbols) x len(dates)`` round trips and the deferred end never got warmed.
+The daily endpoint serves a contract's ENTIRE history in one call, so this job
+now enumerates the DISTINCT contracts the window needs and makes about one
+request per contract -- a year of depth-20 coverage is ~30 requests, not ~5,000.
 
 What it does
 ============
-For each business day in the range, fetch the front ``depth`` quarterly SR3
-contracts from the EOD settle source in a single ``fetch_pricers_flat`` call, so
-a date costs about one round trip rather than one per contract.
+Enumerate the front ``depth`` quarterly SR3 contracts over every business day in
+the range, take the distinct set, and hand it to ``STIRFutureMDP.warm_settles``,
+which writes one cache row per (contract, date) through the same key builder the
+read path probes with.
 
 Idempotent by construction: :func:`RVUtils.ConvexityRV.strat2_q20.strip_depth_by_date`
 is consulted first and any date already at the target depth is skipped, so the
@@ -30,17 +46,19 @@ daily run is a no-op on a warm cache and the weekend backfill only fills holes.
 Acceptance is measured, not assumed
 ===================================
 Keys written is **not** the success criterion. The panel matches settles against
-a ``{iso_timestamp}-{TICKER}-{SOURCE}`` key stamped 17:00 New York; a fetch that
-writes a differently shaped key would report thousands of successful writes and
-recover exactly nothing. So depth is re-measured after the warm and the job
-reports **before -> after contiguous depth**. If depth does not move, the job
-says so and exits non-zero rather than reporting success.
+a ``{iso_timestamp}-{TICKER}-{SOURCE}`` key stamped at the source's own EOD hour
+(15:00 New York for the settle source); a fetch that writes a differently shaped
+key would report thousands of successful writes and recover exactly nothing --
+which is why key construction lives in ``STIRFutureMDP.warm_settles``, beside the
+read path, instead of being reproduced here. Depth is re-measured after the warm
+and the job reports **before -> after contiguous depth**. If depth does not move,
+the job says so and exits non-zero rather than reporting success.
 
 Network
 =======
 This job is *meant* to reach the network -- it is the warm. It is nonetheless
-confined to ``STIRFutureMDP(source="BARCHART_STIRF-RL")``. It must never touch
-``IRSwapsMDP(source="BARCHART_STIRF-RL").get_pricer({"curve_name":
+confined to ``STIRFutureMDP(source="BARCHART_STIRF_SETTLE-RL")``. It must never
+touch ``IRSwapsMDP(source="BARCHART_STIRF-RL").get_pricer({"curve_name":
 "USD-SOFR-1D-Q20STIRT", ...})``, which was measured at 52-57 outbound requests
 *per date* and ignores ``offline=True``.
 
@@ -132,7 +150,11 @@ def _depth_by_date(depth: int, start: dt.date, end: dt.date) -> Dict[dt.date, in
 
 
 #: Hour (America/New_York) after which the current session's SR3 settle is
-#: assumed published. SR3 settles at ~15:00 ET; the scheduled slot is 18:15 ET.
+#: assumed published. CME strikes it over 13:59:30-14:00:00 CT = 15:00 ET, so 16
+#: leaves an hour of margin for publication; the scheduled slot is 18:15 ET.
+#: The margin matters more, not less, under the daily endpoint: it carries a row
+#: for the CURRENT, incomplete session, so a pre-settle fetch would file a running
+#: price under a settlement key rather than simply finding nothing.
 SETTLE_HOUR_ET = 16
 
 
@@ -140,8 +162,8 @@ def _session_has_settled(d: dt.date, *, now_et: Optional[dt.datetime] = None) ->
     """Is *d*'s SR3 settlement published yet?
 
     ``warm_sr3_deferred`` refuses any date ``>= today`` outright, because
-    ``get_data`` stamps a 17:00 settlement alias from whatever the vendor serves
-    at request time -- so warming a live session files an intraday print under a
+    ``get_data`` stamps a settlement key from whatever the vendor serves at
+    request time -- so warming a live session files an intraday print under a
     settlement key, the exact confusion ``assert_settle_source`` exists to catch,
     arriving through the back door. This job had no such guard and its default is
     ``start = end = today``, so the two disagreed.
@@ -159,16 +181,22 @@ def _session_has_settled(d: dt.date, *, now_et: Optional[dt.datetime] = None) ->
     return now.hour >= SETTLE_HOUR_ET
 
 
-def warm_one_date(mdp, as_of: dt.date, depth: int) -> Tuple[int, Optional[str]]:
-    """Fetch the front *depth* settles for one date.
+def warm_dates(mdp, dates: Sequence[dt.date], depth: int) -> Tuple[int, Optional[str]]:
+    """Warm every contract the *dates* need, in about one request per contract.
 
-    Returns ``(n_pricers, error)``. A failure is returned rather than raised so
-    one bad date cannot abort an unattended run.
+    Returns ``(rows_written, error)``. A failure is returned rather than raised so
+    one bad window cannot abort an unattended run.
+
+    The distinct-contract set is what makes this cheap: 250 business days at
+    depth 20 touch ~5,000 (date, contract) cells but only ~30 contracts, and the
+    daily endpoint serves each contract's whole history in one call.
     """
-    symbols = _strip_symbols(as_of, depth)
+    if not dates:
+        return 0, None
+    symbols = sorted({s for d in dates for s in _strip_symbols(d, depth)})
     try:
-        pricers = mdp.fetch_pricers_flat(symbols, timestamp=as_of)
-        return len(pricers), None
+        written = mdp.warm_settles(symbols, min(dates), max(dates))
+        return int(sum(written.values())), None
     except Exception as exc:  # noqa: BLE001 - recorded as data, see docstring
         return 0, f"{type(exc).__name__}: {exc}"
 
@@ -216,18 +244,24 @@ def run_warm(
     log.info("SR3 settle warm: depth %d, %d business days, %d already deep, %d to fetch",
              depth, len(dates), skipped, len(todo))
 
-    mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
-    warmed, failures = 0, []
-    for i, d in enumerate(todo, 1):
-        n, err = warm_one_date(mdp, d, depth)
-        if err is None:
-            warmed += 1
-            log.info("[%d/%d] %s  %d pricers", i, len(todo), d, n)
-        else:
-            failures.append({"date": d.isoformat(), "error": err})
-            log.warning("[%d/%d] %s  FAIL %s", i, len(todo), d, err)
-        if sleep_s:
-            time.sleep(sleep_s)
+    from MDP.STIRFutures.STIRFutureMDP import SETTLE_SOURCE
+
+    mdp = STIRFutureMDP(source=SETTLE_SOURCE)
+    failures: List[Dict[str, str]] = []
+    rows, err = warm_dates(mdp, todo, depth)
+    if err is None:
+        log.info("wrote %d settle rows over %d contract(s) for %d date(s)",
+                 rows, len(sorted({s for d in todo for s in _strip_symbols(d, depth)})),
+                 len(todo))
+    else:
+        failures.append({"date": f"{min(todo)}..{max(todo)}" if todo else "-", "error": err})
+        log.warning("settle warm FAILED: %s", err)
+    # `warmed` stays date-shaped so the acceptance block below and every caller
+    # of this summary keep their meaning; a bulk fetch that wrote nothing is a
+    # failure, not 0 dates attempted.
+    warmed = len(todo) if err is None and rows else 0
+    if sleep_s:
+        time.sleep(sleep_s)
 
     # --- acceptance: did measured depth actually move? -----------------------
     after = _depth_by_date(depth, start, end)

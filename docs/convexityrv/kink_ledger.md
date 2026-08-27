@@ -317,8 +317,10 @@ from the *surface*, not from any single axis:
    (the W1 flattener franchise), not a wing for belly flies.
 2. **Two series per trade** (H-S Step 11/12): constant-maturity composed
    history for *statistics*; actual-instrument repriced roll for *carry*
-   (**ARBS**: `CARRY_AND_ROLL_BPS_RUNNING` correlates −0.136 with published
-   carry; the repriced `Curve.roll` +0.991).
+   (**ARBS**: `CARRY_AND_ROLL_BPS_RUNNING` correlated −0.136 with published
+   carry against the repriced `Curve.roll`'s +0.991; its ageing rule was fixed
+   on 2026-08-27 and it now scores +0.991 / MAE 0.338 bp itself — see
+   `Query/IRSwaps/_carry_roll.py`).
 3. **Entry hygiene**: the H-S pre-entry cloud diagnostic (candidate vs PC1
    over the trailing window); the JPM β-stability skip; eigenvector
    walk-forward-vs-full-sample gap gate ("a large gap means you are trading

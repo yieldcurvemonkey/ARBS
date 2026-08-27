@@ -15,8 +15,10 @@ The three builders and their strategy contracts
 -----------------------------------------------
 * :func:`build_leg_panel` -> ``(date, leg)`` frame ``rate_bp, dv01, gamma,
   roll_1y, roll_1d`` via ``strat3_strikeless_vol.leg_metrics`` (the repriced
-  kernel: carry corr +0.991 vs Citi Fig-7; ``CARRY_AND_ROLL_BPS_RUNNING``
-  scored -0.136 and is never used here).  Curves come chunk-wise from
+  kernel: carry corr +0.991 vs Citi Fig-7).  This module stays on the
+  repriced kernel for provenance, not because the query value is wrong:
+  ``CARRY_AND_ROLL_BPS_RUNNING`` scored -0.136 until its ageing rule was fixed
+  on 2026-08-27 and now scores +0.991 itself (``Query.IRSwaps._carry_roll``).  Curves come chunk-wise from
   ``BT.signals.cvx_strikeless.build_curve_map`` — the exact bulk recipe with
   the refuse-today guard (``bulk_get_data`` coerces today to ``"live"``), the
   reference-date match and the ``from_curve_store`` assert.  Leg labels are

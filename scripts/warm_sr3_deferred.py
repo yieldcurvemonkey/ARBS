@@ -64,10 +64,18 @@ FOUR PROPERTIES THAT MATTER MORE THAN SPEED
    every date, so a kill costs one date; a rerun skips what the ledger already
    records as done, and records what it could not get rather than dropping it.
 
+SUPERSEDED IN PART (2026-08-27)
+===============================
+``scripts/warm_sr3_settles.py`` now warms by CONTRACT rather than by date, via
+``STIRFutureMDP.warm_settles``, which is ~one vendor request per contract instead
+of one per date -- so for a plain depth backfill prefer that. This runner is kept
+for its ledger, its resume and its per-date accounting. Both write into the same
+settle namespace.
+
 NETWORK
 =======
 This job is *meant* to reach the network. It is nonetheless confined to
-``STIRFutureMDP(source="BARCHART_STIRF-RL")``, one batched call per date. It must
+``STIRFutureMDP(source="BARCHART_STIRF_SETTLE-RL")``, one batched call per date. It must
 never touch ``IRSwapsMDP(...).get_pricer({"curve_name": "USD-SOFR-1D-Q20STIRT"})``
 -- measured at 52-57 outbound requests **per date**, with ``offline=True``
 accepted and then ignored -- and it never builds a curve at all. The pre-scan
@@ -270,7 +278,9 @@ def run(
     print(f"ledger holds {len(done)} dates; {len(todo)} still to do; "
           f"attempting {len(attempt)}{' (CAPPED)' if capped else ''}", flush=True)
 
-    mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
+    from MDP.STIRFutures.STIRFutureMDP import SETTLE_SOURCE
+
+    mdp = STIRFutureMDP(source=SETTLE_SOURCE)
     t0 = time.time()
     calls = 0
     for i, (d, cur, syms) in enumerate(attempt, 1):

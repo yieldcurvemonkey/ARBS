@@ -252,7 +252,11 @@ class BoardConfig:
     package_dv01_usd: float = 100_000.0
     curve_name: str = "USD-SOFR-1D"
     swap_source: str = "CITIVELO_EXCEL"
-    futures_source: str = "BARCHART_STIRF-RL"  # class default is WEBULL — never rely on it
+    futures_source: str = "BARCHART_STIRF_SETTLE-RL"  # class default is WEBULL — never rely on it
+    """The CME settle (Barchart daily bars), keyed 15:00 ET. Was
+    ``BARCHART_STIRF-RL`` -- the 15:59 CT Globex close -- until 2026-08-27; that
+    marked the futures leg two hours after the swap leg. Its cache is a separate
+    namespace, so a board built before the switch cannot be silently reused."""
 
     # ------------------------------------------------------------- windows
     realized_window: int = 252

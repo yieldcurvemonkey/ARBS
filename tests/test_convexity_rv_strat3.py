@@ -478,12 +478,21 @@ def test_citi_figure_7_dv01_neutrality_and_gamma(citi_2019_05_08):
         f"analytic and repriced breakevens disagree by more than 2%: {ratio.describe()}"
 
 
-def test_repriced_roll_beats_the_query_carry_field(citi_2019_05_08):
-    """Records WHY ``CARRY_AND_ROLL_BPS_RUNNING`` is not the carry field.
+def test_both_carry_paths_tie_out_to_citi(citi_2019_05_08):
+    """Two independent carry paths, one published answer.
 
-    The brief names that value. Measured against Citi's own eight published
-    carries it has correlation -0.136; the repriced 1-year roll has +0.991.
-    Pinned so the choice is not quietly reverted.
+    HISTORY: this test used to assert the opposite — that
+    ``CARRY_AND_ROLL_BPS_RUNNING`` correlated -0.136 against the repriced
+    roll's +0.991, and that the repriced roll was therefore the only usable
+    field. Two defects produced that number and both are fixed: the query value
+    aged a forward-starting leg by shortening its TAIL instead of bringing its
+    START nearer (``Query.IRSwaps._carry_roll``), and ``_query_carry_1y`` asked
+    for the opposite trade direction (``bpv < 0``). Measured 2026-08-27 the two
+    paths agree: +0.991 / MAE 0.338 bp (query) against +0.991 / 0.354
+    (repriced).
+
+    MUTATION: restore either defect and the agreement bound below fails —
+    the tail-ageing rule alone moves the query MAE to 1.578 bp.
     """
     pairs = list(S3.CITI_FIG7_SCREEN)
     scr = S3.screen_frame(citi_2019_05_08, pairs, asof=dt.date(2019, 5, 8),
@@ -491,10 +500,13 @@ def test_repriced_roll_beats_the_query_carry_field(citi_2019_05_08):
     pub = np.array([S3.CITI_FIG7_SCREEN[p][3] for p in pairs])
     repriced = np.array([scr.loc[f"{s}/{l}", "carry_1y_bp"] for s, l in pairs])
     queried = np.array([scr.loc[f"{s}/{l}", "carry_query_bp"] for s, l in pairs])
-    c_repriced = np.corrcoef(repriced, pub)[0, 1]
-    c_query = np.corrcoef(queried, pub)[0, 1]
-    assert c_repriced > 0.95 > c_query
-    assert np.abs(repriced - pub).mean() < np.abs(queried - pub).mean() / 2.0
+    assert np.corrcoef(repriced, pub)[0, 1] > 0.95
+    assert np.corrcoef(queried, pub)[0, 1] > 0.95
+    # both within the published table's own 2dp granularity plus the leg gap
+    assert np.abs(repriced - pub).mean() < 0.60
+    assert np.abs(queried - pub).mean() < 0.60
+    # and within half a bp of EACH OTHER, pairwise
+    assert np.max(np.abs(repriced - queried)) < 0.50
 
 
 def _covid_ctx(start, end):

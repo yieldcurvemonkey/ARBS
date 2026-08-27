@@ -172,6 +172,8 @@ def warm_curve(
         )
         return stat
 
+    from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import EOD_SNAP_TIME
+
     _CHI = pytz.timezone("America/Chicago")
     _NY = pytz.timezone("America/New_York")
     worst = 0.0
@@ -198,16 +200,23 @@ def warm_curve(
         handle = rlc.rl_pricing_curve
         raw = handle.nodes._nodes if hasattr(handle.nodes, "_nodes") else dict(handle.nodes)
         ordered = sorted(raw.keys())
-        # The curve is an end-of-day object; stamp it at the close of its own
-        # reference date in the wire zone rather than at midnight, so an as-of
-        # read for "that day" lands on it rather than before it.
-        ts = _NY.localize(datetime.datetime.combine(day, datetime.time(17, 0)))
+        # The curve is an end-of-day object; stamp it at the instant Citi's daily
+        # series is actually struck rather than at midnight, so an as-of read for
+        # "that day" lands on it rather than before it. That instant is MEASURED
+        # (15:00 New York) -- see `timestamps.EOD_SNAP_TIME`. It was a hardcoded
+        # 17:00 until 2026-08-27, so rows written before then carry a 17:00 stamp;
+        # the stamp is provenance only, nothing reconstructs or prices off it, and
+        # reads are keyed on `trading_date`. Re-run with `force=True` to restamp.
+        ts = _NY.localize(datetime.datetime.combine(day, EOD_SNAP_TIME))
         ts_utc = ts.astimezone(pytz.UTC)
         snapshot = CurveSnapshot(
             timestamp_utc=ts_utc,
+            # `timestamp_local` is Chicago here, as in every other writer in this
+            # repo; `session_minute` next to it is the wire-zone (New York) hour.
+            # That pairing is pre-existing and left alone -- only the hour moved.
             timestamp_local=ts_utc.astimezone(_CHI),
             trading_date=day,
-            session_minute=17 * 60,
+            session_minute=EOD_SNAP_TIME.hour * 60 + EOD_SNAP_TIME.minute,
             curve_name=stat.asset,
             cfg_hash="",
             reference_key=entry.curve_name,

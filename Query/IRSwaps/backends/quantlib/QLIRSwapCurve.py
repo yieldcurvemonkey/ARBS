@@ -5,6 +5,7 @@ from typing import Union, Any, Optional
 import QuantLib as ql
 
 import Query.IRSwaps.backends.quantlib.ql_pricer as ql_irswaps_pricer
+from Query.IRSwaps import _carry_roll
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
@@ -82,15 +83,39 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
     def dollar_carry(self, irswap: ql.VanillaSwap, horizon: str):
         return ql_irswaps_pricer.calc_dollar_carry(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon), curve=self._ql_curve_id)
 
+    def spot_date(self) -> datetime.date:
+        """The curve's spot date: reference date + ``SettlementDays`` business days.
+
+        ``ql.Calendar.advance`` counts a ``Days`` period in BUSINESS days, which
+        is what the old inline guard in ``ql_pricer.calc_carry_bps_running``
+        relied on too.
+        """
+        return self.calendar_advance(self.reference_date(), f"{QUANTLIB_CURVE_DEFINITIONS[self._ql_curve_id]['SettlementDays']}D")
+
     def carry_bps_running(self, irswap: ql.VanillaSwap, horizon: str):
-        return ql_irswaps_pricer.calc_carry_bps_running(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon), curve=self._ql_curve_id)
+        return _carry_roll.carry_bps_running(self, irswap, horizon)
 
     def roll_bps_running(self, irswap: ql.VanillaSwap, horizon: str):
-        return ql_irswaps_pricer.calc_roll_bps_running(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon), curve=self._ql_curve_id)
+        return _carry_roll.roll_bps_running(self, irswap, horizon)
 
     def carry_and_roll_bps_running(self, irswap: ql.VanillaSwap, horizon: str):
-        return ql_irswaps_pricer.calc_carry_and_roll_bps_running(
-            swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon), curve=self._ql_curve_id
+        return _carry_roll.carry_and_roll_bps_running(self, irswap, horizon)
+
+    def roll_curve(self, horizon: str):
+        raise NotImplementedError(
+            "A static-curve roll is not available on the QuantLib backend. It needs a "
+            "curve whose SHAPE is translated in time while its anchor stays put "
+            "(rateslib's Curve.roll); ql.ImpliedTermStructure re-anchors and preserves "
+            "forwards instead, which is the other evolution entirely. Use a "
+            "rateslib-backed curve for IRSwapValue.THETA*."
+        )
+
+    def theta_components(self, irswap: ql.VanillaSwap, horizon: str = "1b") -> dict:
+        raise NotImplementedError(
+            "IRSwapValue.THETA* is not available on the QuantLib backend (it needs the "
+            "static-curve roll described in QLIRSwapCurve.roll_curve). Use a "
+            "rateslib-backed curve, or IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING, which "
+            "both backends implement."
         )
 
     def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):

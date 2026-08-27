@@ -11,13 +11,17 @@ Two validated paths, one sign convention:
   ``NPV(handle.roll(horizon)) - NPV(today)`` divided by the leg's repriced
   DV01, i.e. bp of rate.
 
-Why repriced and nothing else (measured, Citi Figure-7 close of 2019-05-08,
+Why repriced (measured, Citi Figure-7 close of 2019-05-08,
 ``strat3_strikeless_vol.CARRY_TIEOUT_2019_05_08``): the repriced 1y roll
-scores corr **+0.991** / MAE **0.35 bp** against the published carries;
-``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` scores corr **-0.136** / MAE 1.28 bp
-and gets the rank order wrong. What this module is NOT: it is not a wrapper
-over ``CARRY_AND_ROLL_BPS_RUNNING``, and that value must never be used for
-cross-sectional carry ranking (DESIGN.md section 1).
+scores corr **+0.991** / MAE **0.35 bp** against the published carries. When
+this module was written ``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` scored corr
+**-0.136** / MAE 1.28 bp and got the rank order wrong, which is the reason
+these two paths exist at all. That defect is fixed: since 2026-08-27 the query
+value ages a forward leg by bringing its START nearer rather than shortening
+its TAIL (``Query.IRSwaps._carry_roll``) and scores +0.991 / 0.338 bp on the
+same eight pairs. What this module is NOT: it is still not a wrapper over
+``CARRY_AND_ROLL_BPS_RUNNING`` — it is the independent second path, and the
+agreement between them is the check (DESIGN.md section 1).
 
 Agreement of the two paths, measured on this machine (offline curve store,
 USD-SOFR-1D, 1y horizon; probe 2026-08-26): on 2026-08-21 the worst forward-leg
