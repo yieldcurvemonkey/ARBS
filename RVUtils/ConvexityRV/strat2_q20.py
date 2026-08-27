@@ -118,12 +118,22 @@ reader can re-cut them:
     curve is never asked to extrapolate past its last instrument; a rank is
     tradeable on a date only if ``rank + 3 <= depth``.
 
-``gate_max_settle_diff_bp`` defaults to 2.0bp. That is not a round number chosen
-for looks: it is set by the measured settle-timing noise floor. Barchart's "EOD"
-is the 1-minute bar nearest 17:00 New York while SR3 settles at ~15:00 ET, and
+``gate_max_settle_diff_bp`` defaults to 2.0bp. That was not a round number chosen
+for looks: it was set by the measured settle-timing noise floor. Barchart's "EOD"
+was the 1-minute bar nearest 17:00 New York while SR3 settles at ~15:00 ET, and
 the induced CA noise on near packs was measured at 0.89-2.55bp/pack-day (mean
-1.82). A per-contract agreement tolerance below that would reject rows for
-carrying noise that is present in the settles themselves.
+1.82). A per-contract agreement tolerance below that would have rejected rows for
+carrying noise that was present in the marks themselves.
+
+**That noise source was removed on 2026-08-27** and the paragraph above is kept
+because it is the reason the number is what it is. :data:`EOD_SOURCE` now points
+at ``BARCHART_STIRF_SETTLE-RL``, whose date request returns Barchart's DAILY bar
+-- measured to be the CME settle itself (mean 0.201 bp from the 13:59 CT
+settle-window bar, exact on 57 of 69 discriminating cells, against 0.907 bp for
+the 15:59 CT session close). The 2.0bp default is left alone, because loosening
+or tightening a research gate is a decision about the study rather than about the
+plumbing; but it is now slack rather than binding, and a re-run may want it
+tighter. Nothing else about the gate changes.
 
 
 WHAT MARKS THE BOOK
@@ -132,7 +142,7 @@ The screen and the CA panel are computed off Q20 forwards. **The backtest's
 futures legs are marked off raw SR3 settles**, through the same
 ``STIRFutureHandler`` path as the near-pack strategy, because a settle is what
 you can actually transact at and a curve forward is not. :func:`deep_pack_config`
-therefore leaves ``futures_source`` pointing at ``BARCHART_STIRF-RL``.
+therefore leaves ``futures_source`` pointing at the settle source.
 
 The consequence is deliberate and is the honest reading of the whole exercise:
 if the gate is doing its job the two agree to well inside a basis point, and if
@@ -157,8 +167,8 @@ ignored -- and the reason is structural rather than incidental:
   **zero** dates. So even a fully-cached date misses and hits Barchart.
 
 :func:`build_q20_pricer` avoids both by fetching the pricers itself from the
-**17:00 EOD** ``BARCHART_STIRF-RL`` source -- which resolves ``SFRCM1..20`` with
-zero network on every covered date -- and injecting them straight into
+**settle** source :data:`EOD_SOURCE` -- which resolves ``SFRCM1..20`` from the
+local store on every covered date -- and injecting them straight into
 ``BARCHART_STIRF_CURVE._build_curve_from_pricers``. That reuses the production
 node construction and Levenberg-Marquardt solve verbatim, skips
 ``_curve_cache_put`` (so no shared store is mutated), and runs in ~0.15s.
@@ -300,10 +310,15 @@ Q20_CURVE = "USD-SOFR-1D-Q20STIRT"
 #: from the front, which is why depth in *contracts* maps 1:1 onto instruments.
 Q20_INSTRUMENT_PREFIX = "SFRCM"
 
-#: The **17:00 New York EOD** SR3 source. Not ``BARCHART_TOS_LIVE_STIRF-RL``,
-#: which is what the production curve builder reaches for and which has no
-#: deferred-contract depth locally. See the module docstring.
-EOD_SOURCE = "BARCHART_STIRF-RL"
+#: The **CME settle** SR3 source, keyed 15:00 New York. Not
+#: ``BARCHART_TOS_LIVE_STIRF-RL``, which is what the production curve builder
+#: reaches for and which has no deferred-contract depth locally; and no longer
+#: ``BARCHART_STIRF-RL``, which this module's own docstring already identified as
+#: "the 1-minute bar nearest 17:00 New York while SR3 settles at ~15:00 ET" and
+#: which was measured on 2026-08-26 to be the 15:59 CT Globex close on 24 of 27
+#: cells. See the module docstring and
+#: :func:`strat2_sofr_convexity.assert_settle_source`.
+EOD_SOURCE = "BARCHART_STIRF_SETTLE-RL"
 
 #: The intraday quote source, and the guard that refuses it. Both live in
 #: :mod:`RVUtils.ConvexityRV.strat2_sofr_convexity` -- the base module both
@@ -333,6 +348,18 @@ class Q20Config:
     eod_source: str = EOD_SOURCE
     """SR3 settle source for BOTH the curve's calibration instruments and the
     settle-agreement control. One source, so the gate compares like with like."""
+
+    curve_source: str = "BARCHART_STIRF-RL"
+    """``IRSwapsMDP`` token for the Q20 **curve** plumbing -- the stamp convention
+    its store and builder are keyed on, not a price source.
+
+    Separate from :attr:`eod_source` since 2026-08-27. They used to be one string,
+    which worked only because both subsystems happened to answer to
+    ``BARCHART_STIRF-RL``; once the futures leg moved to the settle source that
+    coincidence broke, and ``IRSwapsMDP(source="BARCHART_STIRF_SETTLE-RL")`` has no
+    dispatch at all. The curve-store stamp stays at the Globex close because
+    re-timing that store is a separate project; the PRICES fed into the curve are
+    now settles either way, which is the leg that enters the adjustment."""
 
     swap_curve: str = "USD-SOFR-1D"
     swap_source: str = "CITIVELO_EXCEL"
@@ -462,7 +489,7 @@ def strip_depth_by_date(
     cfg: Q20Config,
     *,
     cache_root: Optional[str] = None,
-    session_time: str = "17:00:00",
+    session_time: Optional[str] = None,
     min_depth: Optional[int] = None,
     require_readable_offset: bool = True,
 ) -> Dict[datetime.date, int]:
@@ -504,6 +531,14 @@ def strip_depth_by_date(
     dates it exists to fill, and a config floored at 4 (the smallest depth that
     can quote a pack) cannot see them. Panel builders should never pass this.
     """
+    from MDP.STIRFutures.STIRFutureMDP import eod_hour_for_source
+
+    # Derived from the source, never hardcoded: a settle is keyed 15:00 and a
+    # Globex close 17:00. A scanner left at "17:00:00" after a caller moved to the
+    # settle source returns depth 0 on every date, which reads as a cold cache and
+    # sends the warm back to the vendor for history it already has.
+    if session_time is None:
+        session_time = f"{eod_hour_for_source(cfg.eod_source):02d}:00:00"
     root = cache_root or _default_cache_root()
     floor = int(cfg.min_strip_depth if min_depth is None else min_depth)
     have: Dict[str, set] = defaultdict(set)
@@ -620,7 +655,7 @@ class Q20Builder:
         self.builder = BARCHART_STIRF_CURVE()
         self.base_cfg = dict(self.builder._STIRF_CURVE_CONFIGS[self.cfg.q20_curve])
         self.eod = STIRFutureMDP(source=self.cfg.eod_source)
-        self.irs = IRSwapsMDP(source=self.cfg.eod_source)
+        self.irs = IRSwapsMDP(source=self.cfg.curve_source)
 
     def pricer(self, as_of: datetime.date, depth: int) -> Any:
         """The Q20 pricer for one date at one strip depth."""
@@ -695,14 +730,18 @@ def build_q20_pricer(
     if irs_mdp is None:
         from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 
-        irs_mdp = IRSwapsMDP(source=cfg.eod_source)
+        irs_mdp = IRSwapsMDP(source=cfg.curve_source)
 
     curve_cfg = dict(base_cfg)
     curve_cfg["instruments"] = [f"{Q20_INSTRUMENT_PREFIX}{i}" for i in range(1, n_inst + 1)]
     ts = irs_mdp._to_barchart_stirf_timestamp(as_of)
 
     with cache_only(block=cfg.block_network):
-        pricers = eod_mdp.get_data({"symbols": curve_cfg["instruments"], "timestamp": ts})
+        # The DATE, not `ts`: `ts` is the curve store's 17:00 stamp convention,
+        # and a settlement source refuses an instant by design. Letting the
+        # source resolve its own EOD instant is what keeps the calibration
+        # instruments settles rather than Globex-close marks.
+        pricers = eod_mdp.get_data({"symbols": curve_cfg["instruments"], "timestamp": as_of})
         present = {k: v for k, v in pricers.items() if v}
         if len(present) < n_inst:
             raise LookupError(

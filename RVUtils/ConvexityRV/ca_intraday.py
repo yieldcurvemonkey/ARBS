@@ -1,10 +1,11 @@
 r"""Transport and guards for the **intraday** convexity adjustment.
 
 The daily CA (``TB.IRSwapsTB.sfr_cvx_adj``) marks a futures leg against a swap
-leg at the 17:00 New York settle. The intraday CA marks the same difference at a
-one-minute instant. Everything in this module exists because those two series
-must never touch each other, and because reaching the intraday one by accident
-costs a vendor crawl.
+leg at the 15:00 New York settle -- the CME settlement window, which is also the
+instant Citi's daily curve is struck at (both measured 2026-08-26). The intraday
+CA marks the same difference at a one-minute instant. Everything in this module
+exists because those two series must never touch each other, and because
+reaching the intraday one by accident costs a vendor crawl.
 
 THE TAPE IS SPELLED TWO WAYS AND ONLY TWO SPELLINGS HIT
 ========================================================
@@ -192,13 +193,19 @@ TAPE_TZ_NAME = "America/Chicago"
 #: from there.
 INTRADAY_FUTURES_SOURCE = LIVE_SOURCE
 
-#: The 17:00 New York settle source the daily path uses.
-SETTLE_FUTURES_SOURCE = "BARCHART_STIRF-RL"
+#: The CME settle source the daily path uses, keyed 15:00 New York. Was
+#: ``BARCHART_STIRF-RL`` until 2026-08-27, which is the 15:59 CT Globex close
+#: rather than a settle -- see
+#: :func:`RVUtils.ConvexityRV.strat2_sofr_convexity.assert_settle_source`.
+SETTLE_FUTURES_SOURCE = "BARCHART_STIRF_SETTLE-RL"
 
 #: Row tags. These are the values of the ``price_source`` column and the whole
-#: basis of the splice guard, so they are constants rather than literals.
+#: basis of the splice guard, so they are constants rather than literals. The
+#: settle tag carries its instant, so a spliced series names the two clocks it
+#: mixes; rows written before 2026-08-27 carry ``...@17:00`` and are a different
+#: measurement, not an older spelling of this one.
 PRICE_SOURCE_INTRADAY = f"{INTRADAY_FUTURES_SOURCE}@minute"
-PRICE_SOURCE_SETTLE = f"{SETTLE_FUTURES_SOURCE}@17:00"
+PRICE_SOURCE_SETTLE = f"{SETTLE_FUTURES_SOURCE}@15:00"
 
 PRICE_SOURCE_COL = "price_source"
 
@@ -231,10 +238,12 @@ def assert_intraday_source(source: str, *, field: str = "futures_source") -> str
     The exact inverse of
     :func:`RVUtils.ConvexityRV.strat2_sofr_convexity.assert_settle_source`, and
     it shares that function's marker list so the two can never disagree about
-    which token is which. Pinning the source is not decoration: the settle
-    source resolves a ``datetime`` request by falling back to its own EOD
-    behaviour, so an intraday call under ``BARCHART_STIRF-RL`` would return a
-    number -- the 17:00 one -- with no error at all.
+    which token is which. Pinning the source is not decoration: under
+    ``BARCHART_STIRF-RL`` an intraday call falls back to that source's own EOD
+    behaviour and returns a number -- the Globex-close one -- with no error at
+    all. (:data:`SETTLE_FUTURES_SOURCE` now refuses an instant outright, which is
+    this guard's job done on the other side; the check stays because a caller can
+    still pass any string.)
     """
     s = str(source)
     up = s.upper()
@@ -242,7 +251,7 @@ def assert_intraday_source(source: str, *, field: str = "futures_source") -> str
         raise ValueError(
             f"{field}={s!r} is not an intraday quote feed. The intraday convexity "
             f"adjustment marks its futures leg at a one-minute instant; a settle "
-            f"source answers with the 17:00 mark and does not say so. Use "
+            f"source answers with the end-of-session mark and does not say so. Use "
             f"{INTRADAY_FUTURES_SOURCE!r}."
         )
     return s
@@ -270,7 +279,7 @@ def tape_instant(ts: Any) -> datetime.datetime:
     if not isinstance(ts, datetime.datetime):
         raise IntradayTimestampError(
             f"timestamp {ts!r} ({type(ts).__name__}) is not a datetime. A "
-            "date means the 17:00 settle, which is the daily path."
+            "date means the daily settle, which is the daily path."
         )
     if ts.tzinfo is None or ts.tzinfo.utcoffset(ts) is None:
         raise IntradayTimestampError(
@@ -463,7 +472,7 @@ def price_source_of(df: pd.DataFrame) -> str:
         raise IntradaySpliceError(
             f"frame already mixes price sources {vals}; a convexity adjustment "
             "is a difference between two legs marked at the SAME instant, so a "
-            "series carrying both a minute quote and a 17:00 settle is not a "
+            "series carrying both a minute quote and a daily settle is not a "
             "series."
         )
     return vals[0]
@@ -494,7 +503,7 @@ def concat_ca_frames(frames: Sequence[pd.DataFrame], **kwargs: Any) -> pd.DataFr
     if len(sources) > 1:
         raise IntradaySpliceError(
             f"refusing to concatenate CA frames from {sorted(sources)}. Intraday "
-            "quotes and 17:00 settles are different measurements of the same "
+            "quotes and daily settles are different measurements of the same "
             "name; keep them in separate series and compare them explicitly."
         )
     return pd.concat(frames, **kwargs)
