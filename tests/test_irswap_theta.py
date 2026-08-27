@@ -12,8 +12,12 @@ Two layers:
   and is not; it is an artefact of that curve's flat first node interval.
 * INTEGRATION tests (self-skipping) on the offline curve store: the identity
   closes to floating-point, the forwarding term matches ``-MtM x (1/D1 - 1)``,
-  and the rolldown term agrees with ``pv01 x roll_bps_running`` to the usual
-  analytic-annuity-versus-reprice gap.
+  and the rolldown term sits within an ABSOLUTE 0.06 bp of
+  ``roll_bps_running`` across nine legs on two dates. Not a ratio: a one-day
+  rolldown is 0.001-0.04 bp, so the two measures can differ by 5x while
+  differing by 0.005 bp. The last test pins the sign trap between the carry
+  family (direction from ``risk_weights``, +1 = receive) and everything
+  PV-shaped (direction from the notional, which on rateslib is +1 = pay).
 
 MUTATION CHECK (run 2026-08-27 against ``rl_theta.theta_components``):
 
@@ -338,3 +342,48 @@ def test_integration_a_par_swap_has_no_forwarding_and_no_cashflow_today():
     assert abs(c["forwarding"]) < 1e-6
     assert c["rolldown"] == pytest.approx(c["theta"], rel=1e-12)
     assert c["theta"] > 0.0  # a payer on an upward curve bleeds rolldown
+
+
+@pytest.mark.integration
+def test_integration_theta_follows_the_notional_and_carry_follows_the_risk_weights():
+    """Pins the sign trap so neither family gets "corrected" into the other.
+
+    Measured 2019-05-08, ``OUTRIGHT`` 10Y with ``bpv=+100_000``: the package's
+    notional is +110,659,766 and it GAINS $101,822 per +1bp, so it is a PAYER.
+    THETA reports +21,756 over 1M — a payer bleeds rolldown on this upward
+    curve, correct. CARRY_AND_ROLL reports +0.21159 bp for the same package,
+    which is the RECEIVER's carry: the carry family takes its direction from
+    ``risk_weights`` under the convention +1 = receive, and the rateslib
+    notional means the opposite. Both conventions are load-bearing — the Citi
+    Figure-7 tie-out in ``test_irswap_carry_roll.py`` is graded on the carry
+    family's — so this test records the relationship rather than picking a
+    winner."""
+    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+    from Query.IRSwaps.IRSwapStructure import IRSwapStructure
+
+    pricer = _offline_pricer(datetime.date(2019, 5, 8))
+    q = IRSwapQuery(structure=IRSwapStructure.OUTRIGHT, value=IRSwapValue.RATE,
+                    curve="USD-SOFR-1D", tenor="10Y",
+                    structure_kwargs={"bpv": 100_000.0})
+    pkg, weights = q.resolve_package(pricer_or_curve=pricer)
+    sw = pkg[0]
+    handle = pricer.handle()
+
+    # 1. the instrument really is a payer
+    npv0 = float(sw.npv(curves=handle).real)
+    up = float(sw.npv(curves=handle.shift(1)).real)
+    assert up > npv0, (npv0, up)
+    assert pricer.notional(sw) > 0.0
+    assert weights == [1] or weights == [1.0]
+
+    vm = pricer_value_map = IRSwapValueFunctionMap(
+        curve=pricer, package=pkg, risk_weights=weights)
+    theta = float(vm.apply(value=IRSwapValue.THETA, horizon="1M"))
+    carry = float(vm.apply(value=IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING, horizon="1M"))
+
+    # 2. THETA says the payer's PV decays; the rate really does roll down
+    assert theta > 0.0, theta
+    assert pricer.roll_bps_running(sw, "1M") > 0.0
+
+    # 3. and CARRY_AND_ROLL prints the same sign while meaning the other side
+    assert carry > 0.0, carry

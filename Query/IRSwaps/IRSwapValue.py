@@ -191,15 +191,34 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
         each leg by the horizon (a 10Yx10Y ages to 9Yx10Y, a spot 10Y to a spot
         9Y), receiver sign per leg, aggregated as ``sum(risk_weight * leg)``.
 
-        The package number is therefore the P&L of the position those risk
-        weights describe, in bp of the package's own quoted level -- NOT the
-        carry of a direction-normalised quote. This differs from
-        :meth:`_rate`, which for a FLY runs the weights through
-        ``_swap_structure_sign_mapper`` so the quoted level is always
-        belly-positive. A fly and the same fly sold therefore share a RATE and
-        report equal-and-opposite carry. That is deliberate (carry follows the
-        position), and it is the one place where reading RATE and CARRY off the
-        same query needs care.
+        **The direction comes from ``risk_weights``, under the convention that
+        ``+1`` RECEIVES that leg** -- and that is the opposite of what the
+        notional means on the rateslib backend, where a positive notional PAYS
+        fixed. Both are pre-existing and both are load-bearing; do not
+        "correct" either without regrading the Citi tie-out.
+
+        Measured on 2019-05-08 USD-SOFR-1D, one query,
+        ``IRSwapStructure.OUTRIGHT`` 10Y with ``structure_kwargs={"bpv":
+        100_000}``::
+
+            notional              +110,659,766     rateslib: positive PAYS fixed
+            dPV per +1bp             +101,822      confirmed: this is a PAYER
+            PV01                     +100,000      follows the notional
+            THETA (1M)               +21,756       PV decays -- right for a payer
+            CARRY_AND_ROLL (1M)      +0.21159 bp   the RECEIVER's carry
+
+        So the two families agree in printed sign and describe opposite sides.
+        A payer whose rate rolls down bleeds, and this member reports that as a
+        POSITIVE number because it is quoting the receive-fixed side of the same
+        leg. Read it as "bp of rate the quoted level rolls, signed for a
+        receiver of the risk weights", never as the position's P&L. For the
+        position's P&L in currency use the ``THETA*`` family, which follows the
+        notional.
+
+        One more asymmetry, with :meth:`_rate`: for a FLY, ``_rate`` runs the
+        weights through ``_swap_structure_sign_mapper`` so the quoted level is
+        always belly-positive, and carry does not. A fly and the same fly sold
+        therefore share a RATE and report equal-and-opposite carry.
         """
         assert "horizon" in kwargs, 'Expecting an "horizon" with type str | ql.Period in args e.g. `ql.Period("1M")`'
         curve: _IRSwapGenericCurve = kwargs["curve"]
