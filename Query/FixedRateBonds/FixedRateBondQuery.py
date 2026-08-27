@@ -41,11 +41,19 @@ class FixedRateBondQuery(BaseQuery):
     structure_kwargs: Dict[str, Any] = field(default_factory=dict)
     value_kwargs: Dict[str, Any] = field(default_factory=dict)
     risk_weight: Optional[float] = None
+    #: A :class:`RVUtils.fly.WeightingSchema` (or its preset name); see
+    #: :mod:`TB.weighting`. Read before routing, never by the pricer.
+    weighting: Optional[Any] = None
 
     product: str = field(init=False, default="FRB")
     structure_id: Any = field(init=False, default=None)
 
     def __post_init__(self):
+        if self.weighting is not None:
+            from RVUtils.fly.schema import coerce as _coerce_weighting
+
+            object.__setattr__(self, "weighting", _coerce_weighting(self.weighting))
+
         skw = dict(self.structure_kwargs or {})
         if self.cusip is not None and "cusip" not in skw:
             skw["cusip"] = self.cusip

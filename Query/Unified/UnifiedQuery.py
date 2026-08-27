@@ -22,6 +22,18 @@ class UnifiedQuery(BaseQuery):
     value_kwargs: Mapping[str, Any] = field(default_factory=dict)
     risk_weight: Optional[float] = None
 
+    #: How this package's leg weights are to be fitted from its own history -
+    #: a :class:`RVUtils.fly.WeightingSchema`, one of the presets on
+    #: :mod:`RVUtils.fly` (``RVUtils.fly.pca_chgs_1m``), or a preset name.
+    #:
+    #: ``TimeseriesBuilder.get_timeseries`` reads it BEFORE translating to a
+    #: legacy query, replaces the package with its legs, and rebuilds one column
+    #: afterwards. It is intentionally NOT carried through
+    #: ``registry.translate_query`` onto the legacy query: by the time a query
+    #: reaches the pricer there is one reference date and no panel to fit on.
+    #: See :mod:`TB.weighting`.
+    weighting: Optional[Any] = None
+
     structure_id: Any = field(init=False, default=None)
 
     def __post_init__(self):
@@ -52,6 +64,12 @@ class UnifiedQuery(BaseQuery):
         object.__setattr__(self, "cusip", selector.get("cusip"))
         object.__setattr__(self, "structure_kwargs", dict(self.structure_kwargs or {}))
         object.__setattr__(self, "value_kwargs", dict(self.value_kwargs or {}))
+        if self.weighting is not None:
+            # Normalise here so a mistyped preset raises at the call site rather
+            # than several minutes into a fetch.
+            from RVUtils.fly.schema import coerce as _coerce_weighting
+
+            object.__setattr__(self, "weighting", _coerce_weighting(self.weighting))
         object.__setattr__(self, "market_request", dict(self.market_request or {}))
         object.__setattr__(self, "meta", dict(self.meta or {}))
         object.__setattr__(self, "tags", tuple(self.tags or ()))
@@ -118,6 +136,7 @@ class UnifiedQuery(BaseQuery):
             market_request=dict(query.market_request or {}),
             value_kwargs=dict(getattr(query, "value_kwargs", {}) or {}),
             risk_weight=getattr(query, "risk_weight", None),
+            weighting=getattr(query, "weighting", None),
             name=query.name,
             tags=query.tags,
             meta=dict(query.meta or {}),

@@ -3036,6 +3036,74 @@ class TimeseriesBuilder:
         start: DateLike,
         end: DateLike,
         queries: List[Union[BaseQuery, List[BaseQuery]]],
+        **kwargs: Any,
+    ) -> pd.DataFrame:
+        r"""One frame for a mixed basket of queries, routed per product.
+
+        Every keyword is documented on :meth:`_get_timeseries_impl`, which does
+        the fetching; this wrapper exists for one feature.
+
+        Data-driven package weightings
+        ------------------------------
+        A query carrying ``weighting=`` asks for its leg weights to be FITTED
+        from the legs' own history rather than taken from the structure's
+        defaults - PCA-neutral, regression-neutral or minimum-variance
+        butterflies and curves::
+
+            import RVUtils.fly
+
+            df = tb.get_timeseries(
+                start, end,
+                queries=[
+                    UnifiedQuery(curve="USD-SOFR-1D", tenor="1y5y/1y10y/1y30y",
+                                 value=UnifiedValue.IRS_RATE),                       # the plain fly
+                    UnifiedQuery(curve="USD-SOFR-1D", tenor="1y5y/1y10y/1y30y",
+                                 value=UnifiedValue.IRS_RATE,
+                                 weighting=RVUtils.fly.pca_chgs_1m),                 # and the hedged one
+                ],
+                routers={"IRS": IRSwapsTB(curve_mdp)},
+            )
+
+        Such a query is never priced as a package. It is replaced, before
+        anything is routed, by its legs as ordinary outright queries; those go
+        down the normal cached path; and the package is rebuilt afterwards as
+        ``100 * sum_i w_i(t) * leg_i(t)``. That ordering is forced by the maths:
+        a PCA or regression weight is a function of a panel, and the pricer sees
+        one reference date. Nothing about a request WITHOUT ``weighting=``
+        changes - those queries are passed through by identity.
+
+        The rebuilt column is the package's usual name with the schema appended,
+        ``"USD-SOFR-1D 1y5y/1y10y/1y30y FLY RATE [pca_chgs_1m]"``, so a weighted
+        and an unweighted version of the same package coexist. The fitted
+        ``T x n`` weight paths land in ``df.attrs["fly_weights"][column]``,
+        the schema in ``df.attrs["fly_schemas"]`` and the leg panel in
+        ``df.attrs["fly_legs"]``. Leg columns the caller did not ask for by name
+        are dropped again unless the schema says ``keep_legs``.
+
+        Two things to hold on to. A schema with no window (``pca_chgs``,
+        ``beta_lvls``) fits ONE weight vector over the whole history requested
+        and applies it back across that same history - in sample, and not a
+        signal. And because the weights move with ``t``, part of the resulting
+        series' change is the weighting rather than the market; for a P&L take
+        the weight frame out of ``attrs`` and form ``w[t-1] . dy[t]`` yourself.
+
+        Implemented for ``IRS`` ``RATE`` and ``FRB`` ``YTM`` packages of two or
+        three legs; anything else raises. See :mod:`TB.weighting` and
+        :mod:`RVUtils.fly`.
+        """
+        from TB.weighting import apply_weighted_plans, plan_weighted_queries
+
+        rewritten, plans = plan_weighted_queries(queries)
+        frame = self._get_timeseries_impl(start, end, rewritten if plans else queries, **kwargs)
+        if not plans:
+            return frame
+        return apply_weighted_plans(frame, plans)
+
+    def _get_timeseries_impl(
+        self,
+        start: DateLike,
+        end: DateLike,
+        queries: List[Union[BaseQuery, List[BaseQuery]]],
         *,
         n_jobs: Optional[int] = 1,
         ignore_cache: Optional[bool] = False,
@@ -3051,7 +3119,7 @@ class TimeseriesBuilder:
         direct: Union[None, bool, str, DirectMode] = None,
         _disable_barchart_irs_bulk_planner: bool = False,
     ) -> pd.DataFrame:
-        r"""One frame for a mixed basket of queries, routed per product.
+        r"""The fetch itself. See :meth:`get_timeseries` for ``weighting=``.
 
         Parameters
         ----------

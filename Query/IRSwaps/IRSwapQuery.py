@@ -91,6 +91,24 @@ _structure_kwargs_formatters: Dict[IRSwapStructure, Callable[[Dict[str, Any]], s
     IRSwapStructure.FLY: lambda kw: _format_struct_kwargs(IRSwapStructure.FLY, kw),
 }
 
+def normalize_tenor_token(tok: str) -> str:
+    """Canonicalise ONE leg token: ``'1y5y'`` -> ``'1Yx5Y'``, ``'5y'`` -> ``'5Y'``.
+
+    Lifted out of ``resolve_query`` so that anything building a leg query from a
+    package's tenor string - notably ``TB.weighting`` - normalises it the same
+    way the package itself does. ``IRSwapStructure._leg`` splits on the literal
+    ``x`` to separate the forward from the tenor and has no normaliser of its
+    own on the outright path, so an un-normalised ``'1y5y'`` prices as a
+    zero-forward swap with an unparseable termination.
+    """
+    t = (tok or "").strip().upper().replace(" ", "")
+    t = t.replace("X", "x")
+    m = re.match(r"^(\d+[DWMY])(\d+[DWMY])$", t)
+    if m:
+        return f"{m.group(1)}x{m.group(2)}"
+    return t
+
+
 _HORIZON_VALUE_IDS = {
     IRSwapValue.CARRY_BPS_RUNNING,
     IRSwapValue.ROLL_BPS_RUNNING,
@@ -136,6 +154,13 @@ class IRSwapQuery(BaseQuery):
     structure_kwargs: Dict[str, Any] = field(default_factory=dict)
     value_kwargs: Dict[str, Any] = field(default_factory=dict)
     risk_weight: Optional[float] = None
+    #: A :class:`RVUtils.fly.WeightingSchema` (or its preset name) asking
+    #: ``TimeseriesBuilder`` to fit this package's leg weights from its own
+    #: history instead of using the structure's defaults. Read by
+    #: ``TB.weighting.plan_weighted_queries`` BEFORE the query is routed; it
+    #: deliberately does not reach the pricer, which sees one date at a time and
+    #: cannot fit anything. See :mod:`TB.weighting`.
+    weighting: Optional[Any] = None
     _curve_name: Optional[str] = None
 
     product: str = field(init=False, default="IRS")
@@ -145,6 +170,11 @@ class IRSwapQuery(BaseQuery):
     def __post_init__(self):
         object.__setattr__(self, "product", "IRS")
         object.__setattr__(self, "structure_id", self.structure)
+
+        if self.weighting is not None:
+            from RVUtils.fly.schema import coerce as _coerce_weighting
+
+            object.__setattr__(self, "weighting", _coerce_weighting(self.weighting))
 
         skw: Dict[str, Any] = dict(self.structure_kwargs or {})
         if skw.get("fixed_rate") is None and skw.get("coupon") is not None:
@@ -312,6 +342,7 @@ class IRSwapQuery(BaseQuery):
                     curve=self.curve,
                     structure_kwargs=self.structure_kwargs,
                     risk_weight=self.risk_weight,
+                    weighting=self.weighting,
                     name=self.name,  # inherited from BaseQuery
                     tags=self.tags,  # inherited from BaseQuery
                     meta=self.meta,  # inherited from BaseQuery
@@ -412,13 +443,7 @@ class IRSwapQuery(BaseQuery):
                 return None
             return _CME_INVOICE_SWAP_TICKERS.get(key)
 
-        def _norm(tok: str) -> str:
-            t = (tok or "").strip().upper().replace(" ", "")
-            t = t.replace("X", "x")
-            m = re.match(r"^(\d+[DWMY])(\d+[DWMY])$", t)
-            if m:
-                return f"{m.group(1)}x{m.group(2)}"
-            return t
+        _norm = normalize_tenor_token
 
         if q.tenor is not None:
             structure = getattr(q, "structure", None)
