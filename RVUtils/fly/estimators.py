@@ -27,13 +27,27 @@ import pandas as pd
 from RVUtils.fly.schema import WeightingSchema
 
 __all__ = [
+    "combine",
     "default_anchor",
     "default_factors",
+    "pc_exposure",
     "second_moment",
     "pc_loadings",
     "weights_from_moment",
     "solve_weights",
 ]
+
+
+def pc_exposure(weights, Q: np.ndarray, k: int = 3) -> np.ndarray:
+    """The package's exposure to each of the first ``k`` components, ``w' E``.
+
+    The thing a neutrality claim is checked against. Zero in a slot means the
+    package carries no risk to that component; on a ``pcaneutral`` fit the first
+    ``n_pc`` slots come back at machine zero and the rest do not - that residual
+    is the trade.
+    """
+    E = pc_loadings(np.asarray(Q, dtype=float), int(k))
+    return np.asarray(weights, dtype=float) @ E
 
 
 def default_anchor(n_legs: int) -> int:
@@ -153,11 +167,73 @@ def _solve_pca_proj(Q: np.ndarray, x: np.ndarray, schema: WeightingSchema) -> np
     ``(0.660, 0.604, 0.447)`` and base ``(-1, 2, -1)`` this returns
     ``(-1.1002, 2, -1.0780)`` after the belly is rescaled to 2.
     """
-    k = min(int(schema.n_pc), Q.shape[0] - 1)
+    k = min(schema.resolved_n_pc, Q.shape[0] - 1)
     if k < 1:
         raise ValueError("n_pc must leave at least one degree of freedom")
     P = pc_loadings(Q, k)
     return x - P @ (P.T @ x)
+
+
+def _solve_pcaneutral(Q: np.ndarray, x: np.ndarray, schema: WeightingSchema) -> np.ndarray:
+    """Pin the anchor leg; make the package EXACTLY neutral to the first k PCs.
+
+    This is the construction in Attack68's *"Construct a butterfly interest rate
+    portfolio to eliminate PCA exposures"*. With the belly fixed at -1 and the
+    wings free, requiring ``S' E_1,2 = [0, 0]`` is a 2x2 linear system in the two
+    wing weights, which that answer inverts in closed form. Written for a general
+    leg count and a general k it is::
+
+        (x_H + d_H)' E_k[H]  =  -x_a * E_k[a]
+
+    a ``k x (n-1)`` system for the free legs ``H``. Three legs and two components
+    make it square and the answer unique - which is the fact the companion
+    thread *"Hedging a trade for PCA component neutrality"* pins down: *"in a 3
+    instrument configuration if PC1 and PC2 are made neutral the only valid
+    solution is for the trade to be a multiple of PC3."* ``tests/test_fly_weighting.py``
+    checks that this really does come back proportional to PC3 rather than
+    taking the thread's word for it.
+
+    With more legs than constraints the system is under-determined and the
+    minimum-norm ``lstsq`` solution is taken - the SMALLEST CHANGE to the trade
+    you asked for, the same tie-break the companion thread argues for.
+
+    Differs from ``pca_proj`` in what is held: this pins the anchor and moves
+    everything else, so the belly's risk is exactly what you specified. On a
+    three-leg fly the two agree up to scale, because both land on the only
+    PC1/PC2-neutral direction there is.
+
+    Both threads carry the same warning, and it is the reason for the guards
+    below: *"these weights might be very unstable depending upon small
+    correlation/covariance changes."*
+    """
+    n = len(x)
+    k = schema.resolved_n_pc
+    a = schema.anchor if schema.anchor is not None else default_anchor(n)
+    if not (0 <= a < n):
+        raise ValueError(f"anchor {a} is outside the {n} legs")
+    if k > n - 1:
+        raise ValueError(
+            f"'pcaneutral' pins one leg and spends one degree of freedom per component, so it needs "
+            f"n_pc <= n_legs - 1; got n_pc={k} for {n} legs. Two components need three legs."
+        )
+
+    E = pc_loadings(Q, k)                      # n x k
+    hedge = [i for i in range(n) if i != a]
+    A = E[hedge].T                             # k x (n-1)
+    target = -float(x[a]) * E[a] - A @ x[hedge]
+
+    singular = np.linalg.svd(A, compute_uv=False)
+    if singular[-1] <= 1e-10 * singular[0]:
+        raise np.linalg.LinAlgError(
+            "the free legs' loadings on the neutralised components are collinear in this window; "
+            "no weighting makes the package neutral to all of them"
+        )
+
+    delta, *_ = np.linalg.lstsq(A, target, rcond=None)
+    w = np.empty(n, dtype=float)
+    w[a] = x[a]
+    w[hedge] = np.asarray(x)[hedge] + delta
+    return w
 
 
 def _solve_beta(Q: np.ndarray, x: np.ndarray, schema: WeightingSchema) -> np.ndarray:
@@ -205,6 +281,7 @@ def _solve_minvar(Q: np.ndarray, x: np.ndarray, schema: WeightingSchema) -> np.n
 _SOLVERS = {
     "pca": _solve_pca,
     "pca_proj": _solve_pca_proj,
+    "pcaneutral": _solve_pcaneutral,
     "beta": _solve_beta,
     "minvar": _solve_minvar,
 }

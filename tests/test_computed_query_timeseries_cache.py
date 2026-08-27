@@ -543,8 +543,13 @@ def test_fixedratebonds_tb_assembles_curve_ytm_from_cached_legs(monkeypatch, tmp
     assert mdp.bulk_calls == 0, "MDP should not have been called"
     assert list(out.index) == [d1, d2]
     col = q_curve.col_name()
-    assert abs(out.loc[d1, col] - 0.50) < 1e-10  # 4.75 - 4.25
-    assert abs(out.loc[d2, col] - 0.50) < 1e-10  # 4.80 - 4.30
+    # BASIS POINTS. The legs are percent; a CURVE carries the pricer's x100
+    # (``_frb_structure_legs_mapper[2][1]``). This assertion used to read 0.50
+    # and 0.50, which is what let the assembly path serve percent while the
+    # priced path served bp - the same column, two units, decided by which tier
+    # answered. See test_frb_leg_assembly_units_match_the_pricer below.
+    assert abs(out.loc[d1, col] - 50.0) < 1e-10  # (4.75 - 4.25) * 100
+    assert abs(out.loc[d2, col] - 50.0) < 1e-10  # (4.80 - 4.30) * 100
 
 
 def test_fixedratebonds_tb_assembles_fly_ytm_from_cached_legs(monkeypatch, tmp_path):
@@ -581,8 +586,9 @@ def test_fixedratebonds_tb_assembles_fly_ytm_from_cached_legs(monkeypatch, tmp_p
 
     assert mdp.bulk_calls == 0
     col = q_fly.col_name()
-    expected = 2 * 4.40 - 4.25 - 4.75  # -0.20
+    expected = (2 * 4.40 - 4.25 - 4.75) * 100.0  # -20.0 bp, not -0.20 percent
     assert abs(out.loc[d1, col] - expected) < 1e-10
+    assert abs(out.loc[d1, col] - (-20.0)) < 1e-10
 
 
 def test_fixedratebonds_tb_leg_assembly_partial_coverage_falls_through(monkeypatch, tmp_path):
@@ -623,8 +629,64 @@ def test_fixedratebonds_tb_leg_assembly_partial_coverage_falls_through(monkeypat
     # d1 assembled from legs, d2 falls through to MDP
     assert mdp.bulk_calls == 1
     col = q_curve.col_name()
-    assert abs(out.loc[d1, col] - 0.50) < 1e-10  # assembled: 4.75 - 4.25
+    assert abs(out.loc[d1, col] - 50.0) < 1e-10  # assembled: (4.75 - 4.25) * 100
     assert abs(out.loc[d2, col] - 0.55) < 1e-10  # from _build_row_for_query mock
+
+
+def test_frb_leg_assembly_units_match_the_pricer(monkeypatch, tmp_path):
+    """The assembled composite must be the SAME NUMBER the pricer would return.
+
+    Regression for a silent 100x. ``FixedRateBondValue._ytm`` scales its
+    risk-weighted leg sum by ``_frb_structure_legs_mapper[len(package)][1]``
+    (1 for an outright, 100 for a curve or fly). The leg-cache assembly in
+    ``FixedRateBondsTB`` did not, so the same column came back in basis points
+    when priced and in percent when assembled - and which one you got depended
+    on whether that package's row happened to be cached. Measured live on
+    2026-08-14 with identical legs: ``CT2/CT10 CURVE YTM`` 51.30 against
+    ``CT2/CT5`` 0.190, ``CT5/CT10`` 0.323 and ``CT2/CT5/CT10`` -0.133.
+
+    Asserting against the mapper rather than a literal is deliberate: it is the
+    tie to the pricer that was missing, not the constant.
+    """
+    import TB.FixedRateBondsTB as frb_tb_module
+    from Query.FixedRateBonds.FixedRateBondValue import _frb_structure_legs_mapper
+
+    legs = {"CT5": 4.25, "CT7": 4.40, "CT30": 4.75}
+    cases = [
+        ("CT5/CT30", [-1.0, 1.0], 2),
+        ("CT5/CT7/CT30", [-1.0, 2.0, -1.0], 3),
+    ]
+
+    for package, weights, n_legs in cases:
+        source = f"TEST_FRB_UNITS_{uuid.uuid4().hex}"
+        mdp = _FakeFixedRateBondsMDP(source=source)
+        tb = FixedRateBondsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path / package.replace("/", "_")))
+        d1 = datetime.date(2024, 6, 3)
+
+        rows = {}
+        for cusip, ytm in legs.items():
+            leg_q = FixedRateBondQuery(cusip=cusip, value=FixedRateBondValue.YTM)
+            rows[tb._ts_symbol_for_query(leg_q)] = [(d1, leg_q.col_name(), ytm)]
+        tb._computed_ts_store.append_many_rows(rows_by_symbol=rows)
+
+        q = FixedRateBondQuery(cusip=package, value=FixedRateBondValue.YTM)
+        monkeypatch.setattr(
+            frb_tb_module,
+            "_build_row_for_query",
+            lambda pr_map, qq, ref_dt, date_col: (_ for _ in ()).throw(
+                AssertionError("legs are cached; nothing should be priced")
+            ),
+        )
+        out = tb.get_timeseries(start=d1, end=d1, queries=[q], n_jobs=1)
+
+        parts = package.split("/")
+        raw = sum(w * legs[p] for w, p in zip(weights, parts))
+        multiplier = _frb_structure_legs_mapper[n_legs][1]
+        got = out.loc[d1, q.col_name()]
+
+        assert got == pytest.approx(raw * multiplier, abs=1e-10), package
+        # ...and emphatically NOT the unscaled percent figure.
+        assert abs(got - raw) > 1.0, f"{package} came back in percent, not bp"
 
 
 def test_fixedratebonds_tb_leg_assembly_skips_custom_risk_weights(monkeypatch, tmp_path):

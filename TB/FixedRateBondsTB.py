@@ -23,7 +23,7 @@ from Query.Base.query_resolution import resolve_query
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
-from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
+from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue, _frb_structure_legs_mapper
 from TB.BaseTimeseriesTB import BaseTimeseriesTB
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 from utils.ql_utils import datetime_to_ql_date
@@ -436,12 +436,24 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 if not all_legs_found:
                     continue
 
+                # PERCENT -> BASIS POINTS. The legs are stored as OUTRIGHT ytm in
+                # percent (``_frb_structure_legs_mapper[1] == 1`` onto an already
+                # percent yield) while a CURVE or FLY is quoted in bp
+                # (``[2] == [3] == 100``). Leaving this out made the SAME column
+                # carry different units depending on which tier answered - a
+                # silent 100x, and invisible because both numbers look like
+                # plausible spreads. Measured 2026-08-14 on identical legs:
+                # ``CT2/CT10 CURVE YTM`` priced 51.30 (bp) while ``CT2/CT5``,
+                # ``CT5/CT10`` and ``CT2/CT5/CT10`` assembled 0.190, 0.323 and
+                # -0.133 (percent). Take the multiplier from the pricer's own
+                # mapper rather than restating 100 here, so the two cannot drift.
+                multiplier = float(_frb_structure_legs_mapper[len(parts)][1])
                 assembled_count = 0
                 for d in uncovered_dates:
                     vals = [ldv.get(d) for ldv in leg_date_vals]
                     if any(v is None for v in vals):
                         continue
-                    composite_val = sum(w * v for w, v in zip(weights, vals))
+                    composite_val = sum(w * v for w, v in zip(weights, vals)) * multiplier
                     cached_rows.append((d, col, float(composite_val)))
                     cached_row_keys.add((d, col))
                     assembled_count += 1

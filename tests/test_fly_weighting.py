@@ -38,6 +38,28 @@ def _cov_with_pc1(p: np.ndarray, eigenvalues=(1.0, 0.30, 0.05)) -> np.ndarray:
     return basis @ np.diag(np.asarray(eigenvalues, dtype=float)) @ basis.T
 
 
+def _cov_with_pc1_pc2(p1: np.ndarray, p2: np.ndarray, eigenvalues=(1.0, 0.30, 0.05)) -> np.ndarray:
+    """A covariance whose two leading eigenvectors are ``p1`` and ``p2``."""
+    basis, _ = np.linalg.qr(np.column_stack([p1, p2, np.eye(len(p1))[:, : len(p1) - 2]]))
+    for j, p in enumerate((p1, p2)):
+        if np.dot(basis[:, j], p) < 0:
+            basis[:, j] = -basis[:, j]
+    return basis @ np.diag(np.asarray(eigenvalues, dtype=float)) @ basis.T
+
+
+def _panel4(n_obs: int = 400, seed: int = 23) -> pd.DataFrame:
+    """A four-leg panel - two constraints there leave a degree of freedom."""
+    rng = np.random.default_rng(seed)
+    level = np.cumsum(rng.normal(0.0, 0.05, n_obs))
+    slope = np.cumsum(rng.normal(0.0, 0.02, n_obs))
+    curve = np.cumsum(rng.normal(0.0, 0.008, n_obs))
+    loadings = np.array([[1.00, -1.0, 0.4], [0.95, -0.3, -0.6], [0.88, 0.3, -0.5], [0.78, 1.0, 0.5]])
+    values = np.column_stack([level, slope, curve]) @ loadings.T
+    values = values + rng.normal(0.0, 0.005, (n_obs, 4)) + np.array([3.4, 3.7, 3.95, 4.2])
+    index = pd.bdate_range("2023-01-02", periods=n_obs, name="Date")
+    return pd.DataFrame(values, index=index, columns=["2Y", "5Y", "7Y", "10Y"])
+
+
 def _panel(n_obs: int = 400, seed: int = 11) -> pd.DataFrame:
     """A three-leg rate panel with a dominant level factor and a real slope."""
     rng = np.random.default_rng(seed)
@@ -84,6 +106,162 @@ def test_both_pca_variants_are_pc1_neutral():
     for method in ("pca", "pca_proj"):
         w = weights_from_moment(Q, BASE_FLY, fly.weights(method=method))
         assert float(w @ p) == pytest.approx(0.0, abs=1e-12), method
+
+
+def test_pcaneutral_reproduces_the_closed_form_inverse_for_a_fly():
+    """*"Construct a butterfly ... to eliminate PCA exposures"*, Attack68.
+
+    With the belly pinned, ``[w1, w2] @ [[e_f1, e_f2], [e_b1, e_b2]] = [e_m1, e_m2]``
+    where f/m/b are front/belly/back. That answer writes the 2x2 inverse out
+    longhand; this checks the solver against it, not against itself.
+    """
+    p1 = np.array([0.660, 0.604, 0.447])
+    p2 = np.array([-0.71, 0.02, 0.70])
+    Q = _cov_with_pc1_pc2(p1, p2)
+    E = fly.pc_loadings(Q, 2)
+
+    got = weights_from_moment(Q, BASE_FLY, fly.weights(method="pcaneutral"))
+
+    # The thread's own algebra: belly at -1 in their sign convention, so pin the
+    # belly at its base weight and solve the wings.
+    e_f, e_m, e_b = E[0], E[1], E[2]
+    A = np.array([[e_f[0], e_f[1]], [e_b[0], e_b[1]]])
+    rhs = -BASE_FLY[1] * e_m
+    w_wings = np.linalg.solve(A.T, rhs)
+
+    assert got[1] == pytest.approx(BASE_FLY[1])
+    assert got[[0, 2]] == pytest.approx(w_wings, rel=1e-10)
+
+
+def test_pcaneutral_really_is_neutral_to_both_components():
+    """The property, not the formula."""
+    panel = _panel(n_obs=500)
+    changes = panel.diff().dropna().to_numpy()
+    Q = second_moment(changes, center=True)
+
+    w = weights_from_moment(Q, BASE_FLY, fly.weights(method="pcaneutral"))
+    exposure = fly.pc_exposure(w, Q, k=3)
+
+    assert exposure[0] == pytest.approx(0.0, abs=1e-12)
+    assert exposure[1] == pytest.approx(0.0, abs=1e-12)
+    # ...and PC3 is emphatically NOT zero - that residual is the trade.
+    assert abs(exposure[2]) > 1e-3
+
+    # A PC1-only fit leaves slope exposure behind, which is the whole difference.
+    w1 = weights_from_moment(Q, BASE_FLY, fly.weights(method="pca_proj"))
+    assert fly.pc_exposure(w1, Q, k=2)[0] == pytest.approx(0.0, abs=1e-12)
+    assert abs(fly.pc_exposure(w1, Q, k=2)[1]) > 1e-3
+
+
+def test_a_pc1_pc2_neutral_fly_is_a_multiple_of_pc3():
+    """*"Hedging a trade for PCA component neutrality"*, Attack68.
+
+    *"In a 3 instrument configuration if PC1 and PC2 are made neutral the only
+    valid solution is for the trade to be a multiple of PC3."* Checked, not
+    assumed - and it is why the second answer on the companion thread ("just use
+    the 3rd PC as weights") gives the same trade.
+    """
+    panel = _panel(n_obs=500)
+    Q = second_moment(panel.diff().dropna().to_numpy(), center=True)
+
+    w = weights_from_moment(Q, BASE_FLY, fly.weights(method="pcaneutral"))
+    p3 = fly.pc_loadings(Q, 3)[:, 2]
+
+    assert w == pytest.approx(p3 * (BASE_FLY[1] / p3[1]), rel=1e-10)
+
+
+def test_pcaneutral_and_the_projection_agree_on_three_legs_only():
+    """Same direction on a fly; genuinely different once there is slack."""
+    panel = _panel(n_obs=500)
+    Q3 = second_moment(panel.diff().dropna().to_numpy(), center=True)
+
+    a = weights_from_moment(Q3, BASE_FLY, fly.weights(method="pcaneutral"))
+    b = weights_from_moment(Q3, BASE_FLY, fly.weights(method="pca_proj", n_pc=2))
+    assert a == pytest.approx(b, rel=1e-9)
+
+    # Four legs: two constraints plus the pin leave one degree of freedom, so the
+    # two tie-breaks part company - while both stay exactly neutral.
+    wide = _panel4(n_obs=500)
+    base4 = np.array([-1.0, 1.0, 1.0, -1.0])
+    Q4 = second_moment(wide.diff().dropna().to_numpy(), center=True)
+    a4 = weights_from_moment(Q4, base4, fly.weights(method="pcaneutral", anchor=1))
+    b4 = weights_from_moment(Q4, base4, fly.weights(method="pca_proj", n_pc=2, anchor=1))
+
+    assert fly.pc_exposure(a4, Q4, k=2) == pytest.approx([0.0, 0.0], abs=1e-11)
+    assert fly.pc_exposure(b4, Q4, k=2) == pytest.approx([0.0, 0.0], abs=1e-11)
+    assert not np.allclose(a4, b4, rtol=1e-4)
+
+
+def test_pcaneutral_takes_the_smallest_change_when_there_is_slack():
+    """Four legs leave a null direction; the tie-break is minimal CHANGE.
+
+    Minimal change and minimal weight coincide on a fly and part company here,
+    so this is the test that says which one the solver implements.
+    """
+    panel = _panel4(n_obs=400)
+    base4 = np.array([-1.0, 1.0, 1.0, -1.0])
+    Q = second_moment(panel.diff().dropna().to_numpy(), center=True)
+    anchor = 1
+
+    w = weights_from_moment(Q, base4, fly.weights(method="pcaneutral", anchor=anchor, normalize="none"))
+    assert fly.pc_exposure(w, Q, k=2) == pytest.approx([0.0, 0.0], abs=1e-11)
+
+    hedge = [i for i in range(4) if i != anchor]
+    A = fly.pc_loadings(Q, 2)[hedge].T                       # 2 x 3
+    null = np.linalg.svd(A)[2][2:].ravel()                   # the one free direction
+    assert A @ null == pytest.approx([0.0, 0.0], abs=1e-12)
+
+    change = np.linalg.norm(w[hedge] - base4[hedge])
+    for step in (-0.4, -0.1, 0.1, 0.4):
+        rival = w.copy()
+        rival[hedge] = w[hedge] + step * null
+        assert fly.pc_exposure(rival, Q, k=2) == pytest.approx([0.0, 0.0], abs=1e-11)
+        assert change <= np.linalg.norm(rival[hedge] - base4[hedge]) + 1e-12
+
+
+def test_pcaneutral_pins_the_anchor_exactly_where_the_projection_does_not():
+    panel = _panel4(n_obs=400)
+    base4 = np.array([-1.0, 1.0, 1.0, -1.0])
+    Q = second_moment(panel.diff().dropna().to_numpy(), center=True)
+
+    w = weights_from_moment(Q, base4, fly.weights(method="pcaneutral", anchor=2, normalize="none"))
+    assert w[2] == pytest.approx(base4[2], rel=1e-12)
+
+
+def test_pcaneutral_needs_a_leg_per_component():
+    """Two constraints and a pinned belly do not fit inside a two-leg curve."""
+    p1 = np.array([0.7, 0.72])
+    Q2 = _cov_with_pc1(p1, eigenvalues=(1.0, 0.1))
+    with pytest.raises(ValueError, match="n_pc <= n_legs - 1"):
+        weights_from_moment(Q2, np.array([-1.0, 1.0]), fly.weights(method="pcaneutral"))
+
+    # One component on a curve is fine, and is the beta-weighted PC1 hedge.
+    w = weights_from_moment(Q2, np.array([-1.0, 1.0]), fly.weights(method="pcaneutral", n_pc=1))
+    assert fly.pc_exposure(w, Q2, k=1)[0] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_pcaneutral_refuses_when_the_wings_cannot_span_both_components():
+    """Both threads warn the weights can be very unstable; make that a guard.
+
+    Degeneracy here is not near-equal eigenvalues - it is the two FREE legs
+    loading identically on the components being neutralised. Give the wings the
+    same PC1 and PC2 loadings and no wing pair can offset the belly on both at
+    once, so there is no answer to return.
+    """
+    p1 = np.array([0.6, 0.5, 0.6])
+    p2 = np.array([0.5, -1.2, 0.5])
+    assert p1 @ p2 == pytest.approx(0.0, abs=1e-15)  # exactly orthogonal by construction
+    Q = _cov_with_pc1_pc2(p1 / np.linalg.norm(p1), p2 / np.linalg.norm(p2))
+
+    E = fly.pc_loadings(Q, 2)
+    assert np.allclose(E[0], E[2]), "the wings must be indistinguishable for this to be degenerate"
+
+    with pytest.raises(np.linalg.LinAlgError, match="collinear"):
+        weights_from_moment(Q, BASE_FLY, fly.weights(method="pcaneutral"))
+
+    # Neutralising PC1 alone is still perfectly well posed on the same curve.
+    w = weights_from_moment(Q, BASE_FLY, fly.weights(method="pcaneutral", n_pc=1))
+    assert fly.pc_exposure(w, Q, k=1)[0] == pytest.approx(0.0, abs=1e-12)
 
 
 def test_beta_matches_the_threads_pinv_recipe():

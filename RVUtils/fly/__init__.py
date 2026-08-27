@@ -22,9 +22,11 @@ Preset grammar
 
 =============== ================================================================
 method          ``pca`` divide by the PC1 loading; ``pca_proj`` minimal-change
-                PC-neutral projection; ``beta`` multivariable regression on the
-                curve and the belly; ``minvar`` pin the belly and minimise
-                variance; ``none`` leave the package's own weights alone
+                PC-neutral projection; ``pcaneutral`` belly pinned and EXACTLY
+                zero exposure to PC1 **and** PC2 (aliases ``pca12``, ``pc12``);
+                ``beta`` multivariable regression on the curve and the belly;
+                ``minvar`` pin the belly and minimise variance; ``none`` leave
+                the package's own weights alone
 basis           ``chgs`` (covariance of changes - the desk default) or ``lvls``
 window          omitted for ONE IN-SAMPLE FIT over the requested history, or
                 ``1m``/``3m``/``6m``/``1y``/``2y``/``90d``/``21b``/``60n``/
@@ -56,6 +58,7 @@ Any name matching the grammar resolves, whether or not it is in ``dir()``::
     RVUtils.fly.pca_lvls_1m             # rolling one-month, on levels
     RVUtils.fly.beta_chgs_1m            # rolling MVLSR
     RVUtils.fly.minvar_chgs_6m_lag1     # rolling min-variance, knowable a day early
+    RVUtils.fly.pcaneutral_chgs_1m      # PC1+PC2 neutral, belly pinned
     RVUtils.fly.pca_proj_chgs_1y_pc2    # PC1+PC2 neutral, minimal change
     RVUtils.fly.pca_chgs_1m_current     # today's weights over the whole history
 
@@ -63,13 +66,29 @@ or build one explicitly::
 
     RVUtils.fly.weights(method="beta", basis="chgs", window="1m", lag=1)
 
-Method provenance: the Quant SE thread *"How to adjust butterfly 2s5s10s swaps
-trade for directionality?"* - Attack68's PCA (both the divide-by-loading form
-and the 2021 minimal-change KKT addendum) and minimum-VaR methods, dm63's
-multivariable least squares - which follows Darbyshire, *Pricing and Trading
-Interest Rate Derivatives*. ``tests/test_fly_weighting.py`` pins the first two
-against the thread's own worked numbers and the second two against the
-``numpy`` recipes in its code block.
+Method provenance: three Quant SE threads, all with Attack68 answers, all
+following Darbyshire, *Pricing and Trading Interest Rate Derivatives*.
+
+* *"How to adjust butterfly 2s5s10s swaps trade for directionality?"* -
+  ``pca`` (divide by the loading), ``pca_proj`` (the 2021 minimal-change KKT
+  addendum), ``minvar``, and dm63's ``beta``.
+* *"Construct a butterfly interest rate portfolio to eliminate PCA exposures"* -
+  the closed form ``pcaneutral`` inverts for a fly.
+* *"Hedging a trade for PCA component neutrality"* - the general constrained
+  form, and the degrees-of-freedom argument that makes a PC1+PC2-neutral fly a
+  multiple of PC3.
+
+``tests/test_fly_weighting.py`` pins the first thread's two PCA variants against
+its own worked numbers, ``beta`` and ``minvar`` against the ``numpy`` recipes in
+its code block, and ``pcaneutral`` against both the second thread's closed-form
+inverse and the third thread's PC3 claim.
+
+**``pcaneutral`` vs ``pca_proj`` with ``pc2``.** Both end up with zero exposure
+to PC1 and PC2. They differ in what is held: ``pcaneutral`` pins the anchor leg
+and moves the rest, so the belly's risk is exactly what you asked for;
+``pca_proj`` moves all legs by the smallest total change and then rescales. On a
+three-leg fly they agree up to scale - there is only one PC1/PC2-neutral
+direction to find. On four or more legs they genuinely differ.
 
 **``pca`` is the unstable one.** Dividing by a PC1 loading blows up when that
 loading is small, which is the objection Thrastylon raised on the thread and is
@@ -94,6 +113,7 @@ from RVUtils.fly.estimators import (
     combine,
     default_anchor,
     default_factors,
+    pc_exposure,
     pc_loadings,
     second_moment,
     solve_weights,
@@ -101,6 +121,7 @@ from RVUtils.fly.estimators import (
 )
 from RVUtils.fly.schema import (
     BASES,
+    DEFAULT_N_PC,
     METHODS,
     WeightingSchema,
     WindowSpec,
@@ -120,7 +141,7 @@ none = base
 
 _PRESETS: dict[str, WeightingSchema] = {"base": base, "none": none}
 
-for _method in ("pca", "pca_proj", "beta", "minvar"):
+for _method in ("pca", "pca_proj", "pcaneutral", "beta", "minvar"):
     for _basis in ("chgs", "lvls"):
         for _window in COMMON_WINDOWS:
             _name = f"{_method}_{_basis}" + (f"_{_window}" if _window else "")
@@ -131,7 +152,9 @@ globals().update(_PRESETS)
 __all__ = [
     "BASES",
     "COMMON_WINDOWS",
+    "DEFAULT_N_PC",
     "METHODS",
+    "pc_exposure",
     "WeightingSchema",
     "WindowSpec",
     "coerce",

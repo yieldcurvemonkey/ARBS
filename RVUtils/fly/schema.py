@@ -20,6 +20,14 @@ Derivatives*:
     ``delta`` to the base risks subject to ``(x + delta)' p = 0``. The KKT system
     solves analytically to the orthogonal projection ``w = x - p (x'p)/(p'p)``,
     which is better behaved than ``pca`` when a loading is near zero.
+``pcaneutral``
+    Pin the anchor leg and solve the remaining legs so the package's exposure to
+    the first ``n_pc`` components (two, by default) is EXACTLY zero. Two further
+    Quant SE threads, both Attack68: *"Construct a butterfly interest rate
+    portfolio to eliminate PCA exposures"* gives the closed form for a fly, and
+    *"Hedging a trade for PCA component neutrality"* gives the general
+    constrained form and the fact that pins it - in three instruments, once PC1
+    and PC2 are neutral **the only valid position is a multiple of PC3**.
 ``beta``
     dm63's multivariable least squares: regress the package on a set of factor
     portfolios (for a fly, the wing curve and the belly outright) and trade the
@@ -32,12 +40,13 @@ Naming grammar for the presets exported from :mod:`RVUtils.fly`::
 
     {method}_{basis}[_{window}][_{modifier}...]
 
-    pca_chgs          PC1 divide, covariance of daily CHANGES, whole sample
-    pca_lvls          PC1 divide, covariance of LEVELS, whole sample
-    pca_chgs_1m       ... refit on a rolling one-month window
-    pca_proj_chgs_3m  minimal-change PC1 projection, rolling three months
-    beta_chgs_1m      multivariable regression weights, rolling one month
-    minvar_lvls_1y    minimum-variance wings, rolling one year
+    pca_chgs             PC1 divide, covariance of daily CHANGES, whole sample
+    pca_lvls             PC1 divide, covariance of LEVELS, whole sample
+    pca_chgs_1m          ... refit on a rolling one-month window
+    pca_proj_chgs_3m     minimal-change PC1 projection, rolling three months
+    pcaneutral_chgs_1m   PC1 AND PC2 neutral, belly pinned, rolling one month
+    beta_chgs_1m         multivariable regression weights, rolling one month
+    minvar_lvls_1y       minimum-variance wings, rolling one year
 
 **A schema with no window is fitted in sample.** The weights are derived from
 the whole window the caller asked ``TimeseriesBuilder`` for and then applied
@@ -68,7 +77,11 @@ __all__ = [
 
 #: Every weighting method. ``none`` keeps the package's own default weights and
 #: exists so a caller can ask for "the ordinary fly" through the same seam.
-METHODS: Tuple[str, ...] = ("none", "pca", "pca_proj", "beta", "minvar")
+METHODS: Tuple[str, ...] = ("none", "pca", "pca_proj", "pcaneutral", "beta", "minvar")
+
+#: ``n_pc`` when the caller did not say. ``pca_proj`` neutralises the level only;
+#: ``pcaneutral`` exists to kill level AND slope, so two is its whole point.
+DEFAULT_N_PC: dict = {"pca_proj": 1, "pcaneutral": 2}
 
 #: What the covariance is estimated on.
 BASES: Tuple[str, ...] = ("lvls", "chgs")
@@ -98,6 +111,11 @@ _METHOD_ALIASES = {
     "pca_kkt": "pca_proj",
     "pcakkt": "pca_proj",
     "proj": "pca_proj",
+    "pcaneutral": "pcaneutral",
+    "pca_neutral": "pcaneutral",
+    "pca12": "pcaneutral",
+    "pc12": "pcaneutral",
+    "pcan": "pcaneutral",
     "beta": "beta",
     "mvlsr": "beta",
     "reg": "beta",
@@ -271,8 +289,14 @@ class WeightingSchema:
         Differencing horizon for ``basis="chgs"``. ``1`` is daily on a daily
         panel; ``5`` gives weekly changes on one.
     n_pc
-        How many principal components ``pca_proj`` neutralises. ``pca`` uses PC1
-        only and ignores this.
+        How many principal components ``pca_proj`` and ``pcaneutral``
+        neutralise. ``None`` takes the method's own default from
+        :data:`DEFAULT_N_PC` - one for ``pca_proj``, two for ``pcaneutral``.
+        ``pca``, ``beta`` and ``minvar`` ignore it.
+
+        ``pcaneutral`` pins one leg and spends a degree of freedom per
+        component, so it needs ``n_pc <= n_legs - 1``: two components need three
+        legs, and a two-leg curve can only be made neutral to one.
     factors
         Explicit factor portfolios for ``beta``, as a tuple of ``n``-length
         weight vectors over the legs. ``None`` uses :func:`default_factors`,
@@ -363,7 +387,7 @@ class WeightingSchema:
     basis: str = "chgs"
     window: WindowSpec = STATIC_WINDOW
     diff_periods: int = 1
-    n_pc: int = 1
+    n_pc: Optional[int] = None
     factors: Optional[Tuple[Tuple[float, ...], ...]] = None
     anchor: Optional[int] = None
     normalize: str = "anchor"
@@ -395,7 +419,7 @@ class WeightingSchema:
             raise ValueError(f"matrix must be cov/corr, got {self.matrix!r}")
         if int(self.diff_periods) < 1:
             raise ValueError("diff_periods must be >= 1")
-        if int(self.n_pc) < 1:
+        if self.n_pc is not None and int(self.n_pc) < 1:
             raise ValueError("n_pc must be >= 1")
         if int(self.lag) < 0:
             raise ValueError("lag must be >= 0")
@@ -406,7 +430,7 @@ class WeightingSchema:
         object.__setattr__(self, "basis", basis)
         object.__setattr__(self, "window", parse_window(self.window))
         object.__setattr__(self, "diff_periods", int(self.diff_periods))
-        object.__setattr__(self, "n_pc", int(self.n_pc))
+        object.__setattr__(self, "n_pc", None if self.n_pc is None else int(self.n_pc))
         object.__setattr__(self, "lag", int(self.lag))
         object.__setattr__(self, "refit_every", int(self.refit_every))
         if self.factors is not None:
@@ -431,8 +455,8 @@ class WeightingSchema:
                 parts.append(self.window.text)
             if self.basis == "chgs" and self.diff_periods != 1:
                 parts.append(f"d{self.diff_periods}")
-            if self.method == "pca_proj" and self.n_pc != 1:
-                parts.append(f"pc{self.n_pc}")
+            if self.method in DEFAULT_N_PC and self.resolved_n_pc != DEFAULT_N_PC[self.method]:
+                parts.append(f"pc{self.resolved_n_pc}")
             if self.matrix != "cov":
                 parts.append(self.matrix)
             if not self.center:
@@ -460,6 +484,13 @@ class WeightingSchema:
         if self.method == "none":
             return False
         return self.window.is_static or self.resolved_combine_mode == "current"
+
+    @property
+    def resolved_n_pc(self) -> int:
+        """``n_pc`` with the method's own default filled in. See :data:`DEFAULT_N_PC`."""
+        if self.n_pc is not None:
+            return int(self.n_pc)
+        return DEFAULT_N_PC.get(self.method, 1)
 
     @property
     def resolved_combine_mode(self) -> str:
