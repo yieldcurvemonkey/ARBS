@@ -12,8 +12,11 @@ See ``docs/curvefly/DESIGN.md``. The short version:
 * the forwards-realised convention is deliberately NOT used: it is identically
   zero for a par swap, so it ranks nothing. Comparing a spot leg against the
   ``h x (T-h)`` forward is that convention in disguise.
-* ``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` is reported for comparison only. It
-  correlates -0.136 with the published bank screen this is graded against.
+* ``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` is reported for comparison. It
+  used to correlate -0.136 with the published bank screen this is graded
+  against, because it aged a forward leg's TAIL instead of its START; since
+  2026-08-27 it implements the same ``age()`` rule as this module
+  (``Query.IRSwaps._carry_roll``) and correlates +0.991.
 
 One curve build per date; every rate after that is a cheap ``fair_rate`` call.
 """

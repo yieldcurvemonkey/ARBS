@@ -56,11 +56,13 @@ independent repricing exactly, and cannot do so for the spot legs.
 
 ### What this is NOT
 
-`IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` is not this quantity. Graded against
-Citi's published Figure 7 it correlates **−0.136** and gets the cross-pair rank
-order wrong, where a repriced 1-year roll of the aged package correlates **+0.991**
-(`docs/convexityrv/`, lesson 3). It is computed here as `cr_query_bp` for
-comparison only and never used in the ranking.
+`IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` used not to be this quantity: graded
+against Citi's published Figure 7 it correlated **−0.136** and got the cross-pair
+rank order wrong, where a repriced 1-year roll of the aged package correlates
+**+0.991** (`docs/convexityrv/`, lesson 3). 2026-08-27: fixed. The query value aged a forward-starting leg by shortening its TAIL instead of bringing its START nearer (a 10Yx10Y aged 1Y became 10Yx9Y, not 9Yx10Y); `Query/IRSwaps/_carry_roll.py` is now the single kernel behind both backends and scores **+0.991 / MAE 0.338 bp** on the same eight pairs. It implements the
+same `age()` rule this module documents. It is still computed here as
+`cr_query_bp` alongside the screener's own kernel; the two agreeing is the
+check, and the ranking still runs off this module's kernel.
 
 `rateslib.Curve.translate()` is also not a way to age a struck swap — it
 renormalises discount factors and returns 0.000bp on a DV01-neutral forward

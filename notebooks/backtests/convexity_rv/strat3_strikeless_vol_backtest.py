@@ -294,16 +294,23 @@ print(f"\nactive pair {CONFIG.pair_name}: screen {PAIR_SCREEN.shape}, ledger {LE
 # ### A convention that had to be measured, not assumed
 #
 # Citi never states how "1y carry" is computed (the note's own gap list). The
-# brief nominated `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` at horizon 1Y. It is
-# the wrong field, and Figure 7 says so:
+# brief nominated `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` at horizon 1Y. When
+# this notebook was written that was the wrong field and Figure 7 said so; the
+# defect has since been fixed at the source:
 #
 # | measure | corr with Citi's 8 published carries | MAE |
 # |---|---|---|
 # | repriced 1y roll of the aged package / package DV01 | **+0.991** | **0.35bp** |
-# | `CARRY_AND_ROLL_BPS_RUNNING`, horizon 1Y | −0.136 | 1.28bp |
+# | `CARRY_AND_ROLL_BPS_RUNNING`, horizon 1Y (now) | **+0.991** | **0.34bp** |
+# | `CARRY_AND_ROLL_BPS_RUNNING`, horizon 1Y (before 2026-08-27) | −0.136 | 1.28bp |
 #
-# Both are computed and printed below. The repriced roll is what every signal
-# downstream uses.
+# The query value aged a forward-starting leg by shortening its TAIL instead of
+# bringing its START nearer, so a 10Yx10Y aged 1Y became 10Yx9Y rather than
+# 9Yx10Y; `Query/IRSwaps/_carry_roll.py` is now the single kernel behind both
+# backends. `_query_carry_1y` also asked for the opposite trade direction.
+#
+# Both are computed and printed below. The repriced roll is still what every
+# signal downstream uses; the two agreeing is now the cross-check.
 
 # %%
 P0508 = _mdp.get_pricer({"curve_name": CURVE, "timestamp": datetime.date(2019, 5, 8),

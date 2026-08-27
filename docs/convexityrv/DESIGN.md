@@ -120,15 +120,18 @@ Citi's published Figure 7 (close 5/8/2019, eight pairs with printed "1y carry"):
 
 | carry source | correlation vs Citi | MAE |
 |---|---:|---:|
-| `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` @1Y | **−0.136** | 1.28 bp |
+| `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` @1Y (before 2026-08-27) | **−0.136** | 1.28 bp |
+| `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` @1Y (now) | **+0.991** | 0.338 bp |
 | repriced 1y `rl.Curve.roll` of the aged package / DV01 | **+0.991** | 0.354 bp |
 
-The query field gets the *rank order across pairs wrong*, which is fatal for a
-screen that ranks pairs. Strat 3 uses the repriced roll as primary and reports
-the query value alongside as `carry_query_bp`. Strat 1's profile level still
-uses the query field; its pinned carry values are internally consistent and its
-signal is a within-structure time series rather than a cross-sectional rank, but
-the discrepancy is recorded here rather than smoothed over.
+2026-08-27: fixed. The query value aged a forward-starting leg by shortening its TAIL instead of bringing its START nearer (a 10Yx10Y aged 1Y became 10Yx9Y, not 9Yx10Y); `Query/IRSwaps/_carry_roll.py` is now the single kernel behind both backends and scores **+0.991 / MAE 0.338 bp** on the same eight pairs. `RVUtils/ConvexityRV/strat3_strikeless_vol._query_carry_1y`
+compounded it by asking for the opposite trade direction (`bpv < 0`); that is
+fixed too.
+
+The heading above is now history. Strat 3 still uses the repriced roll as
+primary — provenance, not accuracy — and reports the query value alongside as
+`carry_query_bp`; the two agreeing is the cross-check. Strat 1's profile level
+uses the query field and its pinned carry values move with this fix.
 
 ---
 

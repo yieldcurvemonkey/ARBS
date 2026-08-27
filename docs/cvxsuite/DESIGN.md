@@ -43,9 +43,11 @@ ledger only if a family is registered there; nothing here registers one.
   sources with explicit `_bp_year`/`_bp_day` suffixes; `sqrt(252)` crossings
   only inside named converters. Median-plausibility guard 0.5–40 bp/day on any
   SOFR-complex daily-vol series (the w3 pattern).
-- **Carry:** repriced (aged-rate identity or `handle.roll`) — never
-  `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` for cross-sectional ranking
-  (corr −0.136 vs published; repriced +0.991).
+- **Carry:** repriced (aged-rate identity or `handle.roll`). This used to read
+  "never `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` for cross-sectional ranking
+  (corr −0.136 vs published; repriced +0.991)". 2026-08-27: fixed. The query value aged a forward-starting leg by shortening its TAIL instead of bringing its START nearer (a 10Yx10Y aged 1Y became 10Yx9Y, not 9Yx10Y); `Query/IRSwaps/_carry_roll.py` is now the single kernel behind both backends and scores **+0.991 / MAE 0.338 bp** on the same eight pairs. The suite stays
+  on the repriced kernel; the query value is now a valid independent
+  cross-check rather than a trap.
 - **Gamma:** reprice on `handle().shift(bp)`; `Curve.translate` ageing is
   banned (`horizon_handle` raises); `GAMMA_01`/`DV01` raise on the RL backend.
 - **Sign probes over labels:** every QDB runner re-derives direction from the

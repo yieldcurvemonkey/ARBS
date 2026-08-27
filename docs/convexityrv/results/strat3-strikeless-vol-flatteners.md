@@ -32,7 +32,7 @@ All deliverables are built, executed and verified. Final report:
 | 1y realized vol | **0.228 bp** | 3.20–3.26 vs published 3.0–3.2 |
 | daily breakeven | **1.076 bp** | driven entirely by 15y5y/20y10y (ours −0.009bp carry vs Citi −0.31 → sqrt amplifies) |
 
-**The brief named the wrong carry field, and Fig 7 proves it.** `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` @1Y: corr **−0.136**, MAE 1.28bp. Repriced 1-year `rl.Curve.roll` of the aged package / package DV01: corr **+0.991**, MAE 0.354bp, and the rank order is right where the query field's is wrong. The repriced roll is primary; the query value is still reported as `carry_query_bp`.
+**The brief named the wrong carry field, and Fig 7 proves it.** `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` @1Y: corr **−0.136**, MAE 1.28bp. *(Corrected 2026-08-27: that field was defective, not merely a different convention — it aged a forward-starting leg by shortening its TAIL instead of bringing its START nearer, and `_query_carry_1y` asked for the opposite trade direction. Both fixed (`Query/IRSwaps/_carry_roll.py`); the field now scores corr **+0.991**, MAE **0.338bp** on these same eight pairs. The numbers below are the as-measured record from the original run.)* Repriced 1-year `rl.Curve.roll` of the aged package / package DV01: corr **+0.991**, MAE 0.354bp, and the rank order is right where the query field's is wrong. The repriced roll is primary; the query value is still reported as `carry_query_bp`.
 
 **(b) DV01 neutrality at initiation:** package PV01 = **0.0** (max |1.5e-11|) on every pair.
 
@@ -138,7 +138,7 @@ Sharpe by pair × threshold (always-on, neutral, beta 1, annual roll):
 
 ## THINGS THAT DID NOT WORK / CAVEATS, stated plainly
 
-1. **`CARRY_AND_ROLL_BPS_RUNNING` is not Citi's carry field** (corr −0.136). Replaced by repriced roll; both reported.
+1. **`CARRY_AND_ROLL_BPS_RUNNING` was not Citi's carry field** (corr −0.136). Replaced by repriced roll; both reported. *(Fixed at source 2026-08-27 — corr now +0.991; the repriced roll stays primary for provenance and the two agreeing is the cross-check.)*
 2. **`payoff_profile(horizon_date=…)` cannot produce the exact breakeven** — `translate` gives exactly zero carry on par-struck forwards. Used `roll` instead; documented and tested.
 3. **Two bugs found and fixed during the build**, both caught by comparing implementations: `book_stats` double-billed the initiation on an always-on book; the notebook's QDB fee charged initiate/roll per leg rather than per package (Citi Fig-9 quotes the package).
 4. **Gated cells scale an always-on aged ledger** by a lag-1 {0,1} state rather than striking a fresh package at entry (the `sv_citivelo_h13` approximation). Their Sharpes are an upper bound; the always-on rows carry no such caveat.
