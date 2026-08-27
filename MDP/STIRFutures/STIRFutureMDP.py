@@ -1422,6 +1422,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         end: datetime.date,
         *,
         show_tqdm: bool = False,
+        batch_size: int = 8,
     ) -> Dict[str, int]:
         """Warm the settle cache with ONE vendor request per SYMBOL, not per date.
 
@@ -1452,63 +1453,93 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             raise ValueError("no symbols to warm")
 
         resolved = [(_normalize_symbol(t) or t) for t in tickers]
-        barchart_syms = [_to_barchart_symbol(s) for s in resolved]
-        max_conc = min(len(barchart_syms), 36) + 1
 
-        df = None
-        last_exc: Optional[Exception] = None
-        for fetcher_kwargs in (
-            {"force_rotate_proxy": False, "clear_session_tokens": False},
-            {"force_rotate_proxy": True, "clear_session_tokens": True},
-        ):
-            bcf = self._get_barchart_fetcher(required_concurrency=max_conc, **fetcher_kwargs)
-            try:
-                df = bcf.barchart_timeseries_api(
-                    barchart_symbols=barchart_syms,
-                    start_date=datetime.datetime(start.year, start.month, start.day),
-                    end_date=datetime.datetime(end.year, end.month, end.day, 23, 59),
-                    interval=None,
-                    one_df=True,
-                    show_tqdm=show_tqdm,
-                    max_concurrent_tasks=max_conc,
-                    max_keepalive_connections=max(36, max_conc) + 1,
-                )
-            except Exception as exc:                           # noqa: BLE001
-                last_exc, df = exc, None
-            finally:
+        def _fetch(chunk: List[str]) -> pd.DataFrame:
+            """One vendor call for *chunk*, with the usual proxy rotation retry."""
+            syms = [_to_barchart_symbol(s) for s in chunk]
+            conc = min(len(syms), 36) + 1
+            frame = None
+            last_exc: Optional[Exception] = None
+            for fetcher_kwargs in (
+                {"force_rotate_proxy": False, "clear_session_tokens": False},
+                {"force_rotate_proxy": True, "clear_session_tokens": True},
+            ):
+                bcf = self._get_barchart_fetcher(required_concurrency=conc, **fetcher_kwargs)
                 try:
-                    bcf.close()
-                except Exception:                              # noqa: BLE001
-                    pass
-            if df is not None and not df.empty:
-                break
-        if df is None or df.empty:
-            if last_exc is not None:
-                raise last_exc
-            return {}
-
-        df = df.copy()
-        df.columns = [_from_barchart_symbol(c) for c in df.columns]
+                    frame = bcf.barchart_timeseries_api(
+                        barchart_symbols=syms,
+                        start_date=datetime.datetime(start.year, start.month, start.day),
+                        end_date=datetime.datetime(end.year, end.month, end.day, 23, 59),
+                        interval=None,
+                        one_df=True,
+                        show_tqdm=show_tqdm,
+                        max_concurrent_tasks=conc,
+                        max_keepalive_connections=max(36, conc) + 1,
+                    )
+                except Exception as exc:                       # noqa: BLE001
+                    last_exc, frame = exc, None
+                finally:
+                    try:
+                        bcf.close()
+                    except Exception:                          # noqa: BLE001
+                        pass
+                if frame is not None and not frame.empty:
+                    break
+            if frame is None or frame.empty:
+                if last_exc is not None:
+                    raise last_exc
+                return pd.DataFrame()
+            frame = frame.copy()
+            frame.columns = [_from_barchart_symbol(c) for c in frame.columns]
+            return frame
 
         self._ensure_pricer_cache()
         src = self.source.upper()
-        written: Dict[str, int] = {}
+        # Every requested symbol gets an entry, zero included. A dict that simply
+        # omits what did not come back reads as success at the call site: the
+        # caller sums the values, sees a large number and reports it.
+        written: Dict[str, int] = {s: 0 for s in resolved}
+
+        # Batched, and this is not tuning. Measured 2026-08-27: one call for the
+        # 50 contracts of a 2019-2026 depth-20 warm returned a frame missing 13 of
+        # them -- every December contract past Z23 -- and the job reported "wrote
+        # 61118 settle rows over 50 contract(s)" and exited 0. Warmed in a batch of
+        # seven the same contracts returned 1,308-1,772 rows each. A wide fan-out
+        # at this vendor loses symbols silently; the repo has the same shape
+        # recorded as an unthrottled 429 storm on the intraday fetcher.
+        chunk_size = max(1, int(batch_size))
         with self:
-            for col in df.columns:
-                series = pd.to_numeric(df[col], errors="coerce").dropna()
-                n = 0
-                for stamp, px in series.items():
-                    d = pd.Timestamp(stamp).date()
-                    if d < start or d > end:
+            for i in range(0, len(resolved), chunk_size):
+                chunk = resolved[i:i + chunk_size]
+                df = _fetch(chunk)
+                if df.empty:
+                    continue
+                for col in df.columns:
+                    if col not in written:
                         continue
-                    ts_dt = _as_datetime(d, eod_hour=self._eod_hour)
-                    key_iso = pd.Timestamp(ts_dt).isoformat()
-                    self._threadsafe_cache_put(
-                        f"{key_iso}-{col}-{src}",
-                        {"symbol": col, "price": float(px), "timestamp": key_iso, "schema": 1},
-                    )
-                    n += 1
-                written[col] = n
+                    series = pd.to_numeric(df[col], errors="coerce").dropna()
+                    n = 0
+                    for stamp, px in series.items():
+                        d = pd.Timestamp(stamp).date()
+                        if d < start or d > end:
+                            continue
+                        ts_dt = _as_datetime(d, eod_hour=self._eod_hour)
+                        key_iso = pd.Timestamp(ts_dt).isoformat()
+                        self._threadsafe_cache_put(
+                            f"{key_iso}-{col}-{src}",
+                            {"symbol": col, "price": float(px), "timestamp": key_iso,
+                             "schema": 1},
+                        )
+                        n += 1
+                    written[col] = written.get(col, 0) + n
+
+        empty = sorted(s for s, n in written.items() if n == 0)
+        if empty:
+            logging.getLogger(__name__).warning(
+                "warm_settles: %d of %d contracts returned no settle in %s..%s: %s. "
+                "A contract genuinely unlisted for the whole window is legitimate; a "
+                "front contract is not, and is what a silent wide fan-out looks like.",
+                len(empty), len(written), start, end, ", ".join(empty[:20]))
         return written
 
     def fetch_pricers_flat(

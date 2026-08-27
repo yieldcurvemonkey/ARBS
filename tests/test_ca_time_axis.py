@@ -361,3 +361,61 @@ def test_warm_settles_writes_the_key_the_read_path_probes(monkeypatch):
 
     out = mdp.get_data({"symbols": ["SR3U26"], "timestamp": DAY})
     assert out["SR3U26"][0]["price"] == pytest.approx(96.2125)
+
+
+class _DroppingFetcher(_FakeFetcher):
+    """Serves only the first ``keep`` symbols of whatever it is asked for.
+
+    That is what a wide fan-out at this vendor actually does: measured 2026-08-27,
+    one call for 50 contracts came back missing 13 of them and the job reported
+    success.
+    """
+
+    def __init__(self, frame, keep=1):
+        super().__init__(frame)
+        self.keep = keep
+
+    def barchart_timeseries_api(self, *, barchart_symbols, **kw):
+        self.calls.append({"symbols": list(barchart_symbols), **kw})
+        kept = list(barchart_symbols)[: self.keep]
+        return pd.DataFrame({s: self.frame.iloc[:, 0].values for s in kept},
+                            index=self.frame.index)
+
+
+def _warm_mdp(monkeypatch, fetcher):
+    mdp = STIRFutureMDP(source=SETTLE_SOURCE)
+    monkeypatch.setattr(STIRFutureMDP, "_get_barchart_fetcher",
+                        lambda self, **kw: fetcher, raising=True)
+    monkeypatch.setattr(STIRFutureMDP, "_ensure_pricer_cache", lambda self: None, raising=True)
+    monkeypatch.setattr(STIRFutureMDP, "_threadsafe_cache_put",
+                        lambda self, key, value: None, raising=True)
+    return mdp
+
+
+def test_warm_settles_batches_the_vendor_call(monkeypatch):
+    frame = _daily_frame([datetime.date(2026, 8, 19), DAY], {datetime.date(2026, 8, 19): 96.1,
+                                                             DAY: 96.2})
+    fake = _DroppingFetcher(frame, keep=99)
+    mdp = _warm_mdp(monkeypatch, fake)
+    syms = [f"SR3{m}{y}" for y in (26, 27, 28) for m in ("H", "M", "U", "Z")]
+
+    mdp.warm_settles(syms, datetime.date(2026, 8, 19), DAY, batch_size=5)
+
+    assert len(fake.calls) == 3, f"expected 3 batches of <=5, got {len(fake.calls)}"
+    assert all(len(c["symbols"]) <= 5 for c in fake.calls), [len(c["symbols"]) for c in fake.calls]
+
+
+def test_warm_settles_reports_a_contract_the_vendor_omitted(monkeypatch):
+    """A dict that omits what did not come back reads as success at the call site."""
+    frame = _daily_frame([DAY], {DAY: 96.2})
+    fake = _DroppingFetcher(frame, keep=1)
+    mdp = _warm_mdp(monkeypatch, fake)
+    syms = ["SR3H27", "SR3M27", "SR3U27"]
+
+    written = mdp.warm_settles(syms, DAY, DAY, batch_size=3)
+
+    assert set(written) == set(syms), (
+        f"{sorted(set(syms) - set(written))} vanished from the report instead of "
+        "being counted as zero")
+    assert written["SR3M27"] == 0 and written["SR3U27"] == 0, written
+    assert written["SR3H27"] == 1, written
