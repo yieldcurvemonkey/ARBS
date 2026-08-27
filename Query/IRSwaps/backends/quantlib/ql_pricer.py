@@ -272,41 +272,17 @@ def calc_dollar_carry(swap: ql.VanillaSwap, curve_handle: ql.YieldTermStructureH
     return dollar_carry
 
 
-def calc_carry_bps_running(swap: ql.VanillaSwap, curve_handle: ql.YieldTermStructureHandle, curve: str, horizon: Optional[ql.Period] = ql.Period("1D")) -> float:
-    ql.Settings.instance().evaluationDate = curve_handle.referenceDate()
-    swap.setPricingEngine(ql.DiscountingSwapEngine(curve_handle))
-    if swap.startDate() > curve_handle.calendar().advance(curve_handle.referenceDate(), ql.Period(QUANTLIB_CURVE_DEFINITIONS[curve]["SettlementDays"], ql.Days)):
-        return 0.0
-
-    fwd_rolled_swap = build_ql_irswap(
-        curve=curve,
-        curve_handle=curve_handle,
-        effective_date=ql_date_to_pydate(swap.startDate() + horizon),
-        maturity_date=ql_date_to_pydate(swap.maturityDate()),
-    )
-    return (fwd_rolled_swap.fixedRate() - swap.fixedRate()) * 10_000
-
-
-def calc_roll_bps_running(swap: ql.VanillaSwap, curve_handle: ql.YieldTermStructureHandle, curve: str, horizon: Optional[ql.Period] = ql.Period("1D")) -> float:
-    # TODO handle 2 cases
-    # rolldown -> mat - horizon >= effective date and mat - horizon < effective date
-    rolled_swap = build_ql_irswap(
-        curve=curve,
-        curve_handle=curve_handle,
-        effective_date=ql_date_to_pydate(swap.startDate()),
-        maturity_date=ql_date_to_pydate(swap.maturityDate() - horizon),
-    )
-    return (swap.fixedRate() - rolled_swap.fixedRate()) * 10_000
-
-
-def calc_carry_and_roll_bps_running(
-    swap: ql.VanillaSwap, curve_handle: ql.YieldTermStructureHandle, curve: str, horizon: Optional[ql.Period] = ql.Period("1D")
-) -> float:
-    ql.Settings.instance().evaluationDate = curve_handle.referenceDate()
-
-    return calc_carry_bps_running(swap=swap, curve_handle=curve_handle, curve=curve, horizon=horizon) + calc_roll_bps_running(
-        swap=swap, curve_handle=curve_handle, curve=curve, horizon=horizon
-    )
+# ---------------------------------------------------------------------------
+# calc_carry_bps_running / calc_roll_bps_running / calc_carry_and_roll_bps_running
+# used to live here. They rolled the MATURITY back by the horizon and left the
+# EFFECTIVE date alone, which ages a forward-starting swap onto the wrong axis
+# (a 10Yx10Y became 10Yx9Y instead of 9Yx10Y) and blows up whenever the tail is
+# no longer than the horizon. The rateslib backend carried a verbatim copy of
+# the same mistake, so both now delegate to the single kernel in
+# ``Query.IRSwaps._carry_roll``, which documents the rule and the measured
+# tie-out against Citi's published Figure-7 carry screen. Nothing outside this
+# package imported these three names.
+# ---------------------------------------------------------------------------
 
 
 def calc_notional(swap: ql.VanillaSwap, curve_handle: ql.YieldTermStructureHandle):

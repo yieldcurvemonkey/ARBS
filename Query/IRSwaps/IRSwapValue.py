@@ -159,16 +159,47 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
         return sum(math.copysign(curve.notional(s), curve.pv01(s)) for s in kwargs["package"])
 
     def _carry_bps_running(self, **kwargs: Any) -> float:
+        r"""Risk-weighted running carry of the package, in bp. See below.
+
+        The three carry members share one convention, defined and defended in
+        :mod:`Query.IRSwaps._carry_roll`: **static curve**, ageing BOTH ends of
+        each leg by the horizon (a 10Yx10Y ages to 9Yx10Y, a spot 10Y to a spot
+        9Y), receiver sign per leg, aggregated as ``sum(risk_weight * leg)``.
+
+        The package number is therefore the P&L of the position those risk
+        weights describe, in bp of the package's own quoted level -- NOT the
+        carry of a direction-normalised quote. This differs from
+        :meth:`_rate`, which for a FLY runs the weights through
+        ``_swap_structure_sign_mapper`` so the quoted level is always
+        belly-positive. A fly and the same fly sold therefore share a RATE and
+        report equal-and-opposite carry. That is deliberate (carry follows the
+        position), and it is the one place where reading RATE and CARRY off the
+        same query needs care.
+        """
         assert "horizon" in kwargs, 'Expecting an "horizon" with type str | ql.Period in args e.g. `ql.Period("1M")`'
         curve: _IRSwapGenericCurve = kwargs["curve"]
         return sum(kwargs["risk_weights"][i] * curve.carry_bps_running(s, kwargs["horizon"]) for i, s in enumerate(kwargs["package"]))
 
     def _rolldown_bps_running(self, **kwargs: Any) -> float:
+        """Risk-weighted running rolldown of the package, in bp.
+
+        Convention as :meth:`_carry_bps_running`.
+        """
         assert "horizon" in kwargs, 'Expecting an "horizon" with type str | ql.Period in args e.g. `ql.Period("1M")`'
         curve: _IRSwapGenericCurve = kwargs["curve"]
         return sum(kwargs["risk_weights"][i] * curve.roll_bps_running(s, kwargs["horizon"]) for i, s in enumerate(kwargs["package"]))
 
     def _carry_and_roll_bps_running(self, **kwargs: Any) -> float:
+        """Risk-weighted running carry + rolldown of the package, in bp.
+
+        Convention as :meth:`_carry_bps_running`. Graded against Citi's
+        published Figure-7 carry screen (2019-05-08 USD, eight forward-forward
+        pairs, 1Y horizon): **corr +0.991, MAE 0.338 bp**, pinned by
+        ``tests/test_irswap_carry_roll.py``. Before the ageing rule was fixed
+        this member scored |corr| 0.136 / MAE 1.578 bp and got the rank order
+        wrong, which is why several RVUtils modules were written to route around
+        it; see :mod:`Query.IRSwaps._carry_roll` for what was wrong.
+        """
         assert "horizon" in kwargs, 'Expecting an "horizon" with type str | ql.Period in args e.g. `ql.Period("1M")`'
         curve: _IRSwapGenericCurve = kwargs["curve"]
         return sum(kwargs["risk_weights"][i] * curve.carry_and_roll_bps_running(s, kwargs["horizon"]) for i, s in enumerate(kwargs["package"]))

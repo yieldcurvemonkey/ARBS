@@ -73,11 +73,13 @@ What this is NOT
   (``curve_ops.horizon_handle`` raises): 0.000 bp of carry on DV01-neutral
   forward packages, -531.94 bp on a 1y-aged 30Y payer. Carry enters the rent
   line as ``theta`` — a LEVEL — never via ``horizon_date``.
-* NOT a carry source. ``carry_bp_yr`` is an input; it must come from the
-  repriced-roll path (``CvxSuite.carry``, i.e. ``handle.roll`` /
-  aged-rate identity — corr +0.991 with Citi's published carry), never from
-  ``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` for cross-sectional ranking
-  (corr -0.136).
+* NOT a carry source. ``carry_bp_yr`` is an input; take it from the
+  repriced-roll path (``CvxSuite.carry``, i.e. ``handle.roll`` / aged-rate
+  identity — corr +0.991 with Citi's published carry).
+  ``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` now measures the same quantity
+  (+0.991 / MAE 0.338 bp since its ageing rule was fixed on 2026-08-27,
+  ``Query.IRSwaps._carry_roll``); before that it scored -0.136 and this line
+  said never.
 * NOT a vega model: vol prices rent here; it is never the hedge pair
   (DESIGN.md section 7; measured partial R^2 <= 0.044).
 """

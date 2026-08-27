@@ -60,21 +60,28 @@ against the same ``PricingContext`` protocol and is asserted to reproduce
 Two measurement findings that override the brief, both measured not assumed
 ---------------------------------------------------------------------------
 
-**1. "1y carry" is the repriced 1-year roll of the aged package, NOT
-``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING``.** Citi never states the formula
-(spec §13). Measured against Figure 7's eight published carries on the close of
-2019-05-08:
+**1. "1y carry" is the repriced 1-year roll of the aged package.** Citi never
+states the formula (spec §13). Measured against Figure 7's eight published
+carries on the close of 2019-05-08:
 
 ===============================================  ==========  =========
 measure                                          corr        MAE (bp)
 ===============================================  ==========  =========
 repriced 1y roll / package DV01 (this module)     **+0.991**  **0.35**
-``CARRY_AND_ROLL_BPS_RUNNING``, horizon="1Y"      -0.136      1.28
+``CARRY_AND_ROLL_BPS_RUNNING``, horizon="1Y"      +0.991      0.34
+``CARRY_AND_ROLL_BPS_RUNNING`` before 2026-08-27  -0.136      1.28
 ===============================================  ==========  =========
 
-The query value also gets the rank order wrong, which the repriced roll gets
-exactly right. ``screen_frame`` reports both; ``carry_1y_bp`` (the repriced
-one) is what every downstream signal uses. See ``CARRY_TIEOUT_2019_05_08``.
+The third row is history, kept because several modules in this package were
+written around it. The query value used to age a forward-starting leg by
+shortening its TAIL rather than bringing its START nearer, so a 10Yx10Y aged
+1Y became 10Yx9Y instead of 9Yx10Y; ``_query_carry_1y`` compounded it by
+quoting the opposite trade direction. Both are fixed —
+``Query.IRSwaps._carry_roll`` is now the single kernel behind both backends —
+and the two carry paths agree to 0.02 bp of MAE. ``screen_frame`` still
+reports both; ``carry_1y_bp`` (the repriced one) remains what every downstream
+signal uses, now as a matter of provenance rather than of accuracy. See
+``CARRY_TIEOUT_2019_05_08``.
 
 **2. The exact breakeven cannot be taken from ``curve_ops.payoff_profile``.**
 That function ages with ``rl.Curve.translate``, and translate returns *exactly*
@@ -221,13 +228,19 @@ CITI_FIG7_SCREEN: Dict[Tuple[str, str], Tuple[float, float, float, float, float,
     ("20Yx5Y", "25Yx10Y"): (-9.1, 1.95, 0.87, 0.13, 0.0, 3.0, 0.00),
 }
 
-#: Measured agreement of the two candidate carry measures against Figure 7,
-#: close of 2019-05-08, USD-SOFR-1D. Kept as a committed record so a later
-#: reader does not have to re-derive why ``CARRY_AND_ROLL_BPS_RUNNING`` is not
-#: the field Citi is quoting. (corr, mean-absolute-error in bp.)
+#: Measured agreement of the candidate carry measures against Figure 7, close
+#: of 2019-05-08, USD-SOFR-1D. Kept as a committed record so a later reader does
+#: not have to re-derive it. (corr, mean-absolute-error in bp.)
+#:
+#: ``carry_and_roll_bps_running_pre_fix`` is the number this module was built
+#: around: until 2026-08-27 the query value aged a forward-starting leg by
+#: shortening its tail instead of bringing its start nearer, and
+#: ``_query_carry_1y`` asked for the opposite trade direction on top. Both are
+#: fixed (``Query.IRSwaps._carry_roll``), and the two paths now agree.
 CARRY_TIEOUT_2019_05_08: Dict[str, Tuple[float, float]] = {
     "repriced_1y_roll": (0.991, 0.354),
-    "carry_and_roll_bps_running": (-0.136, 1.278),
+    "carry_and_roll_bps_running": (0.991, 0.338),
+    "carry_and_roll_bps_running_pre_fix": (-0.136, 1.278),
 }
 
 
@@ -460,7 +473,10 @@ def screen_frame(
                             package divided by package DV01 — Citi's "1y
                             carry, bp" (see the module docstring's tie-out).
     ``carry_query_bp``      ``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` at
-                            horizon 1Y, for comparison only.
+                            horizon 1Y, same trade direction as
+                            ``carry_1y_bp``. An independent second path, kept
+                            as a cross-check: the two agree to 0.02 bp of MAE
+                            against Figure 7.
     ``gamma_usd_bp2``       repriced ``d2PV/dshift2`` of the package, $/bp^2.
     ``gamma_theory_usd``    ``2 * (dM/1e4) * DV01`` — the spec's reconstruction.
     ``gamma_ratio``         repriced / theory. ~1.00 validates the ``dM/1e4``
@@ -566,10 +582,18 @@ def screen_frame(
 
 def _query_carry_1y(pricer, short: str, long: str, curve_name: str,
                     package_dv01_usd: float) -> float:
-    """``CARRY_AND_ROLL_BPS_RUNNING`` at 1Y on the CURVE package, bpv<0.
+    """``CARRY_AND_ROLL_BPS_RUNNING`` at 1Y on the CURVE package, bpv>0.
 
-    Reported for comparison only — measured corr with Citi's published carry is
-    -0.136 against +0.991 for the repriced roll. See the module docstring.
+    ``bpv > 0`` constrains the BACK leg positive, so ``_build_curve`` returns
+    weights ``(-1 front, +1 back)`` — pay the short leg, receive the long leg,
+    which is the trade Citi's Figure-7 carry column is quoted for. This used to
+    pass ``bpv < 0``, i.e. the opposite trade, so the comparison it fed was
+    sign-flipped on top of the ageing bug the query value itself carried.
+
+    With both fixed the two carry paths agree: measured 2019-05-08 on the eight
+    Figure-7 pairs, corr **+0.991** / MAE **0.338 bp** against the published
+    carries, versus +0.991 / 0.354 for the repriced roll. See the module
+    docstring and ``CARRY_TIEOUT_2019_05_08``.
     """
     from Query.IRSwaps.IRSwapQuery import IRSwapQuery
     from Query.IRSwaps.IRSwapStructure import IRSwapStructure
@@ -578,7 +602,7 @@ def _query_carry_1y(pricer, short: str, long: str, curve_name: str,
     q = IRSwapQuery(structure=IRSwapStructure.CURVE, value=IRSwapValue.RATE,
                     curve=curve_name,
                     structure_kwargs={"front_tenor": short, "back_tenor": long,
-                                      "bpv": -abs(package_dv01_usd)})
+                                      "bpv": abs(package_dv01_usd)})
     pkg, w = q.resolve_package(pricer_or_curve=pricer)
     pkg = [pricer.resolve_pricable(p, rw) for p, rw in zip(pkg, w)]
     vmap = q.build_value_map(pricer_or_curve=pricer, package=pkg, risk_weights=w)

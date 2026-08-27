@@ -5,6 +5,7 @@ from typing import Union, Any, Optional
 
 import rateslib as rl
 
+from Query.IRSwaps import _carry_roll
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
 from utils.rl_compat import rate_fixings_kwargs
@@ -239,24 +240,19 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             "IRSwapValue.CARRY_BPS_RUNNING (which is) or a QuantLib-backed source."
         )
 
-    def carry_bps_running(self, irswap: rl.IRS, horizon: str):
+    def spot_date(self) -> datetime.date:
+        """The curve's spot date: reference date + ``SettlementDays`` business days."""
         curve_def = self._curve_definition()
-        if self.effective_date(irswap=irswap) > self.calendar_advance(self.reference_date(), f"{curve_def['SettlementDays']}b"):
-            return 0
-        fwd_irs = self.build_irswap(fwd=horizon, maturity_date=self.maturity_date(irswap))
-        return (self.fair_rate(fwd_irs) - self.fair_rate(irswap)) * 10_000
+        return self.calendar_advance(self.reference_date(), f"{curve_def['SettlementDays']}b")
+
+    def carry_bps_running(self, irswap: rl.IRS, horizon: str):
+        return _carry_roll.carry_bps_running(self, irswap, horizon)
 
     def roll_bps_running(self, irswap: rl.IRS, horizon: str):
-        rolled_irs = self.build_irswap(effective_date=self.effective_date(irswap), maturity_date=self.calendar_advance(self.maturity_date(irswap), f"-{horizon}"))
-        return (self.fair_rate(irswap) - self.fair_rate(rolled_irs)) * 10_000
-        # return (self.fair_rate(irswap) * 100 - float(irswap.rate(curves=self._rl_curve_handle.roll(horizon)))) * 100
+        return _carry_roll.roll_bps_running(self, irswap, horizon)
 
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
-        # Keep parity with quantlib backend: running carry + running rolldown.
-        return self.carry_bps_running(irswap=irswap, horizon=horizon) + self.roll_bps_running(
-            irswap=irswap,
-            horizon=horizon,
-        )
+        return _carry_roll.carry_and_roll_bps_running(self, irswap, horizon)
 
     def nodes(self):
         rl_nodes: dict[pd.Timestamp, float] = self.handle().nodes._nodes

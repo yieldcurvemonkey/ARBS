@@ -195,7 +195,9 @@ What this module does NOT do
 * No vega: vol prices the rent; it is never the hedge pair (measured partial
   R^2 <= 0.044).
 * Never ``resolve_pricable`` on package legs, never ``horizon_date`` into a
-  payoff profile, never ``CARRY_AND_ROLL_BPS_RUNNING``.
+  payoff profile.  Carry comes from the repriced kernel here; since 2026-08-27
+  ``CARRY_AND_ROLL_BPS_RUNNING`` agrees with it to 0.02 bp of MAE, but this
+  module is not routed through it.
 """
 
 from __future__ import annotations
