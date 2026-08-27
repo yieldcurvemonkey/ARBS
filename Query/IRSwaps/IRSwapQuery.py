@@ -109,10 +109,20 @@ def normalize_tenor_token(tok: str) -> str:
     return t
 
 
+#: Values whose number depends on a ``horizon``, so the reported label - and
+#: therefore the timeseries column and its cache key - has to carry it. The
+#: THETA family belongs here for the same reason the carry family does: a 1b
+#: theta and a 1M theta are different series, and without the suffix the second
+#: one silently overwrites the first.
 _HORIZON_VALUE_IDS = {
     IRSwapValue.CARRY_BPS_RUNNING,
     IRSwapValue.ROLL_BPS_RUNNING,
     IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING,
+    IRSwapValue.THETA,
+    IRSwapValue.THETA_CASHFLOWS,
+    IRSwapValue.THETA_FORWARDING,
+    IRSwapValue.THETA_ROLLDOWN,
+    IRSwapValue.THETA_OPTION,
 }
 
 

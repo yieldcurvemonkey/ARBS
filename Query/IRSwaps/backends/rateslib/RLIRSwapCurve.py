@@ -7,6 +7,7 @@ import rateslib as rl
 
 from Query.IRSwaps import _carry_roll
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
+from Query.IRSwaps.backends.rateslib import rl_theta
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
 from utils.rl_compat import rate_fixings_kwargs
 
@@ -253,6 +254,32 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
 
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
         return _carry_roll.carry_and_roll_bps_running(self, irswap, horizon)
+
+    def roll_curve(self, horizon: str) -> rl.Curve:
+        """``handle().roll(horizon)``, memoised per horizon on this wrapper.
+
+        The rolled curve is the expensive half of a theta call and every leg of
+        a package, and all five ``THETA*`` members, want the same one. Keyed by
+        the horizon string and invalidated by the handle's IDENTITY, so
+        reassigning ``_rl_curve_handle`` re-rolls.
+        """
+        cached = self.__dict__.get("_roll_curve_cache")
+        if cached is None or cached[0] is not self._rl_curve_handle:
+            cached = (self._rl_curve_handle, {})
+            self.__dict__["_roll_curve_cache"] = cached
+        by_horizon = cached[1]
+        key = str(horizon)
+        if key not in by_horizon:
+            by_horizon[key] = self._rl_curve_handle.roll(key)
+        return by_horizon[key]
+
+    def theta_components(self, irswap: rl.IRS, horizon: str = rl_theta.DEFAULT_HORIZON) -> dict:
+        """PV decay over ``horizon``, split cashflows/forwarding/rolldown/option.
+
+        See :mod:`Query.IRSwaps.backends.rateslib.rl_theta` for the definitions,
+        the sign convention and the two measured caveats on the rolled curve.
+        """
+        return rl_theta.theta_components(self, irswap, horizon)
 
     def nodes(self):
         rl_nodes: dict[pd.Timestamp, float] = self.handle().nodes._nodes

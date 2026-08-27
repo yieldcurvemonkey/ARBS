@@ -101,6 +101,23 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
     def carry_and_roll_bps_running(self, irswap: ql.VanillaSwap, horizon: str):
         return _carry_roll.carry_and_roll_bps_running(self, irswap, horizon)
 
+    def roll_curve(self, horizon: str):
+        raise NotImplementedError(
+            "A static-curve roll is not available on the QuantLib backend. It needs a "
+            "curve whose SHAPE is translated in time while its anchor stays put "
+            "(rateslib's Curve.roll); ql.ImpliedTermStructure re-anchors and preserves "
+            "forwards instead, which is the other evolution entirely. Use a "
+            "rateslib-backed curve for IRSwapValue.THETA*."
+        )
+
+    def theta_components(self, irswap: ql.VanillaSwap, horizon: str = "1b") -> dict:
+        raise NotImplementedError(
+            "IRSwapValue.THETA* is not available on the QuantLib backend (it needs the "
+            "static-curve roll described in QLIRSwapCurve.roll_curve). Use a "
+            "rateslib-backed curve, or IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING, which "
+            "both backends implement."
+        )
+
     def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
         return ql_irswaps_pricer.build_ql_irswap(
             curve=self._ql_curve_id,

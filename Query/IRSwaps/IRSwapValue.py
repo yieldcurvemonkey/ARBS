@@ -47,6 +47,21 @@ class IRSwapValue(Enum):
     # and how it differs from the two computed spreads.
     CITIVELO_SWAP_SPREAD = auto()
 
+    # Appended for the same reason CITIVELO_SWAP_SPREAD was: ``auto()``
+    # renumbers every member after an insertion point.
+    #
+    # Daily PV decay and its attribution, in the curve's CURRENCY over the
+    # horizon (default one business day) - not bp, and not the same sign
+    # convention as the ``*_BPS_RUNNING`` family above. THETA is positive when
+    # the position's PV falls over the day. The four parts sum to THETA exactly;
+    # see Query.IRSwaps.backends.rateslib.rl_theta for the construction, and
+    # IRSwapValueFunctionMap._theta for the aggregation rule.
+    THETA = auto()
+    THETA_CASHFLOWS = auto()
+    THETA_FORWARDING = auto()
+    THETA_ROLLDOWN = auto()
+    THETA_OPTION = auto()
+
 
 # _swap_structure_sign_mapper = {
 #     IRSwapStructure.OUTRIGHT: lambda rws: [abs(rws[0])],
@@ -58,6 +73,11 @@ _swap_structure_sign_mapper = {
     IRSwapStructure.CURVE: lambda rws: rws,
     IRSwapStructure.FLY: lambda rws: [-1 * np.abs(rws[0]), 1 * np.abs(rws[1]), -1 * np.abs(rws[2])],  # always keep belly risk weight pos, wings risk weight negative
 }
+
+#: Default horizon for the ``THETA*`` family: one business day. Kept here rather
+#: than imported from the rateslib backend so ``IRSwapValue`` stays importable
+#: without rateslib.
+_THETA_DEFAULT_HORIZON = "1b"
 
 _swap_structure_legs_mapper = {
     1: (IRSwapStructure.OUTRIGHT, 100),
@@ -131,6 +151,11 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
             IRSwapValue.CVX_ADJ: self._convexity_adjustment,
             IRSwapValue.CVX_ADJ_EMPIRICAL: self._convexity_adjustment_empirical,
             IRSwapValue.CITIVELO_SWAP_SPREAD: self._citivelo_swap_spread,
+            IRSwapValue.THETA: self._theta,
+            IRSwapValue.THETA_CASHFLOWS: self._theta_cashflows,
+            IRSwapValue.THETA_FORWARDING: self._theta_forwarding,
+            IRSwapValue.THETA_ROLLDOWN: self._theta_rolldown,
+            IRSwapValue.THETA_OPTION: self._theta_option,
         }
 
     def _rate(self, **kwargs: Any) -> float:
@@ -203,6 +228,54 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
         assert "horizon" in kwargs, 'Expecting an "horizon" with type str | ql.Period in args e.g. `ql.Period("1M")`'
         curve: _IRSwapGenericCurve = kwargs["curve"]
         return sum(kwargs["risk_weights"][i] * curve.carry_and_roll_bps_running(s, kwargs["horizon"]) for i, s in enumerate(kwargs["package"]))
+
+    # ------------------------------------------------------------------ #
+    #                          theta and its parts                         #
+    # ------------------------------------------------------------------ #
+    #
+    # UNITS AND SIGN. These five are in the curve's CURRENCY over the horizon,
+    # not bp, and ``THETA = pv(start of day) - pv(end of day)`` is POSITIVE when
+    # the package's PV decays. The ``*_BPS_RUNNING`` family above is bp of rate
+    # and receiver-positive. The two are different measurements; never add them.
+    #
+    # AGGREGATION. Summed over the package's legs with NO risk weights, exactly
+    # like NPV and PV01 and unlike the carry family: a theta is a PV difference,
+    # and the direction of each leg already lives in its notional. Weighting a
+    # PV by a risk weight would double-count it.
+    #
+    # HORIZON. Optional, defaulting to one business day - the measurement this
+    # is built for. Longer horizons are available but the rolled-curve fidelity
+    # degrades with the horizon (measured table in rl_theta); for a 1-year
+    # number use CARRY_AND_ROLL_BPS_RUNNING, which ages the instrument instead
+    # of resampling the curve.
+    #
+    # BACKEND. rateslib only. The QuantLib wrapper raises with the reason: the
+    # static-curve roll this needs has no QuantLib primitive.
+
+    def _theta_part(self, key: str, **kwargs: Any) -> float:
+        curve: _IRSwapGenericCurve = kwargs["curve"]
+        horizon = kwargs.get("horizon") or _THETA_DEFAULT_HORIZON
+        return sum(float(curve.theta_components(s, horizon)[key]) for s in kwargs["package"])
+
+    def _theta(self, **kwargs: Any) -> float:
+        """``pv(sod) - pv(eod)``; equals the four parts below, summed."""
+        return self._theta_part("theta", **kwargs)
+
+    def _theta_cashflows(self, **kwargs: Any) -> float:
+        """Cash paying inside the horizon, valued at the horizon date."""
+        return self._theta_part("cashflows", **kwargs)
+
+    def _theta_forwarding(self, **kwargs: Any) -> float:
+        """Funding accretion of the MtM: ``-pv_sod * (1/DF - 1)``."""
+        return self._theta_part("forwarding", **kwargs)
+
+    def _theta_rolldown(self, **kwargs: Any) -> float:
+        """Forwarded curve -> rolled curve: ``pv_fwd - pv_eod``."""
+        return self._theta_part("rolldown", **kwargs)
+
+    def _theta_option(self, **kwargs: Any) -> float:
+        """Zero for a linear swap; the slot exists so the parts sum to THETA."""
+        return self._theta_part("option", **kwargs)
 
     def _convexity_adjustment(self, **kwargs: Any) -> float:
         r"""``pack_rate - matched_swap_rate``, in basis points.
