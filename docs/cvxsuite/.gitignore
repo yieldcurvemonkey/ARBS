@@ -2,3 +2,6 @@
 leg_history.parquet
 screen_*.csv
 board_*.csv
+leg_panel.parquet
+harvest_panel.parquet
+dislocation_panel.parquet
