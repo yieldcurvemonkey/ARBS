@@ -330,3 +330,34 @@ def test_universe_scanner_reads_the_source_own_hour(tmp_path, hour, source, expe
     cfg = Strat2Config(start=day, end=day, futures_source=source)
     depths = local_strip_depths(cfg, cache_root=str(tmp_path))
     assert (depths.get(day, 0) >= 6) is expect_seen, depths
+
+
+def test_warm_settles_writes_the_key_the_read_path_probes(monkeypatch):
+    """The warm and the reader must agree about the key SHAPE, not just the hour.
+
+    ``warm_settles`` builds ``{iso}-{TICKER}-{SOURCE}`` and ``get_data`` probes a
+    list of candidate spellings; they agree by parallel construction, which is
+    exactly the failure this repo has recorded twice -- a warm reporting thousands
+    of successful writes and recovering nothing. Only a round trip catches it, so
+    the read below is run with the vendor removed entirely: any cache miss becomes
+    an AssertionError instead of a silent refetch.
+    """
+    before = datetime.date(2026, 8, 19)
+    frame = _daily_frame([before, DAY], {before: 96.10, DAY: 96.2125})
+    mdp, _, written = _mdp_with(monkeypatch, SETTLE_SOURCE, frame)
+
+    n = mdp.warm_settles(["SR3U26"], before, DAY)
+    assert n == {"SR3U26": 2}, n
+
+    monkeypatch.setattr(STIRFutureMDP, "_threadsafe_cache_get",
+                        lambda self, key: written.get(key), raising=True)
+
+    def _no_vendor(self, **kw):
+        raise AssertionError(
+            "the read reached the vendor: the warm's key shape and the read's "
+            "candidate keys disagree")
+
+    monkeypatch.setattr(STIRFutureMDP, "_get_barchart_fetcher", _no_vendor, raising=True)
+
+    out = mdp.get_data({"symbols": ["SR3U26"], "timestamp": DAY})
+    assert out["SR3U26"][0]["price"] == pytest.approx(96.2125)

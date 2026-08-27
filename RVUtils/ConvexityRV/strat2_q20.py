@@ -685,7 +685,7 @@ def build_q20_pricer(
     meeting dates then contract maturities) and the Levenberg-Marquardt solve
     are the shipped ones, not a reimplementation that could drift from them::
 
-        pricers = STIRFutureMDP("BARCHART_STIRF-RL").get_data(SFRCM1..depth)
+        pricers = STIRFutureMDP(EOD_SOURCE).get_data(SFRCM1..depth, as_of)
         curve   = BARCHART_STIRF_CURVE._build_curve_from_pricers(...)
         pricer  = IRSwapsMDP._build_barchart_stirf_rl_curve(...)
 
@@ -1107,8 +1107,10 @@ def deep_pack_config(
     drifting apart -- ``Strat2Config.__post_init__`` would raise, but only after
     a panel had been built against the wrong strip.
 
-    Note ``futures_source`` is left at ``BARCHART_STIRF-RL``: the screen may be
-    computed off Q20 forwards, but the **book is marked off settles**.
+    Note ``futures_source`` is inherited from ``Strat2Config`` -- the settle
+    source: the screen may be computed off Q20 forwards, but the **book is marked
+    off settles**, and since 2026-08-27 those are the CME settles rather than the
+    Globex close.
     """
     base = base or Strat2Config()
     n_contracts = rank_start + n_packs - 1 + 3
