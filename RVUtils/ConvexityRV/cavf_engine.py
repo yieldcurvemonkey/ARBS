@@ -192,7 +192,10 @@ def run_backtest(specs: Sequence[CavfTradeSpec],
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
     from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
 
-    futures_mdp = futures_mdp or STIRFutureMDP(source="BARCHART_STIRF-RL")
+    # The CME settle, co-timed with the 15:00 ET Citi curve below. Was
+    # "BARCHART_STIRF-RL" (the 15:59 CT Globex close) until 2026-08-27 --
+    # see RVUtils.ConvexityRV.strat2_sofr_convexity.assert_settle_source.
+    futures_mdp = futures_mdp or STIRFutureMDP(source="BARCHART_STIRF_SETTLE-RL")
     swaps_mdp = swaps_mdp or IRSwapsMDP(source="citivelo_excel_rl")
 
     fee_by_tag = fee_by_tag or {}

@@ -135,8 +135,17 @@ def _a_priced_date(cfg):
 
 
 def _strip_keys(as_of: datetime.date, n: int, *, source=Q.EOD_SOURCE,
-                tz=None, time="17:00:00"):
-    """17:00 EOD keys for the front *n* quarterly SR3 contracts on *as_of*."""
+                tz=None, time=None):
+    """EOD keys for the front *n* quarterly SR3 contracts on *as_of*.
+
+    The hour comes from the SOURCE (15:00 for the settle source, 17:00 for the
+    Globex close), never a literal: a fixture that hardcodes one would agree with
+    a scanner that had drifted away from the source it claims to read.
+    """
+    from MDP.STIRFutures.STIRFutureMDP import eod_hour_for_source
+
+    if time is None:
+        time = f"{eod_hour_for_source(source):02d}:00:00"
     tz = S2.ny_utc_offset(as_of) if tz is None else tz
     return [f"{as_of.isoformat()}T{time}{tz}-{S2.futures_symbol(y, m)}-{source}"
             for y, m in quarterly_imm_sequence(as_of, n)]
@@ -333,8 +342,16 @@ def test_config_rejects_the_live_quote_source():
 
     # The settle source is accepted and returned unchanged.
     assert S2.assert_settle_source(Q.EOD_SOURCE) == Q.EOD_SOURCE
-    assert S2.Strat2Config().futures_source == "BARCHART_STIRF-RL"
-    assert Q.Q20Config().eod_source == "BARCHART_STIRF-RL"
+    assert S2.Strat2Config().futures_source == "BARCHART_STIRF_SETTLE-RL"
+    assert Q.Q20Config().eod_source == "BARCHART_STIRF_SETTLE-RL"
+
+    # And the Globex close is refused too, for the same reason one step removed:
+    # it is a 15:59 CT mark against a 15:00 ET swap leg. See
+    # `tests/test_ca_time_axis.py` for the measurement it is refused on.
+    for cfg_cls, field in ((S2.Strat2Config, "futures_source"),
+                           (Q.Q20Config, "eod_source")):
+        with pytest.raises(ValueError, match="GLOBEX"):
+            cfg_cls(**{field: "BARCHART_STIRF-RL"})
 
 
 @needs_panel

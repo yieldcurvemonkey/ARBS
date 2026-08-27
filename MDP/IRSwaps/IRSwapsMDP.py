@@ -3037,13 +3037,20 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         trading_date: datetime.date,
         rl_curve_handle: Any,
     ) -> "_IRSwapGenericCurve":
-        """The EOD ``RLIRSwapCurve`` for one reconstructed handle."""
+        """The EOD ``RLIRSwapCurve`` for one reconstructed handle.
+
+        The stamp is :data:`~MDP.IRSwaps.CITIVELO_EXCEL.timestamps.EOD_SNAP_TIME` --
+        **15:00 New York, measured**, see that constant. It was a hardcoded 17:00
+        until 2026-08-27; nothing priced off it, but ``meta["timestamp"]`` and
+        ``curve_id`` are what a reader consults to answer "against which instant is
+        this curve marked", and for two years they answered two hours late.
+        """
         from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import citi_index_for_curve_name
-        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive
+        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import EOD_SNAP_TIME, from_wire_naive
         from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
         citi_index = citi_index_for_curve_name(curve_name)
-        stamp = from_wire_naive(datetime.datetime.combine(trading_date, datetime.time(17, 0)))
+        stamp = from_wire_naive(datetime.datetime.combine(trading_date, EOD_SNAP_TIME))
         fixings = self._citivelo_excel_store_fixings(
             curve_name=curve_name, citi_index=citi_index, reference_date=trading_date
         )

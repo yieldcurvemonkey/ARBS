@@ -68,9 +68,16 @@ def test_depth_by_date_sees_dates_a_floored_config_hides(tmp_path):
     from RVUtils.ConvexityRV.strat2_sofr_convexity import (
         futures_symbol, ny_utc_offset)
 
+    from MDP.STIRFutures.STIRFutureMDP import SETTLE_SOURCE, eod_hour_for_source
+
     day = dt.date(2026, 7, 8)
-    keys = [f"{day.isoformat()}T17:00:00{ny_utc_offset(day)}-"
-            f"{futures_symbol(y, m)}-BARCHART_STIRF-RL"
+    # The hour comes from the source, exactly as the scanner derives it. Hardcoding
+    # "17:00:00" here would make the fixture agree with a scanner that had drifted.
+    hh = f"{eod_hour_for_source(Q20Config().eod_source):02d}"
+    assert (hh, Q20Config().eod_source) == ("15", SETTLE_SOURCE), (
+        "the settle universe is keyed 15:00 under the settle source")
+    keys = [f"{day.isoformat()}T{hh}:00:00{ny_utc_offset(day)}-"
+            f"{futures_symbol(y, m)}-{Q20Config().eod_source}"
             for y, m in quarterly_imm_sequence(day, 6)]      # a 6-deep date
     shard = tmp_path / "000"
     shard.mkdir(parents=True)
@@ -205,8 +212,8 @@ def test_session_has_settled_is_a_clock_test_not_a_calendar_test():
 
     assert W._session_has_settled(yesterday, now_et=noon)
     assert not W._session_has_settled(today, now_et=noon), (
-        "warming the live session files an intraday print under a 17:00 "
-        "settlement alias")
+        "warming the live session files a running price under a settlement "
+        "key")
     assert W._session_has_settled(today, now_et=evening), (
         "the 18:15 ET slot is after the ~15:00 ET SR3 settle; refusing here "
         "would make the nightly do nothing at all")
@@ -220,7 +227,7 @@ def test_run_warm_refuses_an_unsettled_session(monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("run_warm fetched an unsettled session")
 
-    monkeypatch.setattr(W, "warm_one_date", _boom)
+    monkeypatch.setattr(W, "warm_dates", _boom)
     monkeypatch.setattr(W, "_business_days", lambda s, e: [today])
     monkeypatch.setattr(W, "_session_has_settled", lambda d, **k: False)
     monkeypatch.setattr(W, "_depth_by_date", lambda *a, **k: {})

@@ -292,24 +292,45 @@ LIVE_SOURCE = "BARCHART_TOS_LIVE_STIRF-RL"
 INTRADAY_SOURCE_MARKERS: Tuple[str, ...] = ("TOS_LIVE", "_LIVE", "INTRADAY")
 
 
-def assert_settle_source(source: str, *, field: str = "futures_source") -> str:
-    """Raise unless *source* is a settlement mark rather than a live quote.
+def assert_settle_source(source: str, *, field: str = "futures_source",
+                         allow_globex_close: bool = False) -> str:
+    """Raise unless *source* marks the futures leg at the CME **settlement**.
 
     The convexity adjustment is a difference between a futures rate and a swap
-    rate **at the same instant**. Swapping an intraday quote in for the 17:00
-    settle does not degrade gracefully: it re-times one leg of a difference whose
-    whole magnitude is a few basis points, and the error lands entirely in the
-    signal. Nor is there a coverage argument for it -- measured over the whole
-    12.7M-key local slice of ``BARCHART_TOS_LIVE_STIRF-RL``, its contiguous strip
-    reaches depth 20 on **zero dates in every year 2018-2026**, so it cannot
+    rate **at the same instant**. Re-timing one leg does not degrade gracefully:
+    it moves a difference whose whole magnitude is a few basis points, and the
+    error lands entirely in the signal.
+
+    Two sources fail that test, for different reasons.
+
+    **An intraday quote feed** is the obvious one, and this function has always
+    rejected it. Nor is there a coverage argument for it -- measured over the
+    whole 12.7M-key local slice of ``BARCHART_TOS_LIVE_STIRF-RL``, its contiguous
+    strip reaches depth 20 on **zero dates in every year 2018-2026**, so it cannot
     supply the deep packs it would be reached for either.
 
-    A separate audit (2026-08-19) confirmed the shipped panels are clean: of
-    130,044 (date, contract) cells asserted by ``strat2_q20_panel`` and
-    ``strat2_panel``, **0** were absent from ``BARCHART_STIRF-RL``@17:00 and
-    **0** were sourced from the live feed. This function is what keeps that true
-    by construction rather than by audit.
+    **``BARCHART_STIRF-RL`` is the one this function used to recommend, and it is
+    not a settlement source.** Measured 2026-08-26: a ``date`` request under it
+    resolves to Barchart 1-minute bars picked NEAREST 17:00 ET, i.e. the 15:59 CT
+    bar -- the last bar of the Globex session. It equals that bar on **24 of 27**
+    (date, contract) cells (mean 0.093 bp) and the CME settle on far fewer (mean
+    0.389 bp). Meanwhile ``swap_source="CITIVELO_EXCEL"`` at a ``date`` is Citi's
+    daily grid, measured at **15:00 ET**. So the panel was marking its futures leg
+    two hours after its swap leg: |15:59 CT - 13:59 CT| per contract runs mean
+    0.81 bp, median 0.5, p90 1.5, max 4.5 -- against a pack CA of 1.3-6.8 bp.
+
+    :data:`~MDP.STIRFutures.STIRFutureMDP.SETTLE_SOURCE` fixes that: it reads
+    Barchart's daily bars, whose ``Close`` matches the 13:59 CT settle-window bar
+    (mean 0.201 bp, exact on 57/69 discriminating cells) rather than the session
+    close (0.907 bp, 16/69).
+
+    ``allow_globex_close=True`` reopens the old source deliberately -- for
+    reproducing a panel that was computed under it, and for nothing else. Any
+    number it produces is a Globex-close mark against a 15:00 curve; say so
+    wherever it is reported.
     """
+    from MDP.STIRFutures.STIRFutureMDP import GLOBEX_CLOSE_SOURCE, SETTLE_SOURCE
+
     s = str(source)
     up = s.upper()
     if any(m in up for m in INTRADAY_SOURCE_MARKERS):
@@ -317,7 +338,15 @@ def assert_settle_source(source: str, *, field: str = "futures_source") -> str:
             f"{field}={s!r} is an intraday quote feed, not a settlement source. "
             "The convexity adjustment marks a futures leg against a swap leg at "
             "the same instant; a live quote re-times one of them. Use "
-            "'BARCHART_STIRF-RL'.")
+            f"{SETTLE_SOURCE!r}.")
+    if up == GLOBEX_CLOSE_SOURCE and not allow_globex_close:
+        raise ValueError(
+            f"{field}={s!r} resolves a date to the 15:59 CT bar -- the GLOBEX "
+            "CLOSE, not the CME settle (measured: it equals that bar 24/27, the "
+            "settle far less often). The swap leg is marked at 15:00 ET, so this "
+            "re-times the futures leg by two hours, worth mean 0.81 bp / p90 1.5 "
+            f"bp per contract against a 1.3-6.8 bp adjustment. Use {SETTLE_SOURCE!r}, "
+            "or pass allow_globex_close=True to reproduce an old panel knowingly.")
     return s
 
 
@@ -355,9 +384,14 @@ class Strat2Config:
     swap_source: str = "CITIVELO_EXCEL"
     """``IRSwapsMDP`` source. Verified full coverage 2019-01-02..2026-08-12."""
 
-    futures_source: str = "BARCHART_STIRF-RL"
+    futures_source: str = "BARCHART_STIRF_SETTLE-RL"
     """``STIRFutureMDP`` source for SR3 settles. NB the class default is
-    ``WEBULL_STIRF-RL``; this must be passed explicitly."""
+    ``WEBULL_STIRF-RL``; this must be passed explicitly.
+
+    Was ``BARCHART_STIRF-RL`` until 2026-08-27, which is the **Globex close**, two
+    hours after this config's 15:00 ET swap leg -- see :func:`assert_settle_source`
+    for the measurement. Panels built before that date carry the old mark; the
+    price cache is keyed by source, so they cannot be silently mixed."""
 
     futures_root: str = "SR3"
     """CME root for the 3M SOFR future. ``$25.00/bp/contract``, identical to
@@ -1047,11 +1081,18 @@ def local_cached_dates(cfg: Strat2Config, *, cache_root: Optional[str] = None,
 
 def _cached_symbols_by_date(cfg: Strat2Config, *, cache_root: Optional[str] = None,
                             eod_only: bool = True) -> Dict[str, set]:
-    """``"YYYY-MM-DD" -> {SR3 tickers present at 17:00 for cfg.futures_source}``.
+    """``"YYYY-MM-DD" -> {SR3 tickers cached at cfg.futures_source's EOD hour}``.
 
     One read-only sweep of the eight sqlite shards, shared by the strict and
     permissive universes so they can never disagree about what is on disk.
+
+    The hour is derived from the source rather than hardcoded: a settle is keyed
+    15:00 and a Globex close 17:00, and a scanner still grepping ``17:00:00`` after
+    a caller moved to the settle source reports depth 0 on every date -- which
+    reads as "nothing is cached" and sends an idempotent warm back to the network
+    for history it already holds.
     """
+    from MDP.STIRFutures.STIRFutureMDP import eod_hour_for_source
     import glob
     import sqlite3
 
@@ -1065,6 +1106,8 @@ def _cached_symbols_by_date(cfg: Strat2Config, *, cache_root: Optional[str] = No
                 os.environ.get("LOCALAPPDATA", ""), "ARBS", "Cache", "diskcache",
                 "dump", "STIRFuturePricer_Cache")
 
+    eod_stamp = f"{eod_hour_for_source(cfg.futures_source):02d}:00:00"
+
     have: Dict[str, set] = {}
     for db in sorted(glob.glob(os.path.join(cache_root, "*", "cache.db"))):
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -1075,7 +1118,7 @@ def _cached_symbols_by_date(cfg: Strat2Config, *, cache_root: Optional[str] = No
                 m = _STIR_CACHE_KEY.match(key)
                 if not m:
                     continue
-                if eod_only and (m.group("t") != "17:00:00"
+                if eod_only and (m.group("t") != eod_stamp
                                  or m.group("src") != cfg.futures_source
                                  or not _tz_readable(m.group("d"), m.group("tz"))):
                     continue

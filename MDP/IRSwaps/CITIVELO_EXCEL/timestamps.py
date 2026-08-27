@@ -73,6 +73,7 @@ except ImportError:  # pragma: no cover - only on ancient interpreters
 
 __all__ = [
     "DEFAULT_WIRE_TZ",
+    "EOD_SNAP_TIME",
     "RequestMode",
     "ResolvedRequest",
     "wire_timezone",
@@ -87,6 +88,29 @@ _logger = logging.getLogger(__name__)
 #: The zone Citi Velocity's timestamps are in. See the module docstring for how
 #: this was measured and for the one thing that remains inferred.
 DEFAULT_WIRE_TZ = "America/New_York"
+
+#: The wall-clock instant, in the wire zone, that Citi's ``DAILY`` series is struck
+#: at. A daily row is *stamped at midnight* by the add-in, so this cannot be read
+#: off the wire and had to be measured against Citi's own minute series.
+#:
+#: **Measured 2026-08-26, two independent ways, both pointing at 15:00 New York:**
+#:
+#: * quote level - pooled ``RMSE(DAILY - MI01(t))`` over minutes of day for the
+#:   2Y/5Y/10Y/30Y ``USD_SOFR`` par tags, 18 days: 0.146 bp at 15:00 against 0.163
+#:   at 14:59, 0.170 at 15:01, 0.624 at 14:00, 0.701 at 16:00, 0.818 at 17:00;
+#: * curve level - the warmed EOD curve against the warmed 10-minute curves in
+#:   zero-rate bp, 40 EST days 2023-01-03..2026-01-02 and 40 EDT days
+#:   2023-03-13..2026-06-22: median RMSE minimises in the **14:40-15:20 ET** band in
+#:   BOTH regimes (EST 0.591 at 14:50 / 0.614 at 15:00 vs 1.041 at 17:00; EDT 0.444
+#:   / 0.464 vs 0.821). The band does **not** move with US DST, so the snap runs on
+#:   a New York clock rather than a fixed UTC offset, and it is stable back to 2023.
+#:
+#: This matters because it is one leg of a difference: the SR3 convexity adjustment
+#: marks a futures settle (CME strikes it 13:59:30-14:00:00 CT = 15:00 ET) against
+#: this curve, and the whole quantity is 1.3-6.8 bp. Before this constant existed
+#: the EOD curve was stamped 17:00 - not used for pricing, but two hours of drift
+#: (~0.7 bp of zero rate) away from what the number actually was.
+EOD_SNAP_TIME = datetime.time(15, 0)
 
 RequestMode = Literal["live", "intraday", "eod"]
 

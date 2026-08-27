@@ -85,8 +85,59 @@ _ROOT_TO_STIR_SPEC = {
 }
 
 
+# ----------------------------- EOD vocabulary -------------------------------
+#: The last bar of the CME Globex session, in New York wall clock. This is what a
+#: ``date`` request has always meant for ``BARCHART_STIRF-RL``: the fetcher pulls
+#: 1-minute bars for the whole Chicago day and takes the bar NEAREST this instant,
+#: which is 16:00 CT, the session close.
+#:
+#: **It is not a settlement price**, and the repo called it one for a long time.
+#: Measured 2026-08-26 over 9 days x 3 front SR3 contracts:
+#: ``fetch_pricers_flat(timestamp=<date>)`` under ``BARCHART_STIRF-RL`` equals the
+#: 15:59 CT bar on **24/27** (mean 0.093 bp) and the CME settle on far fewer
+#: (mean 0.389 bp).
+GLOBEX_CLOSE_HOUR_ET = 17
+
+#: The CME settlement instant in New York wall clock. CME strikes the SR3 daily
+#: settle over 13:59:30-14:00:00 CT, i.e. 15:00 ET.
+CME_SETTLE_HOUR_ET = 15
+
+#: Barchart 1-minute bars picked nearest 17:00 ET -- the Globex close (above).
+GLOBEX_CLOSE_SOURCE = "BARCHART_STIRF-RL"
+
+#: Barchart ``queryeod`` daily bars -- the CME settle. Measured 2026-08-26 over
+#: 60 days x 3 front SR3, restricted to the 69 (date, contract) pairs where the
+#: 13:59 CT and 15:59 CT bars actually differ: the daily ``Close`` matches the
+#: **13:59 CT settle-window bar** with mean |err| 0.201 bp (exact 57/69) against
+#: 0.907 bp for the 15:59 CT session close (exact 16/69). Barchart minute bars are
+#: start-stamped, so the 13:59:30-14:00:00 CT settlement window sits inside the
+#: bar labelled 13:59.
+#:
+#: A separate source token rather than a flag, because the price cache is keyed
+#: ``{iso_timestamp}-{TICKER}-{SOURCE}``: a settle and a session close for the same
+#: date must not be able to answer each other's reads.
+SETTLE_SOURCE = "BARCHART_STIRF_SETTLE-RL"
+
+
+def eod_hour_for_source(source: Any) -> int:
+    """The New York hour a bare ``date`` means for *source*.
+
+    One function so the MDP, the cache-key scanners in ``RVUtils.ConvexityRV`` and
+    the warm jobs cannot drift: a scanner that still greps ``17:00:00`` keys after
+    a caller moved to the settle source reports depth 0 everywhere and silently
+    re-fetches history it already has.
+    """
+    return CME_SETTLE_HOUR_ET if str(source).upper() == SETTLE_SOURCE else GLOBEX_CLOSE_HOUR_ET
+
+
 # ----------------------------- time helpers ---------------------------------
-def _as_datetime(ts: DateLike) -> datetime.datetime:
+def _as_datetime(ts: DateLike, *, eod_hour: int = GLOBEX_CLOSE_HOUR_ET) -> datetime.datetime:
+    """Normalise *ts*; a bare ``date`` becomes *eod_hour* New York.
+
+    ``eod_hour`` defaults to the Globex close for backward compatibility -- every
+    caller that predates :data:`SETTLE_SOURCE` means that instant and its cache is
+    keyed on it. The settle source passes :data:`CME_SETTLE_HOUR_ET`.
+    """
     if ts == "live":
         return datetime.datetime.now(pytz.UTC)
     if type(ts) == datetime.datetime:
@@ -94,10 +145,10 @@ def _as_datetime(ts: DateLike) -> datetime.datetime:
             return pytz.timezone("America/New_York").localize(ts)
         return ts
 
-    # NY close 5pm
     if type(ts) == datetime.date:
-        # return datetime.datetime(ts.year, ts.month, ts.day)
-        return pytz.timezone("America/New_York").localize(datetime.datetime.combine(ts, datetime.time(hour=17, minute=00)))
+        return pytz.timezone("America/New_York").localize(
+            datetime.datetime.combine(ts, datetime.time(hour=int(eod_hour), minute=0))
+        )
     raise TypeError("timestamp must be date, datetime, or 'live'")
 
 
@@ -468,6 +519,10 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
         self.force_refresh_fixings = force_refresh_fixings
         self.cache_full_intraday_fetch = bool(kwargs.get("cache_full_intraday_fetch", False))
+        # What a bare `date` means for this source, and whether the EOD fetch asks
+        # the vendor for daily settle bars or for 1-minute bars. See SETTLE_SOURCE.
+        self._is_settle_source = str(source).upper() == SETTLE_SOURCE
+        self._eod_hour = eod_hour_for_source(source)
         self._schwab_app_key = kwargs.get("schwab_app_key") or os.getenv("SCHWABDEV_APP_KEY") or os.getenv("SCHWAB_APP_KEY") or "zm3GYiQREbtrpBHACURcNzFJIObUq2aX"
         self._schwab_app_secret = kwargs.get("schwab_app_secret") or os.getenv("SCHWABDEV_APP_SECRET") or os.getenv("SCHWAB_APP_SECRET") or "SznUHXvKPZUnmxG9"
         self._schwab_scope = kwargs.get("schwab_scope", "pystonk")
@@ -783,7 +838,20 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]],
         window_minutes: int = 2,
         full_day_intraday: bool = False,
+        daily_settle: bool = False,
     ) -> pd.DataFrame:
+        """Barchart bars for *tickers* around *ts_dt*.
+
+        ``daily_settle`` is the only way to reach the vendor's DAILY endpoint. Note
+        what it fixes: ``interval=None`` has always meant "an EOD request" to this
+        method, but the vendor call below hardcoded ``interval=1`` regardless, so an
+        EOD request pulled 1-minute bars for the whole Chicago day and the caller
+        then picked the bar nearest 17:00 ET -- the Globex close. With
+        ``daily_settle`` the request that says daily actually asks for daily, whose
+        ``Close`` is the CME settle (see :data:`SETTLE_SOURCE` for the measurement).
+        Left off by default so ``BARCHART_STIRF-RL`` keeps answering exactly as it
+        did, cache and all.
+        """
         chi = pytz.timezone("America/Chicago")
         ts_chi = ts_dt.astimezone(chi)
 
@@ -809,13 +877,15 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         max_concurrent_tasks = min(len(barchart_syms), 36) + 1
         max_keepalive_connections = max(36, min(len(barchart_syms), 36)) + 1
 
+        vendor_interval = None if daily_settle else 1
+
         def _call(fetcher: BarchartFetcher):
             try:
                 return fetcher.barchart_timeseries_api(
                     barchart_symbols=barchart_syms,
                     start_date=start,
                     end_date=end,
-                    interval=1,
+                    interval=vendor_interval,
                     one_df=True,
                     show_tqdm=show_tqdm,
                     max_concurrent_tasks=max_concurrent_tasks,
@@ -827,7 +897,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     barchart_symbols=barchart_syms,
                     start_date=start,
                     end_date=end,
-                    interval=interval,
+                    interval=vendor_interval,
                     one_df=True,
                     show_tqdm=show_tqdm,
                 )
@@ -1010,17 +1080,31 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         force_refresh: bool = False,
         cache_full_intraday_fetch: bool = False,
     ) -> Dict[str, List[InstrumentLike]]:
-        ts_dt = _as_datetime(timestamp)
+        ts_dt = _as_datetime(timestamp, eod_hour=self._eod_hour)
         alias_map = _resolve_aliases_bulk(symbols, timestamp)
         if not alias_map:
             raise ValueError("No valid symbols resolved from request.")
 
         src = self.source.upper()
         live_quote_sources = {"BARCHART_TOS_LIVE_STIRF-RL", "SCHWAB_APP_STIRF-RL"}
-        if src not in {"WEBULL_STIRF-RL", "BARCHART_STIRF-RL", *live_quote_sources}:
+        if src not in {"WEBULL_STIRF-RL", GLOBEX_CLOSE_SOURCE, SETTLE_SOURCE, *live_quote_sources}:
             raise NotImplementedError(f"Unsupported source {self.source}")
 
         want_eod = isinstance(timestamp, datetime.date) and not isinstance(timestamp, datetime.datetime)
+        # A settlement source has exactly one price per session. Answering an
+        # instant with it would hand back that session's settle under an intraday
+        # stamp -- the mirror image of `ca_intraday.assert_intraday_source`, which
+        # refuses a settle source because it "answers with the 17:00 mark and does
+        # not say so". Refuse loudly rather than re-time a leg silently.
+        if self._is_settle_source and not want_eod:
+            raise ValueError(
+                f"{self.source} is a SETTLEMENT source and {timestamp!r} asks for an "
+                "instant. A session has one settle, struck 13:59:30-14:00:00 CT; "
+                "there is no intraday settle to serve. Pass a `datetime.date` for the "
+                f"settle, or use an intraday feed (e.g. 'BARCHART_TOS_LIVE_STIRF-RL') "
+                "for a minute mark."
+            )
+        settle_eod = self._is_settle_source and want_eod
         use_live = src in live_quote_sources and _should_use_live_quotes(timestamp)
         read_cache = not force_refresh and not use_live
         use_barchart_intraday = src != "WEBULL_STIRF-RL" and not want_eod and not use_live
@@ -1089,6 +1173,28 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     ts_obj = ts_obj.tz_convert(index.tz)
             return ts_obj.to_pydatetime()
 
+        want_date = _as_date(timestamp) if want_eod else None
+
+        def _pick_row(series: pd.Series):
+            """Which row of *series* answers this request, or ``None``.
+
+            For a settle the match is on the DATE and nothing else. The nearest-in-
+            time rule below is right for a minute tape and wrong for a daily one: on
+            a date a contract did not print -- a holiday, an expired or not-yet-
+            listed contract -- ``method="nearest"`` serves the ADJACENT session's
+            settle without a word, and half of those are in the future.
+            """
+            if series.empty:
+                return None
+            if settle_eod:
+                idx = pd.DatetimeIndex(series.index)
+                stamps = idx.tz_convert("America/New_York") if idx.tz is not None else idx
+                hits = [i for i, dd in enumerate(stamps.date) if dd == want_date]
+                return series.index[hits[-1]] if hits else None
+            lookup_ts = _align_lookup_ts(series.index, ts_dt)
+            pos = series.index.get_indexer([lookup_ts], method="nearest")
+            return series.index[pos[0]] if pos.size and pos[0] != -1 else series.index[-1]
+
         for alias, tickers in alias_map.items():
             is_spread = _is_serff_spread_alias(alias)
 
@@ -1141,14 +1247,22 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     show_tqdm=show_tqdm,
                     interval=interval,
                     full_day_intraday=floor_req_to_minute,
+                    daily_settle=settle_eod,
                 )
-                if want_eod and src == "BARCHART_STIRF-RL":
+                if want_eod and src in (GLOBEX_CLOSE_SOURCE, SETTLE_SOURCE):
                     try:
                         oi_df = self._fetch_barchart_eod_oi(all_missing, ts_dt, show_tqdm=show_tqdm)
                     except Exception:
                         oi_df = pd.DataFrame()
 
-            price_df = price_df.ffill().bfill()
+            if not settle_eod:
+                price_df = price_df.ffill().bfill()
+            # ...but NEVER for a settle. `bfill` carries a price BACKWARDS in time,
+            # so a contract that did not settle on this date would inherit the next
+            # session's settle -- look-ahead inside the price series itself, before
+            # any strategy code runs. `ffill` manufactures a settle on a date that
+            # genuinely had none. A missing settle stays NaN and the contract is
+            # simply absent from the answer, which is what a caller can detect.
             if price_df.empty:
                 raise RuntimeError(f"{src} returned no data for requested STIR futures.")
 
@@ -1226,12 +1340,9 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
                     if cached is None and not price_df.empty and t in price_df:
                         series = price_df[t].dropna()
-                        if series.empty:
+                        idx = _pick_row(series)
+                        if idx is None:
                             continue
-
-                        lookup_ts = _align_lookup_ts(series.index, ts_dt)
-                        pos = series.index.get_indexer([lookup_ts], method="nearest")
-                        idx = series.index[pos[0]] if pos.size and pos[0] != -1 else series.index[-1]
 
                         args = {
                             "symbol": t,
@@ -1274,11 +1385,9 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
                 if cached is None and not price_df.empty and t in price_df:
                     series = price_df[t].dropna()
-                    if series.empty:
+                    idx = _pick_row(series)
+                    if idx is None:
                         continue
-                    lookup_ts = _align_lookup_ts(series.index, ts_dt)
-                    pos = series.index.get_indexer([lookup_ts], method="nearest")
-                    idx = series.index[pos[0]] if pos.size and pos[0] != -1 else series.index[-1]
                     args = {
                         "symbol": t,
                         "price": float(series.loc[idx]),
@@ -1306,6 +1415,102 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         return result
 
     # ----------------------------- public API --------------------------------
+    def warm_settles(
+        self,
+        symbols: Sequence[str],
+        start: datetime.date,
+        end: datetime.date,
+        *,
+        show_tqdm: bool = False,
+    ) -> Dict[str, int]:
+        """Warm the settle cache with ONE vendor request per SYMBOL, not per date.
+
+        Returns ``{ticker: rows_written}``.
+
+        This is the shape the settle source makes possible and the old one did not.
+        A ``date`` request pulls a whole day of 1-minute bars for the symbols asked
+        for, so warming N years cost ``len(symbols) x len(dates)`` round trips and
+        the deep strip simply never got warmed -- measured, dates holding a
+        contiguous strip of depth >= 20 fell 253 (2020) -> 19 (2024) -> 1 (2025) ->
+        0 (2026), which is why Blues and Golds stopped being computable at all.
+        Barchart's daily endpoint serves a contract's ENTIRE history in one call,
+        so the same coverage is ~one request per contract.
+
+        Keys are written through the same ``_cache_ts_iso`` / :func:`_as_datetime`
+        pair the read path probes with. That is the point of putting this on the
+        MDP rather than in the script: a warm that hand-rolls its key shape reports
+        thousands of successful writes and recovers exactly nothing, and this repo
+        has that failure recorded in ``scripts/warm_sr3_settles.py``'s own
+        docstring.
+        """
+        if not self._is_settle_source:
+            raise ValueError(
+                f"warm_settles is for {SETTLE_SOURCE!r}; {self.source!r} resolves a "
+                "date to a minute bar and has no daily endpoint to bulk-fetch.")
+        tickers = _clean_symbols(symbols)
+        if not tickers:
+            raise ValueError("no symbols to warm")
+
+        resolved = [(_normalize_symbol(t) or t) for t in tickers]
+        barchart_syms = [_to_barchart_symbol(s) for s in resolved]
+        max_conc = min(len(barchart_syms), 36) + 1
+
+        df = None
+        last_exc: Optional[Exception] = None
+        for fetcher_kwargs in (
+            {"force_rotate_proxy": False, "clear_session_tokens": False},
+            {"force_rotate_proxy": True, "clear_session_tokens": True},
+        ):
+            bcf = self._get_barchart_fetcher(required_concurrency=max_conc, **fetcher_kwargs)
+            try:
+                df = bcf.barchart_timeseries_api(
+                    barchart_symbols=barchart_syms,
+                    start_date=datetime.datetime(start.year, start.month, start.day),
+                    end_date=datetime.datetime(end.year, end.month, end.day, 23, 59),
+                    interval=None,
+                    one_df=True,
+                    show_tqdm=show_tqdm,
+                    max_concurrent_tasks=max_conc,
+                    max_keepalive_connections=max(36, max_conc) + 1,
+                )
+            except Exception as exc:                           # noqa: BLE001
+                last_exc, df = exc, None
+            finally:
+                try:
+                    bcf.close()
+                except Exception:                              # noqa: BLE001
+                    pass
+            if df is not None and not df.empty:
+                break
+        if df is None or df.empty:
+            if last_exc is not None:
+                raise last_exc
+            return {}
+
+        df = df.copy()
+        df.columns = [_from_barchart_symbol(c) for c in df.columns]
+
+        self._ensure_pricer_cache()
+        src = self.source.upper()
+        written: Dict[str, int] = {}
+        with self:
+            for col in df.columns:
+                series = pd.to_numeric(df[col], errors="coerce").dropna()
+                n = 0
+                for stamp, px in series.items():
+                    d = pd.Timestamp(stamp).date()
+                    if d < start or d > end:
+                        continue
+                    ts_dt = _as_datetime(d, eod_hour=self._eod_hour)
+                    key_iso = pd.Timestamp(ts_dt).isoformat()
+                    self._threadsafe_cache_put(
+                        f"{key_iso}-{col}-{src}",
+                        {"symbol": col, "price": float(px), "timestamp": key_iso, "schema": 1},
+                    )
+                    n += 1
+                written[col] = n
+        return written
+
     def fetch_pricers_flat(
         self,
         symbols: Sequence[str],
@@ -1392,6 +1597,17 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         cache_full_intraday_fetch: bool = False,
         primed_session_data: Optional[Dict[str, pd.DataFrame]] = None,
     ) -> Dict[DateLike, Dict[str, List[InstrumentLike]]]:
+        # A primed session frame is a MINUTE tape keyed on the CME session open, and
+        # the fast-path below reads it with `_as_datetime`'s default (Globex close)
+        # hour. Under a settlement source that would answer a settle request with a
+        # 17:00 minute mark and no error at all -- exactly the substitution
+        # SETTLE_SOURCE exists to make impossible.
+        if self._is_settle_source and primed_session_data:
+            raise ValueError(
+                f"{self.source} is a settlement source; `primed_session_data` is a "
+                "minute session tape and cannot answer a settle request."
+            )
+
         jobs: List[Tuple[DateLike, List[str]]] = []
         base_symbols = _clean_symbols(symbols)
         for ts in timestamps:
