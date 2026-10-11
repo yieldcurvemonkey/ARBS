@@ -4,6 +4,16 @@ Oct 6, 2026 · @Chris
 
 VolumeGrid is a live heatmap of interest-rate swap flow: rows are forward-start buckets, columns are tenor (or named-structure) buckets, and each cell shows gross volume in the current window, coloured by its percentile against the same window on prior days. This doc specifies the data contract, bucketing, window and baseline maths, views, APIs and acceptance tests needed to rebuild it on any data stack, with public-tape prints, RFQ data, or both as sources. Where the reference build has a known defect, the spec states the corrected behaviour and marks it **Change from reference**.
 
+**Revised 2026-10-11, after building a working prototype.** This revision adds:
+
+- client/dealer direction analytics (a new section);
+- a drill-down that takes any `Selection`, not just a grid cell;
+- desk-workflow analytics modelled on how the desk uses the tape;
+- a column contract with optional groups, so any feed can be mapped in;
+- the design choices the prototype settled.
+
+The step-by-step build plan is `docs/plans/2026-10-11-flowgrid-implementation.md`.
+
 ## Goals and non-goals
 
 The grid answers one question at a glance: **where on the curve is flow concentrated right now, and is that unusual for this time of day?** A trader or salesperson should see within a few seconds which forward × tenor buckets (or named curves and flies) are running hot or cold against their own history.
@@ -14,8 +24,11 @@ The grid answers one question at a glance: **where on the curve is flow concentr
 2. How does each bucket compare with the same window on prior business days (percentile)?
 3. How is each bucket's flow split by venue class (dealer-to-dealer vs dealer-to-client) and by package family (outright, curve, fly, spreadover, invoice)?
 4. Which named structures (2s10s, 2s5s10s, meeting-dated, IMM-dated, swap spreads, invoice spreads) are active?
-5. Which individual packages make up a cell (drill-down)?
+5. Which individual packages make up a cell, or any other selection of the flow (drill-down)?
 6. With RFQ data: how much was asked for versus done, which side clients leaned, and what share we won.
+7. Which side of the market dealers ended up on in each bucket, judged from a mid-based direction guess on each print, and is that unusual for the bucket?
+8. How reliable is that direction guess, graded against prints whose side we know?
+9. The desk's routine: where a lost RFQ actually traded and by how much we missed, per-client hit rates and net DV01, a client's day so far, which RFQs are still waiting for a print, and which prints are clips of one order.
 
 **Users:** rates traders, sales, desk strategists, and automated agents that poll the API for unusual activity.
 
@@ -23,7 +36,7 @@ The grid answers one question at a glance: **where on the curve is flow concentr
 
 - Not a pricing or mid-market tool. Levels appear only as context in the drill-down.
 - Not a P&L or position view. Cells are market flow, not the firm's inventory.
-- Not a direction model. The base grid is gross and unsigned. Signed views exist only where side is known (RFQ, internal fills) or supplied by a separate direction model, and they use a separate encoding (see Views).
+- Not a direction model. Direction guesses are input columns from an upstream producer; this product shows and grades them but does not make them. The base grid stays gross and unsigned. Signed views exist only where side is known (RFQ, internal fills) or supplied by a separate direction model, and they use a separate encoding (see Client/dealer direction).
 - Not a cross-bucket "which tenor is busiest in absolute terms" ranking from inferred-side data. Percentiles compare each bucket with its own history.
 
 The worked examples use USD SOFR swaps; every market-specific constant (bucket edges, venue codes, calendars, session hours) is configuration.
@@ -89,7 +102,36 @@ Every source is normalised into two tables, **FlowPackage** (one economic transa
 | matched\_print\_id | string | The public-tape print this inquiry's execution matched, if any (see Sources). |
 | client\_ref | string | Restricted. Never leaves the entitlement boundary; never in an aggregate response. |
 
-Signed fields are optional and only on layers where side is known: `dealer_sign` ∈ {+1, −1, 0} with +1 = the dealer received fixed (long duration). An inferred side from a tape direction model is a separate field (`inferred_dealer_sign`, `inferred_confidence`) and is never merged with a known side.
+**Sign convention, stated once.** Positive signed DV01 = the dealer **received** fixed = the client **paid** fixed = the dealer got longer duration. Every signed figure draws positive in blue and negative in orange. A client-perspective number, such as client net DV01 or RFQ client lean, is positive when the client paid, so it has the same sign.
+
+**Column groups.** Columns come in groups, and each figure declares which groups it needs. A missing optional group switches off only the figures that need it:
+
+| Group | Needed for | Columns |
+| --- | --- | --- |
+| core | every grid, strip and drill-down | the FlowLeg fields above, plus `leg_q` |
+| session | derived from timestamps by the session clock | trade\_date, elapsed (wall-clock seconds since local midnight), known\_elapsed |
+| direction | direction figures only | the direction fields below |
+| level | the traded-rate-vs-mid panel only | fixed\_rate, mid\_rate |
+| match | RFQ-to-tape joins | matched\_print\_id |
+| desk | desk-workflow analytics | charge\_bp, away\_distance\_bp, we\_covered |
+
+**Direction fields (one call per package, repeated on its legs).** An upstream producer compares each print with a mid at its timestamp:
+
+| Field | Meaning |
+| --- | --- |
+| leg\_q | structure weight by tenor order: 1 \| (−1, 1) \| (−1, 2, −1); 0 for packages with no quote convention (PKG-N, basis) |
+| mid\_rate | mid at execution, percent; null when unavailable |
+| deviation\_bps | Σ q·(traded − mid) in bp: one structure-level number per package |
+| b0\_bps | systematic mid bias removed before the call (0 when the feed does not publish it) |
+| p\_client\_paid | probability the client paid fixed; null when no call |
+| dealer\_side | RECEIVED \| PAID \| ABSTAINED |
+| abstain\_reason | why there is no call; an **open set** (DEAD\_ZONE, OFF\_MARKET, NO\_MID, UNORIENTABLE\_PKG, NO\_CURVE, …) |
+| dealer\_sign | +1 / −1 / 0 |
+| signed\_dv01 | dealer\_sign × sign(leg\_q) × dv01\_abs, so a curve's two legs carry opposite signs |
+| signed\_dv01\_w | signed\_dv01 weighted by conviction \|2p − 1\| (or the producer's signed weight) |
+| dv01\_called | dv01\_abs when the package got a call, else 0 |
+
+**Desk fields on inquiries:** `charge_bp` (how far our quote was from mid, against the client), `away_distance_bp` (where an away printed relative to mid), `we_covered` (we were second best).
 
 ## Sources: public tape, RFQ and internal fills
 
@@ -119,6 +161,15 @@ Signed fields are optional and only on layers where side is known: `dealer_sign`
 
 Ambiguous candidates stay unlinked. Track the match rate as a data-quality metric.
 
+Prototype defaults that worked:
+
+- same family and leg count;
+- every tenor within 0.05 years;
+- the print lands 0–240 minutes after the request;
+- risk-leg DV01 within 15%, or the print is capped and no bigger.
+
+Pairs are assigned greedily by time gap, each inquiry and each print used at most once. On synthetic data this recovered 97% of the known links.
+
 **COMBINED\_EXECUTED layer** (optional): all PRINTs, with each matched print's capped notional replaced by the RFQ's exact notional and its side attached as known. Unmatched FILLs (off-tape trades) are added. This is the only layer that mixes sources, and it does so by enrichment, not addition.
 
 **Reporting lag matters for intraday comparisons.** A tape's "today so far" lacks prints not yet disseminated, while the same slice on prior days is complete. The Windows and baselines section specifies the correction. RFQ and internal data have no such lag.
@@ -128,6 +179,20 @@ Ambiguous candidates stay unlinked. Track the match rate as a data-quality metri
 **Panel bias in RFQ.** A single dealer's RFQ sample moves when clients add or drop that dealer. Baselines then shift for reasons unrelated to market activity. Publish a coverage series (inquiries per day, distinct clients per day) beside RFQ views so a regime shift is visible.
 
 **Entitlements.** RFQ and fill data identify clients. Aggregates shown outside the entitled group must suppress any cell with fewer than *k* distinct clients (the team sets *k*). Drill-down rows for those layers require the entitlement. client\_ref never appears in an API response.
+
+**Mapping a feed.** Each source gets one column map. Nothing downstream reads source columns. A column map has:
+
+- renames and coalesce lists (first non-null wins, e.g. original execution time, else execution time);
+- the rate unit (percent or decimal) and the time zone of naive timestamps;
+- venue and side vocabularies (`VENUE_UNKNOWN` maps to `UNKNOWN`);
+- constants for missing columns, and a row filter for flow eligibility.
+
+When the feed lacks them, the adapter derives `leg_q` and the risk leg from package type and leg tenors.
+
+**Two adapter rules.**
+
+- **Never re-derive the dealer side from `deviation_bps`.** Producers call the side from deviation minus their bias estimate, which a tape view may not publish. Re-deriving would flip every print between 0 and the bias.
+- **When a feed has no dissemination timestamp for a print, `known_ts` falls back to the execution time.** That print counts as known the moment it traded, which switches off the as-known filter for it. This is deliberate: a lag cannot be invented.
 
 ## Measures
 
@@ -150,6 +215,8 @@ Counts always carry their unit in the label. **Change from reference:** the refe
 ```
 
 where N is notional, τᵢ the fixed-leg accrual fractions and DF the discount factors. Record the method; mixing methods within one cell is allowed but should be visible in the drill-down.
+
+**Dollar distance.** The desk quotes distance from mid both ways: "30k from mid" is USD and ".1 from mid" is bp. Store bp and derive USD as |deviation − bias| (bp) × the package's risk-leg DV01. Charges and away distances convert the same way, with the inquiry's DV01.
 
 **Attribution modes** decide which legs of a multi-leg package count, and where.
 
@@ -246,6 +313,14 @@ Tenors under one month are unbucketed in the default schema.
 | Spreadover strip | one Spot row (< 0.125) × columns | 2Y 1.85–2.5, 3Y 2.5–3.5, 5Y 4.5–5.5, 7Y 6.5–7.5, 10Y 9.5–10.5, 20Y 19.5–21, 30Y 29.5–31. |
 | Invoice strip | Front (< 0.25), Back (0.25–0.75) × columns | 2Y 1.5–3, 5Y 3–6, \~7Y 6–8, 10Y 8–12, 20Y 15–22, 30Y+ 22–35. |
 
+**Direction ladder buckets (tenor):**
+
+- 0–1Y, 1–2Y, 2–3Y, 3–5Y, 5–7Y;
+- 7–10Y (to 10.5);
+- 10–15Y, 15–20Y, 20–25Y, 25Y+.
+
+A 30Y+ tail sat empty in an earlier draft, because 30-year legs fall below a 30.5 edge; 25Y+ fixes that.
+
 **Named structures.** A structure is a set of tenors with a ±0.125-year tolerance. A package matches when its family is right, it has exactly that many swap legs, and each leg sits within tolerance of a different tenor in the set.
 
 - Benchmark curves: 2s5s, 2s10s, 2s30s, 5s10s, 5s30s, 10s30s.
@@ -276,7 +351,7 @@ Every cell compares the current window with *n* earlier windows of the same shap
 | --- | --- | --- |
 | today | \[session open, now) | Each prior business day in the lookback: \[open, open + elapsed) |
 | 1h | \[now − 1h, now) | The same clock slice on each prior business day |
-| 24h, 1w, 2w, 3w, 1m, 3m | The last D business days up to now: from the same clock time D business days ago, to now. D = 1, 5, 10, 15, 21, 63. | k non-overlapping windows of the same length, stepping back D business days at a time. k = max(floor(lookback / D), k\_min), with k\_min = 4. |
+| 1d, 1w, 2w, 3w, 1m, 3m (1d was called 24h) | The last D business days up to now: from the same clock time D business days ago, to now. D = 1, 5, 10, 15, 21, 63. | k non-overlapping windows of the same length, stepping back D business days at a time. k = max(floor(lookback / D), k\_min), with k\_min = 4. |
 
 **Change from reference:** the reference forms rolling baselines from calendar day, week, month and quarter buckets, including partial buckets at both ends, so its samples are not the same length as the current window.
 
@@ -324,21 +399,35 @@ A cell shows its value as text and its percentile as background colour on a dive
 
 Use light text when P ≤ 15 or P ≥ 90 and dark text otherwise. Insufficient-history cells also get a hatch pattern so they are not mistaken for a colour.
 
+**Dark theme** (what the prototype ships). Ramp stops, from percentile 0 to 100:
+
+| Percentile | Colour |
+| --- | --- |
+| 0 | #3987e5 |
+| 25 | #24508f |
+| 50 | #383835 |
+| 75 | #8f3a26 |
+| 100 | #e05a3a |
+
+Typical cells recede to dark grey and the extremes glow. Use dark text on the bright ends (P ≤ 10 or P ≥ 90) and white elsewhere. Chart surface #1a1a19.
+
 **Colour modes**
 
 | Mode | Colour basis | Sub-label |
 | --- | --- | --- |
 | Activity (default) | Cell percentile vs its own history | `P73` |
-| Grid | Cell value ÷ largest **visible** cell value × 100 | `G41` |
+| Grid | Cell value ÷ largest **visible** cell value × 100, on a one-hue sequential ramp | `G41` |
 | Z (optional) | Log-volume z-score mapped to the same ramp, clamped at ±3 | `+1.8σ` |
 
 Grid mode answers "where is the volume" and activity mode answers "where is it unusual"; the header says which is on.
+
+**Change from earlier draft:** grid mode now uses a sequential ramp. A diverging ramp implies a midpoint, and raw volume has none.
 
 **Cell contents**
 
 - Main text: compact value (`1.2B`, `845K` DV01).
 - Sub-label: the colour-mode tag above.
-- Venue split bar (optional, bottom edge, 1.5 px): D2D share then D2C share, plus BILATERAL and UNKNOWN when present. The bar's colours must not reuse the ramp's.
+- Venue split bar (optional, bottom edge, 1.5 px): D2D share then D2C share, plus BILATERAL and UNKNOWN when present. The bar's colours must not reuse the ramp's, or the family bar's; the prototype draws the venue split in greys.
 - Family bar (when the package filter is "all", top edge, 1 px): outright, curve, fly, invoice, other shares.
 - Tooltip and accessible label: value with unit, count with its unit (legs or packages), window, comparison text ("vs the same 09:00–14:32 slice on 21 prior business days"), baseline p25, p50, p75, min, max, n, n\_active, venue split in value and percent, capped share for tape layers.
 
@@ -346,7 +435,7 @@ Grid mode answers "where is the volume" and activity mode answers "where is it u
 
 **Total cells** (row, column, grand) use the same ramp with their own percentile, drawn with a heavier border.
 
-**Signed views use a different palette.** When a view shows net side (RFQ, fills, or a direction model), colour by sign, not by the activity ramp: sky for dealer received fixed (long duration), amber for dealer paid, slate for neutral or abstained, with intensity from |net| ÷ gross. Red and blue already mean busy and quiet in this product. Known-side and inferred-side layers carry different legends: inferred side is labelled "model" and never compared across buckets on absolute level.
+**Signed views use a different palette.** When a view shows net side, colour it by sign, not by the activity ramp: blue (#3987e5) for dealer received fixed (clients paid), orange (#d95926) for dealer paid, and a neutral grey midpoint. The colour value is net ÷ the DV01 that got a call, in \[−1, 1\]. Red and blue already mean busy and quiet in this product, so signed views must say "blue = dealer received" in the title or legend. Known-side layers (RFQ, fills) and inferred-side layers (a tape direction model) carry different labels, and an inferred side is never compared across buckets on absolute level.
 
 ## Views
 
@@ -358,7 +447,7 @@ All views sit in one card with shared controls and a tab switcher; each view is 
 | --- | --- | --- |
 | Layer | PRINT, INQUIRY, FILL, COMBINED\_EXECUTED (only the layers the user is entitled to) | PRINT |
 | Measure | Notional, DV01 | DV01 |
-| Window | today, 1h, 24h, 1w, 2w, 3w, 1m, 3m | today |
+| Window | today, 1h, 1d, 1w, 2w, 3w, 1m, 3m | today |
 | Lookback | 1w to 2y | 1m |
 | Package group | all, outright, curve, fly, spreadover, invoice variants, meeting, IMM | all |
 | Venue class | all, D2D, D2C | all |
@@ -387,7 +476,7 @@ Hidden buckets and hidden structure columns are removed from totals and from gri
 **Market Overview panels**
 
 1. KPI strip: total, its percentile, legs and packages, ADV, pace, DV01-weighted average tenor, block share, capped share. ADV is the mean full-session daily total over the lookback's business days, zero-filled. Pace is the current value ÷ the average value at the same elapsed time. **Change from reference:** the reference labels the mean of prior windows of the active period "ADV" and draws it across full-day bars.
-2. Structure activity table: one row per spot structure\_key (e.g. `2s10s Curve`, `5Y Spreadover`), with last trade time, venue, last level with its unit, today's volume, ADV over 1 week and 1 month (zero-filled, risk leg), and today ÷ ADV coloured from cold to hot.
+2. Structure activity table: one row per spot structure\_key (e.g. `2s10s Curve`, `5Y Spreadover`), with last trade time, venue, last level with its unit, today's volume, ADV over 1 week and 1 month (zero-filled, risk leg), and pace (today ÷ the average at the same time) coloured from cold to hot; ADV 1M stays as a column for scale. Change from earlier draft: today ÷ full-day ADV compared a part day with a whole one.
 3. Daily stacked bars over the lookback, by family, with the ADV line.
 4. Package mix: current share vs historical average share per family.
 5. Venue-class split: current vs historical.
@@ -402,31 +491,113 @@ Hidden buckets and hidden structure columns are removed from totals and from gri
 | Inquiry grid | Requested DV01 or inquiry count (INQUIRY layer) | Activity ramp | Interest, whether or not it traded |
 | Conversion grid | Executed ÷ inquired, by DV01 | Sequential, plus percentile vs own history in the tooltip | Show n next to every ratio |
 | Win share | DONE\_WITH\_US ÷ (DONE\_WITH\_US + TRADED\_AWAY) | Sequential | Excludes NOT\_TRADED and EXPIRED |
-| Client lean | (pay-fixed − receive-fixed) ÷ (pay-fixed + receive-fixed) on one-way inquiries | Signed palette | Two-way requests excluded and counted separately |
+| Client lean | (pay-fixed − receive-fixed) ÷ (pay-fixed + receive-fixed) on one-way inquiries | Signed palette: positive = clients pay = dealer receives = blue | Two-way requests excluded and counted separately |
 | Market share | Our FILL DV01 ÷ COMBINED\_EXECUTED DV01 | Sequential | Needs the print-matching rule; shows match rate |
 | Competition | Median dealers\_in\_comp | Sequential | Context for win share |
 
 A coverage strip (inquiries per day and distinct clients per day over the lookback) sits above every RFQ view so panel changes are visible.
 
+## Client/dealer direction
+
+Each print carries a direction guess: an upstream producer compares the traded level with a mid at the print's timestamp. These views show where dealers ended up, whether that is unusual, and how far the guess can be trusted. They read only the direction fields in the data model, so any producer plugs in.
+
+**How a print becomes a call** (the producer's rule, restated so the views can explain it):
+
+```math
+d = \sum_i q_i\,(r_i - m_i) \times 100, \qquad p = \frac{1}{1 + e^{-(d - b_0)/\tau}}
+```
+
+Here q = 1 for an outright, (−1, 1) for a curve and (−1, 2, −1) for a fly, by tenor order. r and m are the traded and mid rates in percent, b₀ is the mid bias and τ the steepness.
+
+- Printing above mid (d − b₀ > 0) means the client paid, so the dealer received.
+- A dead zone (|d − b₀| < 0.05 bp in the prototype), off-market prints (upfront-bearing, |d| > 4 bp) and prints without a mid get no call.
+- A curve the client pays leaves the dealer long the long leg and short the short leg, so the legs carry opposite signs.
+
+**Rules**
+
+1. The side comes from the producer, never from re-reading `deviation_bps`.
+2. The mid bias is estimated per venue class from earlier days only, never the day it is applied to.
+3. Positioning views (direction grid, ladder, client lean) use **D2C prints only**. On a D2D print one dealer receives what another pays.
+4. Each bucket is compared with its own history; levels are never compared across buckets.
+5. **No cumulative "dealer inventory" across sessions.** The share of flow that gets a call changes day to day (dead zone, missing mids, panel), so a running sum drifts for reasons unrelated to positions. Daily net bars, z-scores and within-session cumulative lines are fine.
+
+**Views**
+
+| View | Shows | Encoding |
+| --- | --- | --- |
+| Direction grid | Net dealer DV01 by forward × tenor, today | Colour = net ÷ called DV01 in \[−1, 1\] on the signed palette; hover adds the oriented share and net's percentile against the same slice on prior days |
+| Direction ladder | Each tenor bucket's daily net, z-scored against its own trailing 20 sessions, over **completed sessions only** (today's partial session would read near zero) | Bucket × session heatmap, signed palette clamped at ±3 |
+| Bucket daily net | One bucket's daily net DV01 | Bars about zero, blue/orange; crosshair |
+| Deviation to call | Distribution of (deviation − bias) by venue, with the p curve beneath | Histogram + line, dead zone shaded |
+| Coverage | Share of DV01 per tenor bucket that got a call, and why the rest did not | 100% stacked bars; reason categories come from the data |
+| Calibration | Predicted p against how often the client really paid, by decile of p | Reliability curve with a diagonal; the title states whether p is over- or under-confident |
+| Hit rate by deviation | Accuracy by \|deviation − bias\| band, with the dead zone scored as if called | Bars with n; coin-flip line |
+
+**Grading the guess.** An executed one-way RFQ discloses the client's side for the print it matched (see the matching rule in Sources), which gives labelled prints. On synthetic data the dead-zone band scored about 60% (close to a coin flip), against 76–100% outside it. That is the evidence for abstaining there.
+
 ## Drill-down
 
 Clicking a cell opens a panel that explains that one cell: its history, its intraday shape, and the packages inside it. The drill-down must reproduce the cell's number exactly.
+
+**Any selection, not just a cell.** A drill-down takes a `Selection`: every field is optional, and the set fields combine with AND. A grid cell is one case, built with `Selection.from_cell(rows, cols, row_id, col_id)` so it uses the grid's own half-open edges.
+
+| Field | Meaning |
+| --- | --- |
+| name | title used on every panel |
+| fwd | (lo, hi) forward-start years |
+| tenor | list of (lo, hi) tenor ranges, OR-ed; a custom bucket set is one list, e.g. \[(1.85, 2.5), (9.5, 10.5)\] for 2s and 10s |
+| package\_types, venues, meetings | allow-lists |
+| structures | tenor tuples such as (2, 10) or (2, 5, 10); keeps whole packages that match |
+| risk\_leg\_only | count each package once, at its risk leg |
+| equals | allow-list on any column, e.g. {client\_ref: \[…\]}, {rate\_index: \[SOFR\]} |
+| where | escape hatch: any boolean filter |
+
+The prototype demonstrates three selections: a grid cell (Spot × 10Y, which reproduces the cell exactly), a custom bucket (spot 4Y–7Y D2C outrights) and a structure (2s10s at the risk leg).
 
 **Shared-predicate rule.** The drill-down request is the grid request plus a cell id. It carries the same layer, filters, measure, window and the full schema reference (schema\_id, version, as\_of, or the custom bucket list). The server classifies with the same classifier. The client never rebuilds a schema and the server never falls back to a default. **Change from reference:** the curve and fly strips open the drill-down with the default forward schema, so every row except Spot is rejected as an unknown bucket, and Spot silently uses the wrong edge.
 
 **Panel contents**
 
-1. **Header:** row label × column label, view name, window, as-of, and the cell's value and percentile as shown in the grid.
-2. **Daily history:** one bar per business day over a selectable range (1M, 3M, 6M, 1Y), zero-filled, with a dashed median line. Today's bar is marked partial. The spreadover and invoice views add a spread chart (DV01-weighted spread per day, in bp, with the unit in the axis title).
-3. **Intraday shape:** today's cumulative curve against the average cumulative curve of the baseline days (zero-filled), with a marker at the last update. A date picker overlays any past session. The session comes from the same effective-session resolver as the grid, so on a weekend both show the last business day.
-4. **Packages in the cell:** newest first, default 50. Columns: time in the session time zone, package type, label, level with its unit, package notional and DV01, **in-cell contribution** (the part of the package that lands in this cell), venue, block and capped flags. Multi-leg rows expand to their legs, with an in-cell marker and the risk leg highlighted. Clicking a row opens or filters to that package in the host application's blotter.
-5. **Layer extras:** INQUIRY rows show outcome, side (if entitled) and dealers in competition. PRINT rows that matched an RFQ show a matched badge.
+1. **Header:** selection name, window, as-of, and the value and percentile.
+2. **Daily history:** one bar per business day over a selectable range, zero-filled, with a dashed median line; today's bar is marked partial. When direction data exists, net dealer DV01 per day sits beneath it as bars about zero. Crosshair.
+3. **Intraday shape:** today's cumulative curve against the average baseline day and the busiest prior day, with a marker at the last update. Crosshair.
+4. **Why this percentile:** today's value plotted against the n baseline samples that set the percentile, with p25, p50 and p75.
+5. **Prints against mid:** for one session, each print on the deviation-from-mid axis (net of bias), shaped by call (▲ dealer received, ▼ dealer paid, ● no call) and sized by DV01, with the dead zone shaded. Beneath it, cumulative net dealer DV01 today against the average day. A traded-rate-vs-mid panel is added on top only when the selection is a single tenor and mids exist; levels of different tenors must not share an axis. Off-market prints are pinned to the edge and counted in the title.
+6. **Packages in the selection:** newest first, with time, type, venue, legs, package and in-selection DV01, risk-leg rate, and the call (side, deviation − bias, p, no-call reason).
+7. **Orders:** today's prints grouped into orders, where clips of one spec on one venue within 30 minutes count as one order (see Desk workflow).
+8. **Layer extras:** INQUIRY rows show outcome, side (if entitled) and dealers in competition. PRINT rows that matched an RFQ show a matched badge.
 
 **Parity.** For the current window, the sum of in-cell contributions across all packages in the cell equals the grid cell value. If the package list is truncated, the panel shows "showing 50 of N" and the full sum still matches.
+
+**Missing data degrades the panel, never breaks it.**
+
+- An empty selection returns an empty-state figure that says so.
+- No direction columns: the net row and the call columns disappear, and the prints panel names the columns it needs.
+- No mids: the level panel is dropped.
 
 **Bin convention.** Intraday bins are \[start, end) and are plotted at their start time. The convention is written into the API response (`bin_anchor: "start"`) so a chart cannot shift trades by one bin.
 
 **Hover prefetch** is optional. If built, it calls the exact request builder that the click uses, so the cached entry is the one the click reads.
+
+## Desk workflow
+
+The desk watches the SDR all day and posts what it learns in chat. These analytics compute those posts from the RFQ blotter and the tape. Typical lines (names removed):
+
+- "A real-money client paid 275k 10y away, 30k from mid, we showed 64k charge."
+- "Traded away in multiple smaller clips (50, 25, 25)."
+- "It's been an hour since we saw the 7y; still not on SDR, probably didn't trade."
+- "193 RFQs, 1.81x the 20-session average … 42 wins, 59 aways, 29 covered … net paid 1.51mm DV01."
+
+| Analytic | What it answers | Rule (prototype defaults) |
+| --- | --- | --- |
+| RFQ-to-print matching | Which print did an executed RFQ become? | The rule in Sources: same family and leg count, tenors within 0.05y, print 0–240 min after the request, DV01 within 15% or capped; greedy by time gap |
+| Away analysis | Where did a lost RFQ trade, and by how much did we miss? | Per away: charge, away distance, miss = charge − away distance, each in bp and in USD (× DV01). Scatter of our charge against the away distance; aways more than 2 bp from mid are left out and counted |
+| Client scorecard | A client's hit rate, net DV01 and distances, by tenor | Last 10 business days, by client × tenor bucket: RFQs, inquiry DV01, wins, aways, hit rate = wins ÷ (wins + aways), client net DV01 (+ = paid, executed only), average away distance, average charge |
+| Client day report | Is today unusual for this client? | Today's slice against the client's own same-time slice on prior 20 days: RFQ count and DV01 ratios; wins, aways, covered; hit rate morning and afternoon (split at 12:00); away distance morning and afternoon; net paid DV01; curves-and-flies share. Rendered as chat-ready text plus an hourly figure |
+| SDR watch list | Which RFQs are still waiting for a print? | Today's RFQs not done with us and not yet matched: waiting (< 15 min), overdue (< 60 min), likely not traded (≥ 60 min) |
+| Clip aggregation | Which prints are pieces of one order? | Same package type, tenors and forward bucket on one venue, each within 30 min of the previous, form one order. Side is reported inside the order, not used to split it, so a dead-zone clip does not start a new order |
+
+These read the inquiry desk fields and the tape; none of them needs the direction columns, though orders report the call mix when it exists. PCA-equivalent risk of fly packages ("pays 64k belly 5s10s30s, receives 123k 7y") is out of scope; it needs a curve risk model.
 
 ## API contracts
 
@@ -498,6 +669,8 @@ The numbers are illustrative. Cells absent from the list have value 0 and no his
 
 **CellRequest** = GridRequest + `{ "cell": { "row": "spot", "col": "10y" }, "range": "3M", "intraday_date": null, "recent_limit": 50 }`. Structure views put the structure id in `col`.
 
+In the library implementation the drill-down takes a `Selection` (see Drill-down) instead of a cell id. A cell id converts with `Selection.from_cell`, so a service can keep this request shape and build the selection server-side.
+
 **CellResponse** carries `header` (the grid cell as above), `daily` (array of {date, value, legs, packages, spread\_bp?, partial}), `intraday` ({bin\_minutes, bin\_anchor: "start", today: \[...\], average: \[...\], overlay: \[...\]}), and `packages` (array with in-cell contribution and legs), plus `packages_total` for the untruncated count.
 
 **Errors** return a machine code and the offending field, e.g. `{ "code": "unknown_bucket", "field": "cell.row", "schema_id": "fwd_default" }`. The UI shows every error in the view; it never keeps drawing stale data silently.
@@ -567,6 +740,21 @@ Twenty-two defects in the reference build each map to a requirement in this spec
 | 21 | The trade-tape poll advances on execution time | Late-reported trades never appear until reload | Ingest cursor on known\_ts or sequence | Review |
 | 22 | Text filter matches package and leg labels on one endpoint, package label only on another | Filtered totals disagree across views | One filter scope everywhere | Review |
 
+**Found while building the prototype (2026-10).** Each was caught in the prototype and is now guarded by a test.
+
+| # | Trap | Effect | Requirement |
+| --- | --- | --- | --- |
+| 23 | Re-deriving the dealer side from the raw deviation | Flips every print that sits between 0 and the mid bias | Take the side from the producer |
+| 24 | Estimating the mid bias with the day it is applied to | The call leaks its own outcome | Bias from earlier days only (a known-answer test pins it) |
+| 25 | Including D2D prints in a positioning view | Dealer-to-dealer recycling shows up as client positioning | Positioning views are D2C only |
+| 26 | Scoring today's partial session in a daily ladder | Today always reads near zero | Ladder covers completed sessions; today lives in the direction grid |
+| 27 | Plotting rates of different tenors on one level axis | A tenor bucket shows a saw-tooth that is just tenor mix | Level panel only for a single-tenor selection; otherwise deviation only |
+| 28 | Client-lean panel signed from the client side, other views from the dealer side | Same flow is blue in one view, orange in the next | One convention: positive = client paid = dealer received |
+| 29 | Hard-coding three abstain reasons | Real producers emit more (unorientable packages, no curve) and the coverage shares stop summing to 100% | Categories built from the data |
+| 30 | A ladder bucket edge at 30.5y | 30-year legs fall into 20–30Y and the 30Y+ row is permanently empty | Edges chosen so standard tenors fill every bucket |
+| 31 | Dates handed to the charting library as raw datetime64 arrays | Axes labelled 1.78e18 (plotly 6) | Pass dates as strings |
+| 32 | A test of the bias rule built on a 5-day window | Shifted and unshifted medians coincide, so the test passes with the rule removed | Every rule gets a deliberate-breakage check |
+
 ## Testing and acceptance
 
 The engine is accepted when three kinds of check pass: invariants that hold for any data, fixtures whose answers were computed by hand, and mutation checks that prove each test can fail.
@@ -600,6 +788,22 @@ The engine is accepted when three kinds of check pass: invariants that hold for 
 | RFQ | Two tape prints equally close to one fill | Left unlinked; match rate falls |
 | Calendars | Meeting calendar fixture with an October meeting | M1 aliases to the October label until its effective date passes |
 
+**Direction and desk known answers.**
+
+| Case | Expected |
+| --- | --- |
+| An outright printed 0.5 bp above mid | dealer RECEIVED, signed DV01 > 0 |
+| A 2s10s curve whose 10y leg printed 0.5 bp above mid (client paid the spread) | RECEIVED; the 10y leg is positive and the 2y leg negative |
+| Daily bias medians \[0, 0, 0.3, 0.3, 0.3\] then a 0 day, with a 6-day window | Bias for the last day = 0.3 (0.15 if the day itself leaked in) |
+| Ladder: 21 days alternating ±1, then +10 | z of the last day = 10 |
+| Coverage with RECEIVED 50, UNORIENTABLE\_PKG 30, NO\_CURVE 20 | Categories in that order, shares sum to 1, called share 0.5 |
+| ".3 from mid" on a 100k-DV01 package | 30k from mid |
+| Away with charge 0.233 bp, away distance 0.109 bp, DV01 275k | Miss 0.124 bp; 30k from mid; 64k charge |
+| Client with a win (pay 100k), an away (pay 200k) and a not-traded (receive 50k) | 3 RFQs, hit rate 50%, client net +300k |
+| RFQs waiting 5, 30 and 90 minutes | waiting, overdue, likely not traded |
+| Prints at 10:00, 10:10 (dead zone) and 10:50 of one spec, 30-minute gap | Two orders; the first has 2 clips, with the dead-zone clip reported as no call |
+| Matching with an earlier print, a wrong tenor, a too-big print, and a capped one | Only the right print matches; the capped print matches a larger RFQ |
+
 **Mutation checks.** For each rule below, break it on purpose and confirm at least one test fails. A test that still passes with its rule removed is not testing that rule.
 
 - Remove zero-filling.
@@ -609,30 +813,39 @@ The engine is accepted when three kinds of check pass: invariants that hold for 
 - Drop the known\_ts filter.
 - Let the drill-down fall back to a default schema.
 - Sum INQUIRY into PRINT.
+- Flip the dealer side (deviation > 0 → PAID).
+- Drop sign(leg\_q) from signed DV01, so curve legs stop offsetting.
+- Let the mid bias use the current day.
+- Let the ladder's trailing window include the day itself, or include today's partial session.
+- Let the matcher accept a print earlier than the request.
+- Remove the drill-down's no-direction-columns branch.
 
 **Golden responses.** Store full API responses for a handful of fixed as\_of values on real data, and review diffs in code review whenever the engine changes.
 
 ## Delivery plan
 
-Fourteen work packages in five phases; packages within a phase share no code and can go to separate teams or agents, and no phase starts until the gate above it passes.
+The build plan is `docs/plans/2026-10-11-flowgrid-implementation.md`: 22 tasks in six phases, turning the prototype into a tested package (`SDRUtils/flowgrid`) and a notebook that draws every figure. No phase starts until the gate above it passes.
 
-![Delivery plan: 14 work packages, 5 gates](2026-10-06-volumegrid-delivery-plan.png)
+![Delivery plan: 22 tasks, 6 phases, 6 gates](2026-10-06-volumegrid-delivery-plan.png)
 
-The test harness (WP3) starts first and gates every phase. The RFQ adapter (WP13) depends only on the data contract, so it can start right after G1 if RFQ is the priority.
+Every code block in that plan was built into a scratch copy of the repo and replayed task by task before it was handed over. Each task's tests pass at its own point in the sequence, and the full suite (74 tests) passes at the end. The desk-workflow phase depends on nothing after it, so it can be dropped or deferred without touching Phases 1–3.
 
-**Handoff to each agent:** the data contract, the calendar version, the fixture file for its package, and the exact request and response shapes from API contracts. An agent's package is done when its gate's checks pass, not when its code compiles.
+**Handoff to each agent:** the task text, which names the exact files, the interfaces it consumes and produces, the tests to write first, the code, and the deliberate-breakage checks to run. A task is done when its gate's checks pass, not when its code compiles.
 
 ## Open questions
 
-These decisions belong to the implementing team; the spec works with the stated default until each is settled.
+These decisions belong to the implementing team; the spec works with the stated default until each is settled. Ticked items were settled while building the prototype.
 
+- [x] Default sign for signed views: **decided**, dealer perspective (positive = dealer received = client paid); client-perspective numbers carry the same sign.
+- [x] Is COMBINED\_EXECUTED needed in the first release? **Decided: no.** Layers stay separate; the matching rule is built and the enrichment layer is a follow-up.
+- [x] n\_min and default lookback: **decided**, n\_min 5 and 21 business days. The longest supported lookback (which sets data retention) is still open.
 - [ ] Session open: midnight local (default), or an earlier open to capture the Asia session?
 - [ ] Unwinds and early terminations booked as new trades: flow or not? Default: not flow.
-- [ ] Capped tape sizes: show capped share only (default), or impute sizes above the cap, and from which distribution?
-- [ ] Is the COMBINED\_EXECUTED layer needed in the first release, or do layers stay separate?
-- [ ] Minimum client count *k* for RFQ aggregates, and which groups are entitled to RFQ and fill layers.
-- [ ] Default sign for signed views: dealer perspective (+1 = dealer received fixed, the default) or client perspective?
+- [ ] Capped tape sizes: show the capped share only (default), or impute sizes above the cap, and from which distribution?
+- [ ] Minimum client count *k* for RFQ aggregates (the prototype uses 3), and which groups are entitled to the RFQ and fill layers.
 - [ ] DV01 source: which curve and as-of for CURVE\_PRICED, and is ANNUITY\_APPROX acceptable for display?
-- [ ] n\_min (default 5), default lookback (default one month) and the longest supported lookback, which sets data retention.
+- [ ] Direction producer settings: the dead zone (0.05 bp in the prototype) and the steepness τ, tuned against labelled prints with the calibration view.
+- [ ] Watch-list thresholds: one 15/60-minute rule, or per tenor and block status (blocks disseminate later)?
 - [ ] Currencies and indices beyond USD SOFR, and their bucket sets and calendars.
 - [ ] Poll interval, latency targets and the source-lag threshold that turns the header amber.
+- [ ] PCA-equivalent risk for fly packages: which risk model, and where it should show.
